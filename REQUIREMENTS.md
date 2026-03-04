@@ -226,6 +226,30 @@ All of these must work identically after the fork:
 
 ---
 
+## Model Swappability
+
+Embedding and reranker models must be hot-swappable via config. Switching is a `baseURL` + `model` change.
+
+### Known Embedding Models (auto-detect dimensions)
+- `gemini-embedding-001` — 3072d, API, MTEB 68.3
+- `Qwen3-Embedding-0.6B` — 1024d, local, near-SOTA quality, ~1.2GB VRAM
+- `stella_en_1.5B_v5` — 1536d, local, English-focused, ~3GB VRAM
+- `EmbeddingGemma-300M` — local, Google on-device, ~600MB VRAM
+- `nomic-embed-text-v1.5` — 768d, local, lightweight
+- `text-embedding-3-small` — 1536d, OpenAI API
+
+### Known Reranker Models
+- `jina-reranker-v3` — API (Jina), BEIR 61.9, best quality
+- `jina-reranker-v2-base-multilingual` — local (278M params), open-source, fast
+- `gte-reranker-modernbert-base` — local (149M params), near-API quality
+- `bge-reranker-v2-m3` — local (568M params), multilingual
+
+### Re-embedding on Model Switch
+When embedding model changes, all stored vectors become incompatible. Required:
+- CLI: `memory-unified reindex --all` (re-embed all memories + documents)
+- Detect dimension mismatch on startup → warn + block until reindex
+- Keep old vectors as backup until reindex completes
+
 ## Non-Goals (for now)
 
 - MCP server / HTTP API
