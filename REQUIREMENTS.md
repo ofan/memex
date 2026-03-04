@@ -252,21 +252,20 @@ When embedding model changes, all stored vectors become incompatible. Required:
 
 ## Local Inference Setup (Mac Mini M4)
 
-**Decision:** Option B — dedicated specialist models via llama.cpp.
+**Decision:** llama.cpp with router mode — one port, multi-model.
 
-**Why llama.cpp:** Serves embeddings, reranking, and chat (future) from one stack. OpenAI-compatible API. Metal acceleration. Already proven on Mac Mini.
+**Why llama.cpp:** Native `/v1/embeddings`, `/v1/rerank`, `/v1/chat/completions` on one port. Router mode (Dec 2025+) auto-discovers GGUF models, loads on-demand, LRU eviction. Pure C++ with Metal GPU. Beats LocalAI (needs Python for reranking) and Ollama (no reranking endpoint).
 
-**Model lineup:**
-- **Embeddings:** Qwen3-Embedding-0.6B (~1.2GB VRAM) — port 8090
-- **Reranker:** bge-reranker-v2-m3 (~1.5GB VRAM) — port 8091
+**Model lineup (all in ~/models/):**
+- **Embeddings:** Qwen3-Embedding-0.6B (~1.2GB VRAM)
+- **Reranker:** bge-reranker-v2-m3 (~1.5GB VRAM)
 - **Chat (future):** TBD — ~9GB headroom remaining
 
 **Total VRAM:** ~2.7GB of 11.8GB available. Leaves room for chat model + TTS (mlx-audio already on Mac Mini).
 
-**Serving:**
+**Serving (one command):**
 ```
-llama-server --model Qwen3-Embedding-0.6B.gguf --port 8090 --embedding
-llama-server --model bge-reranker-v2-m3.gguf --port 8091 --reranking
+llama-server --models-dir ~/models -ngl 99 --port 8090
 ```
 
 **Plugin config (local mode):**
@@ -279,7 +278,7 @@ llama-server --model bge-reranker-v2-m3.gguf --port 8091 --reranking
   },
   "reranker": {
     "enabled": true,
-    "endpoint": "http://100.122.104.26:8091/v1/rerank",
+    "endpoint": "http://100.122.104.26:8090/v1/rerank",
     "apiKey": "unused",
     "model": "bge-reranker-v2-m3",
     "provider": "jina"
@@ -287,7 +286,7 @@ llama-server --model bge-reranker-v2-m3.gguf --port 8091 --reranking
 }
 ```
 
-**Persistence:** launchd services for both, auto-start on boot.
+**Persistence:** single launchd service, auto-start on boot.
 
 ## Non-Goals (for now)
 
