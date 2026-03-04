@@ -1,15 +1,16 @@
 /**
- * Memory LanceDB Pro Plugin
- * Enhanced LanceDB-backed long-term memory with hybrid retrieval and multi-scope isolation
+ * Memory Unified Plugin
+ * Unified memory: LanceDB Pro conversation memory + QMD document search
+ * with shared embedding/reranker and unified recall pipeline
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { homedir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { readFile, readdir, writeFile, mkdir } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 
-// Import core components
+// Import core components (LanceDB Pro)
 import { MemoryStore, validateStoragePath } from "./src/store.js";
 import { createEmbedder, getVectorDimensions } from "./src/embedder.js";
 import { createRetriever, DEFAULT_RETRIEVAL_CONFIG } from "./src/retriever.js";
@@ -17,7 +18,13 @@ import { createScopeManager } from "./src/scopes.js";
 import { createMigrator } from "./src/migrate.js";
 import { registerAllMemoryTools } from "./src/tools.js";
 import { shouldSkipRetrieval } from "./src/adaptive-retrieval.js";
+import { UnifiedRecall } from "./src/unified-recall.js";
 import { createMemoryCLI } from "./cli.js";
+
+// Import QMD components
+import { initializeQmdLLM, disposeDefaultLlamaCpp } from "./qmd/llm.js";
+import type { HttpLLMConfig } from "./qmd/llm.js";
+import { createStore as createQmdStore, hybridQuery as qmdHybridQueryFn } from "./qmd/store.js";
 
 // ============================================================================
 // Configuration & Types
@@ -64,6 +71,27 @@ interface PluginConfig {
   };
   enableManagementTools?: boolean;
   sessionMemory?: { enabled?: boolean; messageCount?: number };
+  /** Shared reranker config */
+  reranker?: {
+    enabled?: boolean;
+    endpoint?: string;
+    apiKey?: string;
+    model?: string;
+    provider?: string;
+  };
+  /** Document search (QMD) config */
+  documents?: {
+    enabled?: boolean;
+    dbPath?: string;
+    paths?: Array<{ path: string; name: string; pattern?: string }>;
+    queryExpansion?: boolean;
+  };
+  /** Optional generation model for query expansion */
+  generation?: {
+    baseURL?: string;
+    apiKey?: string;
+    model?: string;
+  };
 }
 
 // ============================================================================
@@ -304,10 +332,10 @@ function getPluginVersion(): string {
 // Plugin Definition
 // ============================================================================
 
-const memoryLanceDBProPlugin = {
-  id: "memory-lancedb-pro",
-  name: "Memory (LanceDB Pro)",
-  description: "Enhanced LanceDB-backed long-term memory with hybrid retrieval, multi-scope isolation, and management CLI",
+const memoryUnifiedPlugin = {
+  id: "memory-unified",
+  name: "Memory (Unified)",
+  description: "Unified memory: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker",
   kind: "memory" as const,
 
   register(api: OpenClawPluginApi) {
@@ -322,7 +350,7 @@ const memoryLanceDBProPlugin = {
       validateStoragePath(resolvedDbPath);
     } catch (err) {
       api.logger.warn(
-        `memory-lancedb-pro: storage path issue — ${String(err)}\n` +
+        `memory-unified: storage path issue — ${String(err)}\n` +
         `  The plugin will still attempt to start, but writes may fail.`
       );
     }
@@ -344,17 +372,99 @@ const memoryLanceDBProPlugin = {
       taskPassage: config.embedding.taskPassage,
       normalized: config.embedding.normalized,
     });
-    const retriever = createRetriever(store, embedder, {
+    // Merge shared reranker config into retrieval config
+    const retrievalConfig = {
       ...DEFAULT_RETRIEVAL_CONFIG,
       ...config.retrieval,
-    });
+    };
+    // If shared reranker is configured but retrieval doesn't have its own, use shared config
+    if (config.reranker?.enabled !== false && config.reranker?.endpoint) {
+      if (!retrievalConfig.rerankEndpoint) {
+        retrievalConfig.rerankEndpoint = config.reranker.endpoint;
+      }
+      if (!retrievalConfig.rerankApiKey && config.reranker.apiKey) {
+        retrievalConfig.rerankApiKey = resolveEnvVars(config.reranker.apiKey);
+      }
+      if (!retrievalConfig.rerankModel && config.reranker.model) {
+        retrievalConfig.rerankModel = config.reranker.model;
+      }
+      if (!retrievalConfig.rerankProvider && config.reranker.provider) {
+        retrievalConfig.rerankProvider = config.reranker.provider as any;
+      }
+    }
+    const retriever = createRetriever(store, embedder, retrievalConfig);
     const scopeManager = createScopeManager(config.scopes);
     const migrator = createMigrator(store);
 
     const pluginVersion = getPluginVersion();
 
+    // ========================================================================
+    // Initialize QMD (Document Search) — optional
+    // ========================================================================
+
+    let qmdStore: any = null;
+    let qmdHybridQuery: any = null;
+    const unifiedRecall = new UnifiedRecall(retriever, embedder);
+
+    if (config.documents?.enabled !== false && config.documents?.paths?.length) {
+      try {
+        // Build shared LLM config for QMD
+        const qmdLLMConfig: HttpLLMConfig = {
+          embedding: {
+            baseURL: config.embedding.baseURL || "",
+            apiKey: resolveEnvVars(config.embedding.apiKey),
+            model: config.embedding.model || "text-embedding-3-small",
+            dimensions: config.embedding.dimensions,
+          },
+          reranker: config.reranker?.enabled !== false && config.reranker?.endpoint ? {
+            enabled: true,
+            endpoint: config.reranker.endpoint,
+            apiKey: config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "unused",
+            model: config.reranker.model || "bge-reranker-v2-m3-Q8_0",
+            provider: config.reranker.provider || "jina",
+          } : undefined,
+          generation: config.generation?.model ? {
+            baseURL: config.generation.baseURL || config.embedding.baseURL || "",
+            apiKey: config.generation.apiKey ? resolveEnvVars(config.generation.apiKey) : resolveEnvVars(config.embedding.apiKey),
+            model: config.generation.model,
+          } : undefined,
+          queryExpansion: config.documents.queryExpansion ?? false,
+        };
+
+        // Initialize QMD's shared LLM (replaces node-llama-cpp with HTTP)
+        initializeQmdLLM(qmdLLMConfig);
+
+        // Create QMD store
+        const qmdDbPath = api.resolvePath(config.documents.dbPath || join(homedir(), ".openclaw", "memory", "qmd"));
+        if (!existsSync(qmdDbPath)) {
+          mkdirSync(qmdDbPath, { recursive: true });
+        }
+
+        const qmdDbFile = join(qmdDbPath, "qmd.sqlite");
+        qmdStore = createQmdStore(qmdDbFile);
+
+        // Ensure vector table exists with the right dimensions
+        const dims = getVectorDimensions(
+          config.embedding.model || "text-embedding-3-small",
+          config.embedding.dimensions
+        );
+        qmdStore.ensureVecTable(dims);
+
+        qmdHybridQuery = qmdHybridQueryFn;
+
+        // Wire QMD into unified recall
+        unifiedRecall.setQmdStore(qmdStore, qmdHybridQuery, config.embedding.model || "text-embedding-3-small");
+
+        api.logger.info(
+          `memory-unified: QMD document search enabled (db: ${qmdDbFile}, paths: ${config.documents.paths.map(p => p.name).join(", ")})`
+        );
+      } catch (err) {
+        api.logger.warn(`memory-unified: QMD initialization failed (document search disabled): ${String(err)}`);
+      }
+    }
+
     api.logger.info(
-      `memory-lancedb-pro@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"})`
+      `memory-unified@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
     );
 
     // ========================================================================
@@ -368,7 +478,8 @@ const memoryLanceDBProPlugin = {
         store,
         scopeManager,
         embedder,
-        agentId: undefined, // Will be determined at runtime from context
+        agentId: undefined,
+        unifiedRecall,
       },
       {
         enableManagementTools: config.enableManagementTools,
@@ -387,7 +498,7 @@ const memoryLanceDBProPlugin = {
         migrator,
         embedder,
       }),
-      { commands: ["memory-pro"] }
+      { commands: ["memory-unified"] }
     );
 
     // ========================================================================
@@ -422,7 +533,7 @@ const memoryLanceDBProPlugin = {
             .join("\n");
 
           api.logger.info?.(
-            `memory-lancedb-pro: injecting ${results.length} memories into context for agent ${agentId}`
+            `memory-unified: injecting ${results.length} memories into context for agent ${agentId}`
           );
 
           return {
@@ -434,7 +545,7 @@ const memoryLanceDBProPlugin = {
               `</relevant-memories>`,
           };
         } catch (err) {
-          api.logger.warn(`memory-lancedb-pro: recall failed: ${String(err)}`);
+          api.logger.warn(`memory-unified: recall failed: ${String(err)}`);
         }
       });
     }
@@ -519,11 +630,11 @@ const memoryLanceDBProPlugin = {
 
           if (stored > 0) {
             api.logger.info(
-              `memory-lancedb-pro: auto-captured ${stored} memories for agent ${agentId} in scope ${defaultScope}`
+              `memory-unified: auto-captured ${stored} memories for agent ${agentId} in scope ${defaultScope}`
             );
           }
         } catch (err) {
-          api.logger.warn(`memory-lancedb-pro: capture failed: ${String(err)}`);
+          api.logger.warn(`memory-unified: capture failed: ${String(err)}`);
         }
       });
     }
@@ -658,9 +769,9 @@ const memoryLanceDBProPlugin = {
           }
         }
 
-        api.logger.info(`memory-lancedb-pro: backup completed (${allMemories.length} entries → ${backupFile})`);
+        api.logger.info(`memory-unified: backup completed (${allMemories.length} entries → ${backupFile})`);
       } catch (err) {
-        api.logger.warn(`memory-lancedb-pro: backup failed: ${String(err)}`);
+        api.logger.warn(`memory-unified: backup failed: ${String(err)}`);
       }
     }
 
@@ -669,7 +780,7 @@ const memoryLanceDBProPlugin = {
     // ========================================================================
 
     api.registerService({
-      id: "memory-lancedb-pro",
+      id: "memory-unified",
       start: async () => {
         // IMPORTANT: Do not block gateway startup on external network calls.
         // If embedding/retrieval tests hang (bad network / slow provider), the gateway
@@ -694,7 +805,7 @@ const memoryLanceDBProPlugin = {
             const retrievalTest = await withTimeout(retriever.test(), 8_000, "retriever.test()");
 
             api.logger.info(
-              `memory-lancedb-pro: initialized successfully ` +
+              `memory-unified: initialized successfully ` +
               `(embedding: ${embedTest.success ? "OK" : "FAIL"}, ` +
               `retrieval: ${retrievalTest.success ? "OK" : "FAIL"}, ` +
               `mode: ${retrievalTest.mode}, ` +
@@ -702,13 +813,13 @@ const memoryLanceDBProPlugin = {
             );
 
             if (!embedTest.success) {
-              api.logger.warn(`memory-lancedb-pro: embedding test failed: ${embedTest.error}`);
+              api.logger.warn(`memory-unified: embedding test failed: ${embedTest.error}`);
             }
             if (!retrievalTest.success) {
-              api.logger.warn(`memory-lancedb-pro: retrieval test failed: ${retrievalTest.error}`);
+              api.logger.warn(`memory-unified: retrieval test failed: ${retrievalTest.error}`);
             }
           } catch (error) {
-            api.logger.warn(`memory-lancedb-pro: startup checks failed: ${String(error)}`);
+            api.logger.warn(`memory-unified: startup checks failed: ${String(error)}`);
           }
         };
 
@@ -719,12 +830,20 @@ const memoryLanceDBProPlugin = {
         setTimeout(() => void runBackup(), 60_000); // 1 min after start
         backupTimer = setInterval(() => void runBackup(), BACKUP_INTERVAL_MS);
       },
-      stop: () => {
+      stop: async () => {
         if (backupTimer) {
           clearInterval(backupTimer);
           backupTimer = null;
         }
-        api.logger.info("memory-lancedb-pro: stopped");
+        // Dispose QMD LLM resources
+        try {
+          await disposeDefaultLlamaCpp();
+        } catch { /* ignore */ }
+        // Close QMD database
+        try {
+          if (qmdStore) qmdStore.close();
+        } catch { /* ignore */ }
+        api.logger.info("memory-unified: stopped");
       },
     });
   },
@@ -733,7 +852,7 @@ const memoryLanceDBProPlugin = {
 
 function parsePluginConfig(value: unknown): PluginConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("memory-lancedb-pro config required");
+    throw new Error("memory-unified config required");
   }
   const cfg = value as Record<string, unknown>;
 
@@ -750,14 +869,39 @@ function parsePluginConfig(value: unknown): PluginConfig {
     throw new Error("embedding.apiKey is required (set directly or via OPENAI_API_KEY env var)");
   }
 
+  // Parse reranker config
+  const rerankerRaw = cfg.reranker as Record<string, unknown> | undefined;
+  const reranker = rerankerRaw ? {
+    enabled: rerankerRaw.enabled !== false,
+    endpoint: typeof rerankerRaw.endpoint === "string" ? rerankerRaw.endpoint : undefined,
+    apiKey: typeof rerankerRaw.apiKey === "string" ? rerankerRaw.apiKey : undefined,
+    model: typeof rerankerRaw.model === "string" ? rerankerRaw.model : undefined,
+    provider: typeof rerankerRaw.provider === "string" ? rerankerRaw.provider : undefined,
+  } : undefined;
+
+  // Parse documents config
+  const docsRaw = cfg.documents as Record<string, unknown> | undefined;
+  const documents = docsRaw ? {
+    enabled: docsRaw.enabled !== false,
+    dbPath: typeof docsRaw.dbPath === "string" ? docsRaw.dbPath : undefined,
+    paths: Array.isArray(docsRaw.paths) ? docsRaw.paths as Array<{ path: string; name: string; pattern?: string }> : undefined,
+    queryExpansion: docsRaw.queryExpansion === true,
+  } : undefined;
+
+  // Parse generation config
+  const genRaw = cfg.generation as Record<string, unknown> | undefined;
+  const generation = genRaw ? {
+    baseURL: typeof genRaw.baseURL === "string" ? genRaw.baseURL : undefined,
+    apiKey: typeof genRaw.apiKey === "string" ? genRaw.apiKey : undefined,
+    model: typeof genRaw.model === "string" ? genRaw.model : undefined,
+  } : undefined;
+
   return {
     embedding: {
       provider: "openai-compatible",
       apiKey,
       model: typeof embedding.model === "string" ? embedding.model : "text-embedding-3-small",
       baseURL: typeof embedding.baseURL === "string" ? resolveEnvVars(embedding.baseURL) : undefined,
-      // Accept number, numeric string, or env-var string (e.g. "${EMBED_DIM}").
-      // Also accept legacy top-level `dimensions` for convenience.
       dimensions: parsePositiveInt(embedding.dimensions ?? cfg.dimensions),
       taskQuery: typeof embedding.taskQuery === "string" ? embedding.taskQuery : undefined,
       taskPassage: typeof embedding.taskPassage === "string" ? embedding.taskPassage : undefined,
@@ -765,7 +909,6 @@ function parsePluginConfig(value: unknown): PluginConfig {
     },
     dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : undefined,
     autoCapture: cfg.autoCapture !== false,
-    // Default OFF: only enable when explicitly set to true.
     autoRecall: cfg.autoRecall === true,
     autoRecallMinLength: parsePositiveInt(cfg.autoRecallMinLength),
     captureAssistant: cfg.captureAssistant === true,
@@ -780,7 +923,10 @@ function parsePluginConfig(value: unknown): PluginConfig {
           : undefined,
       }
       : undefined,
+    reranker,
+    documents,
+    generation,
   };
 }
 
-export default memoryLanceDBProPlugin;
+export default memoryUnifiedPlugin;

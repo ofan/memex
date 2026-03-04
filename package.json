@@ -1,7 +1,7 @@
 {
-  "name": "memory-lancedb-pro",
-  "version": "1.0.22",
-  "description": "OpenClaw enhanced LanceDB memory plugin with hybrid retrieval (Vector + BM25), cross-encoder rerank, multi-scope isolation, long-context chunking, and management CLI",
+  "name": "memory-unified",
+  "version": "0.1.0",
+  "description": "OpenClaw unified memory plugin: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker",
   "type": "module",
   "main": "index.ts",
   "keywords": [
@@ -9,25 +9,24 @@
     "openclaw-plugin",
     "memory",
     "lancedb",
+    "qmd",
     "vector-search",
     "bm25",
     "hybrid-retrieval",
     "rerank",
-    "ai-memory",
-    "long-term-memory",
-    "chunking",
-    "long-context"
+    "unified-recall",
+    "document-search"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/win4r/memory-lancedb-pro.git"
-  },
-  "author": "win4r",
   "license": "MIT",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
     "@sinclair/typebox": "0.34.48",
-    "openai": "^6.21.0"
+    "openai": "^6.21.0",
+    "better-sqlite3": "^11.0.0",
+    "fast-glob": "^3.3.0",
+    "picomatch": "^4.0.0",
+    "sqlite-vec": "^0.1.7-alpha.2",
+    "yaml": "^2.8.2"
   },
   "openclaw": {
     "extensions": [
@@ -35,9 +34,10 @@
     ]
   },
   "scripts": {
-    "test": "node test/cli-smoke.mjs"
+    "test": "echo 'no tests yet'"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "commander": "^14.0.0",
     "jiti": "^2.6.0",
     "typescript": "^5.9.3"

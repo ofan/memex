@@ -1,8 +1,8 @@
 {
-  "id": "memory-lancedb-pro",
-  "name": "Memory (LanceDB Pro)",
-  "description": "Enhanced LanceDB-backed long-term memory with hybrid retrieval, multi-scope isolation, long-context chunking, and management CLI",
-  "version": "1.0.21",
+  "id": "memory-unified",
+  "name": "Memory (Unified)",
+  "description": "Unified memory: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker and unified recall",
+  "version": "0.1.0",
   "kind": "memory",
   "configSchema": {
     "type": "object",
@@ -51,6 +51,33 @@
           "apiKey"
         ]
       },
+      "reranker": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Shared reranker configuration used by both conversation memory and document search",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "endpoint": {
+            "type": "string",
+            "default": "https://api.jina.ai/v1/rerank"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "default": "jina-reranker-v3"
+          },
+          "provider": {
+            "type": "string",
+            "enum": ["jina", "siliconflow", "voyage", "pinecone"],
+            "default": "jina"
+          }
+        }
+      },
       "dbPath": {
         "type": "string"
       },
@@ -71,7 +98,7 @@
         "minimum": 1,
         "maximum": 200,
         "default": 15,
-        "description": "Minimum prompt length (in characters) to trigger auto-recall. Prompts shorter than this are skipped. Default: 15 for English, 6 for CJK."
+        "description": "Minimum prompt length (in characters) to trigger auto-recall. Default: 15 for English, 6 for CJK."
       },
       "captureAssistant": {
         "type": "boolean"
@@ -82,10 +109,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": [
-              "hybrid",
-              "vector"
-            ],
+            "enum": ["hybrid", "vector"],
             "default": "hybrid"
           },
           "vectorWeight": {
@@ -108,11 +132,7 @@
           },
           "rerank": {
             "type": "string",
-            "enum": [
-              "cross-encoder",
-              "lightweight",
-              "none"
-            ],
+            "enum": ["cross-encoder", "lightweight", "none"],
             "default": "cross-encoder"
           },
           "rerankApiKey": {
@@ -127,18 +147,12 @@
           "rerankEndpoint": {
             "type": "string",
             "default": "https://api.jina.ai/v1/rerank",
-            "description": "Reranker API endpoint URL. Compatible with Jina, SiliconFlow, Pinecone, or any service with a similar interface."
+            "description": "Reranker API endpoint URL"
           },
           "rerankProvider": {
             "type": "string",
-            "enum": [
-              "jina",
-              "siliconflow",
-              "voyage",
-              "pinecone"
-            ],
-            "default": "jina",
-            "description": "Reranker provider format. Determines request/response shape and auth header."
+            "enum": ["jina", "siliconflow", "voyage", "pinecone"],
+            "default": "jina"
           },
           "candidatePoolSize": {
             "type": "integer",
@@ -150,41 +164,95 @@
             "type": "number",
             "minimum": 0,
             "maximum": 365,
-            "default": 14,
-            "description": "Half-life in days for recency boost. Newer memories get higher scores. Set 0 to disable."
+            "default": 14
           },
           "recencyWeight": {
             "type": "number",
             "minimum": 0,
             "maximum": 0.5,
-            "default": 0.1,
-            "description": "Maximum recency boost factor added to score"
+            "default": 0.1
           },
           "filterNoise": {
             "type": "boolean",
-            "default": true,
-            "description": "Filter out noise memories (agent denials, meta-questions, boilerplate)"
+            "default": true
           },
           "lengthNormAnchor": {
             "type": "integer",
             "minimum": 0,
             "maximum": 5000,
-            "default": 500,
-            "description": "Length normalization anchor in chars. Entries longer than this get score penalized. Set 0 to disable."
+            "default": 500
           },
           "hardMinScore": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "default": 0.35,
-            "description": "Hard cutoff after all scoring stages. Results below this score are discarded."
+            "default": 0.35
           },
           "timeDecayHalfLifeDays": {
             "type": "number",
             "minimum": 0,
             "maximum": 365,
-            "default": 60,
-            "description": "Time decay half-life in days. Old entries lose score gradually. Floor at 0.5x. Set 0 to disable."
+            "default": 60
+          }
+        }
+      },
+      "documents": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Document search configuration (QMD-backed)",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "dbPath": {
+            "type": "string",
+            "default": "~/.openclaw/memory/qmd",
+            "description": "Directory for QMD SQLite database"
+          },
+          "paths": {
+            "type": "array",
+            "description": "Workspace paths to index for document search",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Absolute path to the directory"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Collection name for this path"
+                },
+                "pattern": {
+                  "type": "string",
+                  "default": "**/*.md",
+                  "description": "Glob pattern for files to index"
+                }
+              },
+              "required": ["path", "name"]
+            }
+          },
+          "queryExpansion": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable LLM-based query expansion (requires a generation model)"
+          }
+        }
+      },
+      "generation": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional generation model for query expansion (HyDE)",
+        "properties": {
+          "baseURL": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
           }
         }
       },
@@ -194,15 +262,13 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true,
-            "description": "Store session summaries to LanceDB on /new command (replaces built-in session-memory hook)"
+            "default": true
           },
           "messageCount": {
             "type": "integer",
             "minimum": 1,
             "maximum": 100,
-            "default": 15,
-            "description": "Number of recent messages to include in session summary"
+            "default": 15
           }
         }
       },
@@ -245,169 +311,36 @@
     "embedding.apiKey": {
       "label": "API Key",
       "sensitive": true,
-      "placeholder": "sk-proj-... or ${GEMINI_API_KEY} or 'ollama'",
-      "help": "API key for the embedding provider (or use ${OPENAI_API_KEY}; use a dummy value for keyless local endpoints)"
+      "placeholder": "sk-proj-... or 'unused' for keyless endpoints",
+      "help": "API key for the embedding provider"
     },
     "embedding.model": {
       "label": "Embedding Model",
-      "placeholder": "text-embedding-3-small",
-      "help": "Embedding model name (e.g. text-embedding-3-small, gemini-embedding-001, nomic-embed-text)"
+      "placeholder": "Qwen3-Embedding-0.6B-Q8_0",
+      "help": "Embedding model name"
     },
     "embedding.baseURL": {
       "label": "Base URL",
-      "placeholder": "https://api.openai.com/v1",
-      "help": "Custom base URL for OpenAI-compatible embedding endpoints (e.g. https://generativelanguage.googleapis.com/v1beta/openai/ for Gemini, http://localhost:11434/v1 for Ollama)",
+      "placeholder": "http://100.122.104.26:8090/v1",
+      "help": "OpenAI-compatible embedding endpoint",
       "advanced": true
     },
-    "embedding.dimensions": {
-      "label": "Vector Dimensions",
-      "placeholder": "auto-detected from model",
-      "help": "Override vector dimensions for custom models not in the built-in lookup table",
-      "advanced": true
+    "reranker.enabled": {
+      "label": "Enable Reranker",
+      "help": "Enable cross-encoder reranking for better result quality"
     },
-    "embedding.taskQuery": {
-      "label": "Query Task",
-      "placeholder": "retrieval.query",
-      "help": "Optional task selector for query embeddings (Jina: retrieval.query). If unset, no task field is sent.",
-      "advanced": true
-    },
-    "embedding.taskPassage": {
-      "label": "Passage Task",
-      "placeholder": "retrieval.passage",
-      "help": "Optional task selector for passage/document embeddings (Jina: retrieval.passage). If unset, no task field is sent.",
-      "advanced": true
-    },
-    "embedding.normalized": {
-      "label": "Normalized Embeddings",
-      "help": "Request normalized embeddings when the provider supports it (Jina v5). If unset, the field is not sent.",
-      "advanced": true
-    },
-    "embedding.chunking": {
-      "label": "Auto-Chunk Documents",
-      "help": "Automatically split long documents into chunks when they exceed embedding context limits. Set to false to disable and let the model fail on long documents.",
-      "advanced": true
-    },
-    "dbPath": {
-      "label": "Database Path",
-      "placeholder": "~/.openclaw/memory/lancedb-pro",
-      "help": "Directory path for the LanceDB database files",
-      "advanced": true
-    },
-    "autoCapture": {
-      "label": "Auto-Capture",
-      "help": "Automatically capture important information from conversations"
-    },
-    "autoRecall": {
-      "label": "Auto-Recall",
-      "help": "Automatically inject relevant memories into context"
-    },
-    "autoRecallMinLength": {
-      "label": "Auto-Recall Min Length",
-      "help": "Minimum prompt length to trigger auto-recall (shorter prompts are skipped). Default: 15 chars for English, 6 for CJK.",
-      "advanced": true
-    },
-    "captureAssistant": {
-      "label": "Capture Assistant Messages",
-      "help": "Also auto-capture assistant messages (default false to reduce memory pollution)",
-      "advanced": true
-    },
-    "retrieval.mode": {
-      "label": "Retrieval Mode",
-      "help": "Use hybrid search (vector + BM25) or vector-only for backward compatibility",
-      "advanced": true
-    },
-    "retrieval.vectorWeight": {
-      "label": "Vector Search Weight",
-      "help": "Weight for vector similarity in hybrid search (0-1)",
-      "advanced": true
-    },
-    "retrieval.bm25Weight": {
-      "label": "BM25 Search Weight",
-      "help": "Weight for BM25 keyword search in hybrid search (0-1)",
-      "advanced": true
-    },
-    "retrieval.minScore": {
-      "label": "Minimum Score Threshold",
-      "help": "Drop results below this relevance score (0-1)",
-      "advanced": true
-    },
-    "retrieval.rerank": {
-      "label": "Reranking Mode",
-      "help": "Re-score fused results for better quality (cross-encoder uses configured reranker API)",
-      "advanced": true
-    },
-    "retrieval.rerankApiKey": {
-      "label": "Reranker API Key",
-      "sensitive": true,
-      "placeholder": "jina_... / sk-... / pcsk_...",
-      "help": "Reranker API key for cross-encoder reranking",
-      "advanced": true
-    },
-    "retrieval.rerankModel": {
-      "label": "Reranker Model",
-      "placeholder": "jina-reranker-v3",
-      "help": "Reranker model name (e.g. jina-reranker-v3, BAAI/bge-reranker-v2-m3)",
-      "advanced": true
-    },
-    "retrieval.rerankEndpoint": {
+    "reranker.endpoint": {
       "label": "Reranker Endpoint",
-      "placeholder": "https://api.jina.ai/v1/rerank",
-      "help": "Custom reranker API endpoint URL",
-      "advanced": true
+      "placeholder": "http://100.122.104.26:8090/v1/rerank",
+      "help": "Reranker API endpoint"
     },
-    "retrieval.rerankProvider": {
-      "label": "Reranker Provider",
-      "help": "Provider format: jina (default), siliconflow, voyage, or pinecone",
-      "advanced": true
+    "documents.enabled": {
+      "label": "Enable Document Search",
+      "help": "Enable QMD-based workspace document search"
     },
-    "retrieval.candidatePoolSize": {
-      "label": "Candidate Pool Size",
-      "help": "Number of candidates to fetch before fusion and reranking",
-      "advanced": true
-    },
-    "retrieval.lengthNormAnchor": {
-      "label": "Length Normalization Anchor",
-      "help": "Entries longer than this (chars) get score penalized to prevent long entries dominating. 0 = disabled.",
-      "advanced": true
-    },
-    "retrieval.hardMinScore": {
-      "label": "Hard Minimum Score",
-      "help": "Discard results below this score after all scoring stages. Higher = fewer but more relevant results.",
-      "advanced": true
-    },
-    "retrieval.timeDecayHalfLifeDays": {
-      "label": "Time Decay Half-Life",
-      "help": "Old entries lose score over this many days. Floor at 0.5x. 0 = disabled.",
-      "advanced": true
-    },
-    "sessionMemory.enabled": {
-      "label": "Session Memory",
-      "help": "Store session summaries to LanceDB when /new is triggered (replaces built-in session-memory hook)"
-    },
-    "sessionMemory.messageCount": {
-      "label": "Session Message Count",
-      "help": "Number of recent messages to include in session summaries",
-      "advanced": true
-    },
-    "scopes.default": {
-      "label": "Default Scope",
-      "help": "Default memory scope for new memories",
-      "advanced": true
-    },
-    "scopes.definitions": {
-      "label": "Scope Definitions",
-      "help": "Define custom memory scopes with descriptions",
-      "advanced": true
-    },
-    "scopes.agentAccess": {
-      "label": "Agent Access Control",
-      "help": "Define which scopes each agent can access",
-      "advanced": true
-    },
-    "enableManagementTools": {
-      "label": "Management Tools",
-      "help": "Enable memory_list and memory_stats tools for debugging and auditing",
-      "advanced": true
+    "documents.paths": {
+      "label": "Document Paths",
+      "help": "Workspace directories to index for document search"
     }
   }
 }

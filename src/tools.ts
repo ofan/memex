@@ -11,6 +11,7 @@ import type { MemoryStore } from "./store.js";
 import { isNoise } from "./noise-filter.js";
 import type { MemoryScopeManager } from "./scopes.js";
 import type { Embedder } from "./embedder.js";
+import type { UnifiedRecall, UnifiedResult, ResultSource } from "./unified-recall.js";
 
 // ============================================================================
 // Types
@@ -24,6 +25,8 @@ interface ToolContext {
   scopeManager: MemoryScopeManager;
   embedder: Embedder;
   agentId?: string;
+  /** Unified recall pipeline (optional — if set, memory_recall queries both sources) */
+  unifiedRecall?: UnifiedRecall;
 }
 
 // ============================================================================
@@ -57,23 +60,33 @@ function sanitizeMemoryForSerialization(results: RetrievalResult[]) {
 // ============================================================================
 
 export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolContext) {
+  const hasUnified = !!context.unifiedRecall?.hasDocumentSearch;
+
   api.registerTool(
     {
       name: "memory_recall",
       label: "Memory Recall",
-      description: "Search through long-term memories using hybrid retrieval (vector + keyword search). Use when you need context about user preferences, past decisions, or previously discussed topics.",
+      description: hasUnified
+        ? "Search through conversation memories and workspace documents. Returns results from both sources with source attribution. Use when you need context about user preferences, past decisions, discussed topics, or project documentation."
+        : "Search through long-term memories using hybrid retrieval (vector + keyword search). Use when you need context about user preferences, past decisions, or previously discussed topics.",
       parameters: Type.Object({
         query: Type.String({ description: "Search query for finding relevant memories" }),
         limit: Type.Optional(Type.Number({ description: "Max results to return (default: 5, max: 20)" })),
         scope: Type.Optional(Type.String({ description: "Specific memory scope to search in (optional)" })),
         category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+        ...(hasUnified ? {
+          source: Type.Optional(Type.String({
+            description: "Which sources to search: 'all' (default), 'conversation' (memories only), 'document' (workspace docs only)"
+          })),
+        } : {}),
       }),
       async execute(_toolCallId, params) {
-        const { query, limit = 5, scope, category } = params as {
+        const { query, limit = 5, scope, category, source = "all" } = params as {
           query: string;
           limit?: number;
           scope?: string;
           category?: string;
+          source?: string;
         };
 
         try {
@@ -92,6 +105,57 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             }
           }
 
+          // Use unified recall if available and not explicitly conversation-only
+          if (context.unifiedRecall?.hasDocumentSearch && source !== "conversation") {
+            const sources: ResultSource[] | undefined =
+              source === "document" ? ["document"] :
+              source === "conversation" ? ["conversation"] :
+              undefined; // "all" — search both
+
+            const results = await context.unifiedRecall.recall(query, {
+              limit: safeLimit,
+              scopeFilter,
+              category,
+              sources,
+            });
+
+            if (results.length === 0) {
+              return {
+                content: [{ type: "text", text: "No relevant results found." }],
+                details: { count: 0, query, scopes: scopeFilter, source },
+              };
+            }
+
+            const text = results
+              .map((r, i) => {
+                if (r.source === "conversation") {
+                  const meta = r.metadata as { type: "conversation"; category: string; scope: string; memoryId: string };
+                  return `${i + 1}. [memory] [${meta.memoryId}] [${meta.category}:${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
+                } else {
+                  const meta = r.metadata as { type: "document"; displayPath: string; title: string };
+                  return `${i + 1}. [doc] [${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
+                }
+              })
+              .join("\n");
+
+            const convCount = results.filter(r => r.source === "conversation").length;
+            const docCount = results.filter(r => r.source === "document").length;
+
+            return {
+              content: [{ type: "text", text: `Found ${results.length} results (${convCount} memories, ${docCount} documents):\n\n${text}` }],
+              details: {
+                count: results.length,
+                conversationCount: convCount,
+                documentCount: docCount,
+                results: results.map(r => ({ id: r.id, text: r.text.slice(0, 500), score: r.score, source: r.source, metadata: r.metadata })),
+                query,
+                scopes: scopeFilter,
+                mode: "unified",
+              },
+            };
+          }
+
+          // Fallback: conversation-only recall (backward compat)
           const results = await context.retriever.retrieve({
             query,
             limit: safeLimit,
@@ -618,6 +682,63 @@ export function registerMemoryListTool(api: OpenClawPluginApi, context: ToolCont
 // Tool Registration Helper
 // ============================================================================
 
+export function registerDocumentSearchTool(api: OpenClawPluginApi, context: ToolContext) {
+  if (!context.unifiedRecall?.hasDocumentSearch) return;
+
+  api.registerTool(
+    {
+      name: "document_search",
+      label: "Document Search",
+      description: "Search through indexed workspace documents (markdown files). Use when looking for project documentation, notes, or reference material.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query" }),
+        limit: Type.Optional(Type.Number({ description: "Max results (default: 5, max: 20)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const { query, limit = 5 } = params as { query: string; limit?: number };
+
+        try {
+          const safeLimit = clampInt(limit, 1, 20);
+          const results = await context.unifiedRecall!.recall(query, {
+            limit: safeLimit,
+            sources: ["document"],
+          });
+
+          if (results.length === 0) {
+            return {
+              content: [{ type: "text", text: "No matching documents found." }],
+              details: { count: 0, query },
+            };
+          }
+
+          const text = results
+            .map((r, i) => {
+              const meta = r.metadata as { type: "document"; displayPath: string; title: string; bestChunk: string };
+              const chunk = meta.bestChunk || r.text;
+              return `${i + 1}. **${meta.title}** (${meta.displayPath})\n   ${chunk.slice(0, 300)}${chunk.length > 300 ? '...' : ''}\n   Score: ${(r.score * 100).toFixed(0)}%`;
+            })
+            .join("\n\n");
+
+          return {
+            content: [{ type: "text", text: `Found ${results.length} documents:\n\n${text}` }],
+            details: {
+              count: results.length,
+              results: results.map(r => ({ id: r.id, score: r.score, metadata: r.metadata })),
+              query,
+            },
+          };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `Document search failed: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { error: "search_failed", message: String(error) },
+          };
+        }
+      },
+    },
+    { name: "document_search" }
+  );
+}
+
 export function registerAllMemoryTools(
   api: OpenClawPluginApi,
   context: ToolContext,
@@ -630,6 +751,9 @@ export function registerAllMemoryTools(
   registerMemoryStoreTool(api, context);
   registerMemoryForgetTool(api, context);
   registerMemoryUpdateTool(api, context);
+
+  // Document search (enabled when QMD is configured)
+  registerDocumentSearchTool(api, context);
 
   // Management tools (optional)
   if (options.enableManagementTools) {
