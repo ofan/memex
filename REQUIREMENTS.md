@@ -250,6 +250,45 @@ When embedding model changes, all stored vectors become incompatible. Required:
 - Detect dimension mismatch on startup → warn + block until reindex
 - Keep old vectors as backup until reindex completes
 
+## Local Inference Setup (Mac Mini M4)
+
+**Decision:** Option B — dedicated specialist models via llama.cpp.
+
+**Why llama.cpp:** Serves embeddings, reranking, and chat (future) from one stack. OpenAI-compatible API. Metal acceleration. Already proven on Mac Mini.
+
+**Model lineup:**
+- **Embeddings:** Qwen3-Embedding-0.6B (~1.2GB VRAM) — port 8090
+- **Reranker:** bge-reranker-v2-m3 (~1.5GB VRAM) — port 8091
+- **Chat (future):** TBD — ~9GB headroom remaining
+
+**Total VRAM:** ~2.7GB of 11.8GB available. Leaves room for chat model + TTS (mlx-audio already on Mac Mini).
+
+**Serving:**
+```
+llama-server --model Qwen3-Embedding-0.6B.gguf --port 8090 --embedding
+llama-server --model bge-reranker-v2-m3.gguf --port 8091 --reranking
+```
+
+**Plugin config (local mode):**
+```json
+{
+  "embedding": {
+    "baseURL": "http://100.122.104.26:8090/v1",
+    "apiKey": "unused",
+    "model": "Qwen3-Embedding-0.6B"
+  },
+  "reranker": {
+    "enabled": true,
+    "endpoint": "http://100.122.104.26:8091/v1/rerank",
+    "apiKey": "unused",
+    "model": "bge-reranker-v2-m3",
+    "provider": "jina"
+  }
+}
+```
+
+**Persistence:** launchd services for both, auto-start on boot.
+
 ## Non-Goals (for now)
 
 - MCP server / HTTP API
