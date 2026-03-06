@@ -288,6 +288,21 @@ export class MemoryStore {
     return fullEntry;
   }
 
+  /** Bulk store entries in a single LanceDB write. Returns all stored entries. */
+  async bulkStore(entries: Omit<MemoryEntry, "id" | "timestamp">[]): Promise<MemoryEntry[]> {
+    await this.ensureInitialized();
+
+    const fullEntries: MemoryEntry[] = entries.map((entry) => ({
+      ...entry,
+      id: randomUUID(),
+      timestamp: Date.now(),
+      metadata: entry.metadata || "{}",
+    }));
+
+    await this.table!.add(fullEntries);
+    return fullEntries;
+  }
+
   /**
    * Import a pre-built entry while preserving its id/timestamp.
    * Used for re-embedding / migration / A/B testing across embedding models.

@@ -18,6 +18,7 @@ import { MemoryStore } from "../src/store.js";
 import { createRetriever } from "../src/retriever.js";
 import { loadBeirDataset, type BeirDataset, type BeirDatasetName, BEIR_DATASETS } from "./helpers/beir-loader.js";
 import { recallAtK, precisionAtK, mrr, ndcgAtK } from "./helpers/ir-metrics.js";
+import { embedWithCache, type CacheStats } from "./helpers/embedding-cache.js";
 
 // ============================================================================
 // Config
@@ -314,12 +315,13 @@ function generateSyntheticDataset(): BeirDataset {
 // CLI Argument Parsing
 // ============================================================================
 
-function parseCli(): { dataset: string; maxQueries: number; maxCorpus: number } {
+function parseCli(): { dataset: string; maxQueries: number; maxCorpus: number; refreshEmbeddings: boolean } {
   const { values } = parseArgs({
     options: {
       dataset: { type: "string", default: "synthetic" },
       "max-queries": { type: "string", default: "20" },
       "max-corpus": { type: "string", default: "1000" },
+      "refresh-embeddings": { type: "boolean", default: false },
     },
     strict: false,
   });
@@ -327,6 +329,7 @@ function parseCli(): { dataset: string; maxQueries: number; maxCorpus: number } 
   const dataset = (values.dataset as string) ?? "synthetic";
   const maxQueries = parseInt((values["max-queries"] as string) ?? "20", 10);
   const maxCorpus = parseInt((values["max-corpus"] as string) ?? "1000", 10);
+  const refreshEmbeddings = (values["refresh-embeddings"] as boolean) ?? false;
 
   const validDatasets = ["fiqa", "nq", "scifact", "synthetic"];
   if (!validDatasets.includes(dataset)) {
@@ -334,7 +337,7 @@ function parseCli(): { dataset: string; maxQueries: number; maxCorpus: number } 
     process.exit(1);
   }
 
-  return { dataset, maxQueries, maxCorpus };
+  return { dataset, maxQueries, maxCorpus, refreshEmbeddings };
 }
 
 // ============================================================================
@@ -354,53 +357,46 @@ async function indexCorpus(
   store: MemoryStore,
   embedder: ReturnType<typeof createEmbedder>,
   corpus: BeirDataset["corpus"],
-): Promise<{ stats: IndexingStats; storeIdToDocId: Map<string, string> }> {
+  refreshEmbeddings = false,
+): Promise<{ stats: IndexingStats; storeIdToDocId: Map<string, string>; cacheStats: CacheStats }> {
   const storeIdToDocId = new Map<string, string>();
   const memBefore = process.memoryUsage();
 
   console.log(`\n[indexing] embedding and storing ${corpus.length} docs...`);
   const startAll = performance.now();
 
-  // Embed one at a time with retry — llama.cpp router is fragile under batch load
-  const allVectors: number[][] = [];
+  // Prepare texts for embedding
+  const texts = corpus.map((doc) => doc.title ? `${doc.title}. ${doc.text}` : doc.text);
 
-  for (let i = 0; i < corpus.length; i++) {
-    const doc = corpus[i];
-    const text = doc.title ? `${doc.title}. ${doc.text}` : doc.text;
+  // Embed with disk cache (skips API calls for previously embedded texts)
+  // Use a unique model key when refreshing to bypass cache
+  const modelKey = refreshEmbeddings ? `${EMBEDDING_MODEL}-refresh-${Date.now()}` : EMBEDDING_MODEL;
+  const { vectors: allVectors, stats: cacheStats } = await embedWithCache(
+    texts, modelKey, (t) => embedder.embedPassage(t), {
+      onProgress: (done, total) => {
+        const pct = Math.round((done / total) * 100);
+        console.warn(`  [indexing] embedded ${done}/${total} (${pct}%)`);
+      },
+    },
+  );
 
-    let vec: number[] | null = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        vec = await embedder.embedPassage(text);
-        break;
-      } catch (err: any) {
-        console.warn(`  [indexing] doc ${i} attempt ${attempt + 1} failed: ${err.message?.slice(0, 80)}`);
-        if (attempt < 4) await new Promise((r) => setTimeout(r, 5000 * (attempt + 1)));
-      }
-    }
-    if (!vec) throw new Error(`Failed to embed doc ${i} after 5 retries`);
-    allVectors.push(vec);
+  console.log(`  [indexing] cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate})`);
 
-    if ((i + 1) % 50 === 0 || i + 1 === corpus.length) {
-      const pct = Math.round(((i + 1) / corpus.length) * 100);
-      console.warn(`  [indexing] embedded ${i + 1}/${corpus.length} (${pct}%)`);
-    }
-  }
 
-  // Store each doc
-  for (let i = 0; i < corpus.length; i++) {
-    const doc = corpus[i];
-    const text = doc.title ? `${doc.title}. ${doc.text}` : doc.text;
-    const storedEntry = await store.store({
-      text,
-      vector: allVectors[i],
-      category: "fact",
-      scope: "global",
-      importance: 0.7,
-      metadata: JSON.stringify({ docId: doc.id }),
-    });
-    storeIdToDocId.set(storedEntry.id, doc.id);
-  }
+  // Bulk store all docs in one LanceDB write
+  console.log("[indexing] bulk storing into LanceDB...");
+  const entriesToStore = corpus.map((doc, i) => ({
+    text: texts[i],
+    vector: allVectors[i],
+    category: "fact" as const,
+    scope: "global",
+    importance: 0.7,
+    metadata: JSON.stringify({ docId: doc.id }),
+  }));
+  const storedEntries = await store.bulkStore(entriesToStore);
+  storedEntries.forEach((entry, i) => {
+    storeIdToDocId.set(entry.id, corpus[i].id);
+  });
 
   // Rebuild FTS index after bulk insert (LanceDB FTS is static at creation time)
   console.log("[indexing] rebuilding FTS index for BM25 search...");
@@ -419,7 +415,7 @@ async function indexCorpus(
   };
 
   console.log(`[indexing] done: ${corpus.length} docs in ${totalTimeMs.toFixed(0)}ms (${stats.docsPerSec.toFixed(1)} docs/sec)`);
-  return { stats, storeIdToDocId };
+  return { stats, storeIdToDocId, cacheStats };
 }
 
 // ============================================================================
@@ -507,6 +503,14 @@ async function evaluatePipeline(
     allPrecision5.push(precisionAtK(relevantDocIds, resultDocIds, 5));
     allMrr.push(mrr(relevantDocIds, resultDocIds));
     allNdcg10.push(ndcgAtK(qrelMap, resultDocIds, 10));
+
+    // Debug: log first few queries to understand ranking
+    if (qi < 3 && pipelineMode.name === "vector-only") {
+      console.warn(`  [debug] Q${qi} "${q.text.slice(0, 50)}..." → relevant: [${relevantDocIds.join(",")}]`);
+      console.warn(`  [debug]   top-3 results: ${resultDocIds.slice(0, 3).map((id, i) => `#${i+1}=${id}(${results[i]?.score.toFixed(3)})`).join(", ")}`);
+      const foundAt = resultDocIds.findIndex((id) => relevantDocIds.includes(id));
+      console.warn(`  [debug]   relevant found at rank: ${foundAt >= 0 ? foundAt + 1 : "not in top 10"}`);
+    }
 
     if ((qi + 1) % 5 === 0) {
       console.warn(`  [${pipelineMode.name}] ${qi + 1}/${dataset.queries.length} queries`);
@@ -616,7 +620,7 @@ async function main() {
     const store = new MemoryStore({ dbPath: tmpDir, vectorDim: EMBEDDING_DIMS });
 
     // Indexing phase
-    const { stats: indexStats, storeIdToDocId } = await indexCorpus(store, embedder, dataset.corpus);
+    const { stats: indexStats, storeIdToDocId, cacheStats } = await indexCorpus(store, embedder, dataset.corpus, cli.refreshEmbeddings);
 
     // Retrieval phase — run each pipeline mode
     const retrievalRows: MetricRow[] = [];

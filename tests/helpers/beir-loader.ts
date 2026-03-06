@@ -156,19 +156,38 @@ export async function loadBeirDataset(
     queries = queries.slice(0, opts.maxQueries);
   }
 
-  // Parse corpus
-  const rawCorpus = parseJsonl<{ _id: string; title: string; text: string }>(
-    corpusPath,
-    opts?.maxCorpus
-  );
-  const corpus: BeirDoc[] = rawCorpus.map((d) => ({
-    id: d._id,
-    title: d.title ?? "",
-    text: d.text,
-  }));
+  // Collect all relevant doc IDs for selected queries
+  const relevantDocIds = new Set<string>();
+  for (const q of queries) {
+    const rels = qrels.get(q.id);
+    if (rels) {
+      for (const [docId, score] of rels) {
+        if (score > 0) relevantDocIds.add(docId);
+      }
+    }
+  }
+
+  // Parse full corpus, then select: all relevant docs + random fill to maxCorpus
+  const allCorpus = parseJsonl<{ _id: string; title: string; text: string }>(corpusPath);
+  const relevantDocs: BeirDoc[] = [];
+  const otherDocs: BeirDoc[] = [];
+
+  for (const d of allCorpus) {
+    const doc: BeirDoc = { id: d._id, title: d.title ?? "", text: d.text };
+    if (relevantDocIds.has(d._id)) {
+      relevantDocs.push(doc);
+    } else {
+      otherDocs.push(doc);
+    }
+  }
+
+  // Fill remaining slots with non-relevant docs (distractors)
+  const maxCorpus = opts?.maxCorpus ?? allCorpus.length;
+  const fillCount = Math.max(0, maxCorpus - relevantDocs.length);
+  const corpus: BeirDoc[] = [...relevantDocs, ...otherDocs.slice(0, fillCount)];
 
   console.warn(
-    `[beir-loader] loaded ${name}: ${queries.length} queries, ${corpus.length} docs, ${qrels.size} judged queries`
+    `[beir-loader] loaded ${name}: ${queries.length} queries, ${corpus.length} docs (${relevantDocs.length} relevant + ${Math.min(fillCount, otherDocs.length)} distractors), ${qrels.size} judged queries`
   );
 
   return { name, queries, corpus, qrels };
