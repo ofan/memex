@@ -76,7 +76,7 @@ export class MemoryMigrator {
         return result;
       }
 
-      console.log(`Migrating from: ${sourceDbPath}`);
+      console.warn(`Migrating from: ${sourceDbPath}`);
 
       // Load legacy data
       const legacyEntries = await this.loadLegacyData(sourceDbPath);
@@ -86,7 +86,7 @@ export class MemoryMigrator {
         return result;
       }
 
-      console.log(`Found ${legacyEntries.length} entries to migrate`);
+      console.warn(`Found ${legacyEntries.length} entries to migrate`);
 
       // Migrate entries
       if (!options.dryRun) {
@@ -205,7 +205,7 @@ export class MemoryMigrator {
         migrated++;
 
         if (migrated % 100 === 0) {
-          console.log(`Migrated ${migrated}/${legacyEntries.length} entries...`);
+          console.warn(`Migrated ${migrated}/${legacyEntries.length} entries...`);
         }
 
       } catch (error) {

@@ -537,6 +537,59 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
       }
     });
 
+  // Import sessions
+  memory
+    .command("import-sessions")
+    .description("Index past conversation sessions as searchable memories")
+    .option("--agent <name>", "Agent name (determines sessions directory)", "main")
+    .option("--scope <scope>", "Target scope for indexed memories", "global")
+    .option("--min-importance <n>", "Minimum importance threshold (0.0-1.0)", "0.1")
+    .option("--dry-run", "Show what would be indexed without storing")
+    .option("--json", "Output results as JSON")
+    .action(async (options) => {
+      try {
+        if (!context.embedder) {
+          console.error("import-sessions requires an embedder (not available in basic CLI mode).");
+          process.exit(1);
+        }
+
+        const { indexSessions } = await import("./session-indexer.js");
+        const { join } = await import("node:path");
+        const home = process.env.HOME || "/home/ubuntu";
+        const sessionsDir = join(home, ".openclaw", "agents", options.agent, "sessions");
+
+        console.warn(`Indexing sessions from ${sessionsDir}...`);
+
+        const result = await indexSessions(context.store, context.embedder, {
+          sessionsDir,
+          targetScope: options.scope,
+          minImportance: parseFloat(options.minImportance) || 0.1,
+          dryRun: options.dryRun === true,
+        });
+
+        if (options.json) {
+          console.log(formatJson(result));
+        } else {
+          console.log(`Session Import Results:`);
+          console.log(`• Sessions: ${result.totalSessions} total, ${result.skippedSessions} skipped (automated)`);
+          console.log(`• Turns: ${result.totalTurns} total`);
+          console.log(`• Noise filtered: ${result.skippedNoise}`);
+          console.log(`• Below importance threshold: ${result.skippedImportance}`);
+          console.log(`• Indexed: ${result.indexedTurns}`);
+          if (result.errors.length > 0) {
+            console.log(`• Errors: ${result.errors.length}`);
+            result.errors.forEach(e => console.log(`  - ${e}`));
+          }
+          if (options.dryRun) {
+            console.log(`\n(dry run — nothing was stored)`);
+          }
+        }
+      } catch (error) {
+        console.error("Session import failed:", error);
+        process.exit(1);
+      }
+    });
+
   // Migration commands
   const migrate = memory
     .command("migrate")

@@ -237,6 +237,12 @@
             "type": "boolean",
             "default": false,
             "description": "Enable LLM-based query expansion (requires a generation model)"
+          },
+          "reindexIntervalMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 30,
+            "description": "Interval in minutes for periodic background re-indexing. Set to 0 to disable."
           }
         }
       },

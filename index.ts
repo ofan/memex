@@ -19,12 +19,13 @@ import { createMigrator } from "./src/migrate.js";
 import { registerAllMemoryTools } from "./src/tools.js";
 import { shouldSkipRetrieval } from "./src/adaptive-retrieval.js";
 import { UnifiedRecall } from "./src/unified-recall.js";
-import { createMemoryCLI } from "./cli.js";
+import { createMemoryCLI } from "./src/cli.js";
 
 // Import QMD components
-import { initializeQmdLLM, disposeDefaultLlamaCpp } from "./qmd/llm.js";
-import type { HttpLLMConfig } from "./qmd/llm.js";
-import { createStore as createQmdStore, hybridQuery as qmdHybridQueryFn } from "./qmd/store.js";
+import { initializeQmdLLM, disposeDefaultLlamaCpp } from "./src/qmd/llm.js";
+import type { HttpLLMConfig } from "./src/qmd/llm.js";
+import { createStore as createQmdStore, hybridQuery as qmdHybridQueryFn } from "./src/qmd/store.js";
+import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-indexer.js";
 
 // ============================================================================
 // Configuration & Types
@@ -85,12 +86,26 @@ interface PluginConfig {
     dbPath?: string;
     paths?: Array<{ path: string; name: string; pattern?: string }>;
     queryExpansion?: boolean;
+    /** Re-index interval in minutes (0 = disabled, default: 30) */
+    reindexIntervalMinutes?: number;
   };
   /** Optional generation model for query expansion */
   generation?: {
     baseURL?: string;
     apiKey?: string;
     model?: string;
+  };
+  /** Session indexing: bulk-import past conversation sessions on startup */
+  sessionIndexing?: {
+    enabled?: boolean;
+    /** Agent name to index sessions from (default: "main") */
+    agent?: string;
+    /** Target scope for indexed memories (default: "global") */
+    scope?: string;
+    /** Minimum importance threshold (default: 0.1) */
+    minImportance?: number;
+    /** Auto-index on first startup only (skips if memories already exist) */
+    autoIndexOnce?: boolean;
   };
 }
 
@@ -372,6 +387,23 @@ const memoryUnifiedPlugin = {
       taskPassage: config.embedding.taskPassage,
       normalized: config.embedding.normalized,
     });
+    // Background probe: verify embedding API returns expected dimensions
+    (async () => {
+      try {
+        const probe = await embedder.test();
+        if (!probe.success) {
+          api.logger.warn(`memory-unified: embedding probe failed — ${probe.error}. Recall may not work.`);
+        } else if (probe.dimensions !== vectorDim) {
+          api.logger.warn(
+            `memory-unified: dimension mismatch! Config expects ${vectorDim}d but model returns ${probe.dimensions}d. ` +
+            `Set embedding.dimensions to ${probe.dimensions} or use a compatible model.`
+          );
+        }
+      } catch (err) {
+        api.logger.warn(`memory-unified: embedding probe error — ${String(err)}`);
+      }
+    })();
+
     // Merge shared reranker config into retrieval config
     const retrievalConfig = {
       ...DEFAULT_RETRIEVAL_CONFIG,
@@ -404,7 +436,8 @@ const memoryUnifiedPlugin = {
 
     let qmdStore: any = null;
     let qmdHybridQuery: any = null;
-    const unifiedRecall = new UnifiedRecall(retriever, embedder);
+    let reindexTimer: ReturnType<typeof setInterval> | null = null;
+    const unifiedRecall = new UnifiedRecall(retriever, embedder, {}, { warn: (msg) => api.logger.warn(msg) });
 
     if (config.documents?.enabled !== false && config.documents?.paths?.length) {
       try {
@@ -455,8 +488,63 @@ const memoryUnifiedPlugin = {
         // Wire QMD into unified recall
         unifiedRecall.setQmdStore(qmdStore, qmdHybridQuery, config.embedding.model || "text-embedding-3-small");
 
+        // Background indexing — reusable for startup + periodic re-index
+        const docPaths = config.documents.paths.map((p: any) => ({
+          path: p.path,
+          name: p.name,
+          pattern: p.pattern,
+        }));
+        const qmdDb = qmdStore.db;
+        const embDims = getVectorDimensions(
+          config.embedding.model || "text-embedding-3-small",
+          config.embedding.dimensions
+        );
+
+        const runDocIndex = async (silent = false) => {
+          try {
+            const indexResults = await indexAllPaths(qmdDb, docPaths);
+            const totals = indexResults.reduce(
+              (acc, r) => ({
+                indexed: acc.indexed + r.indexed,
+                updated: acc.updated + r.updated,
+                unchanged: acc.unchanged + r.unchanged,
+                removed: acc.removed + r.removed,
+              }),
+              { indexed: 0, updated: 0, unchanged: 0, removed: 0 }
+            );
+
+            if (!silent && (totals.indexed > 0 || totals.updated > 0)) {
+              api.logger.info(
+                `memory-unified: indexed ${totals.indexed} new, ${totals.updated} updated, ${totals.unchanged} unchanged, ${totals.removed} removed docs`
+              );
+            }
+
+            const backlog = getEmbeddingBacklog(qmdDb);
+            if (backlog > 0) {
+              if (!silent) api.logger.info(`memory-unified: embedding ${backlog} document hashes...`);
+              const embedResult = await embedDocuments(qmdDb, embDims);
+              if (!silent) {
+                api.logger.info(
+                  `memory-unified: embedded ${embedResult.embedded} docs (${embedResult.chunks} chunks)${embedResult.errors.length > 0 ? `, ${embedResult.errors.length} errors` : ""}`
+                );
+              }
+            }
+          } catch (err) {
+            api.logger.warn(`memory-unified: background indexing failed: ${String(err)}`);
+          }
+        };
+
+        // Fire-and-forget initial indexing
+        void runDocIndex();
+
+        // Periodic re-indexing (default: every 30 minutes, 0 = disabled)
+        const reindexMinutes = config.documents.reindexIntervalMinutes ?? 30;
+        if (reindexMinutes > 0) {
+          reindexTimer = setInterval(() => void runDocIndex(true), reindexMinutes * 60_000);
+        }
+
         api.logger.info(
-          `memory-unified: QMD document search enabled (db: ${qmdDbFile}, paths: ${config.documents.paths.map(p => p.name).join(", ")})`
+          `memory-unified: QMD document search enabled (db: ${qmdDbFile}, paths: ${config.documents.paths.map((p: any) => p.name).join(", ")})`
         );
       } catch (err) {
         api.logger.warn(`memory-unified: QMD initialization failed (document search disabled): ${String(err)}`);
@@ -834,6 +922,10 @@ const memoryUnifiedPlugin = {
         if (backupTimer) {
           clearInterval(backupTimer);
           backupTimer = null;
+        }
+        if (reindexTimer) {
+          clearInterval(reindexTimer);
+          reindexTimer = null;
         }
         // Dispose QMD LLM resources
         try {

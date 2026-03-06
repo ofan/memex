@@ -51,6 +51,7 @@ const SCOPE_PATTERNS = {
   CUSTOM: (name: string) => `custom:${name}`,
   PROJECT: (projectId: string) => `project:${projectId}`,
   USER: (userId: string) => `user:${userId}`,
+  SESSION: (sessionId: string) => `session:${sessionId}`,
 };
 
 // ============================================================================
@@ -105,7 +106,8 @@ export class MemoryScopeManager implements ScopeManager {
       scope.startsWith("agent:") ||
       scope.startsWith("custom:") ||
       scope.startsWith("project:") ||
-      scope.startsWith("user:")
+      scope.startsWith("user:") ||
+      scope.startsWith("session:")
     );
   }
 
@@ -290,6 +292,7 @@ export class MemoryScopeManager implements ScopeManager {
       custom: 0,
       project: 0,
       user: 0,
+      session: 0,
       other: 0,
     };
 
@@ -304,6 +307,8 @@ export class MemoryScopeManager implements ScopeManager {
         scopesByType.project++;
       } else if (scope.startsWith("user:")) {
         scopesByType.user++;
+      } else if (scope.startsWith("session:")) {
+        scopesByType.session++;
       } else {
         scopesByType.other++;
       }
@@ -339,6 +344,10 @@ export function createProjectScope(projectId: string): string {
 
 export function createUserScope(userId: string): string {
   return SCOPE_PATTERNS.USER(userId);
+}
+
+export function createSessionScope(sessionId: string): string {
+  return SCOPE_PATTERNS.SESSION(sessionId);
 }
 
 // ============================================================================

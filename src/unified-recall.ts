@@ -8,6 +8,8 @@
 
 import type { Embedder } from "./embedder.js";
 import type { MemoryRetriever, RetrievalResult } from "./retriever.js";
+import { buildRerankRequest, parseRerankResponse } from "./retriever.js";
+import type { RerankProvider } from "./retriever.js";
 
 // QMD store type — imported dynamically to avoid hard dependency
 type QmdStore = {
@@ -70,6 +72,13 @@ interface DocumentMeta {
   docid: string;
 }
 
+export interface RerankConfig {
+  provider: RerankProvider;
+  apiKey: string;
+  model: string;
+  endpoint: string;
+}
+
 export interface UnifiedRecallConfig {
   /** Max results to return (default: 10) */
   limit: number;
@@ -81,6 +90,15 @@ export interface UnifiedRecallConfig {
   documentWeight: number;
   /** Whether to apply shared reranking across both sources (default: false) */
   crossRerank: boolean;
+  /** Reranker config — required when crossRerank is true */
+  rerankConfig?: RerankConfig;
+  /** If true, run sources sequentially: skip document search when
+   *  conversation results are strong enough (all scores > highConfidenceThreshold).
+   *  Saves ~200ms latency on queries that clearly match memories. (default: false) */
+  earlyTermination: boolean;
+  /** Score threshold above which all conversation results are "strong enough"
+   *  to skip document search. (default: 0.6) */
+  highConfidenceThreshold: number;
 }
 
 export const DEFAULT_UNIFIED_CONFIG: UnifiedRecallConfig = {
@@ -89,11 +107,15 @@ export const DEFAULT_UNIFIED_CONFIG: UnifiedRecallConfig = {
   conversationWeight: 0.5,
   documentWeight: 0.5,
   crossRerank: false,
+  earlyTermination: false,
+  highConfidenceThreshold: 0.6,
 };
 
 // =============================================================================
 // Unified Recall
 // =============================================================================
+
+export type LogFn = (message: string) => void;
 
 export class UnifiedRecall {
   private retriever: MemoryRetriever;
@@ -102,15 +124,19 @@ export class UnifiedRecall {
   private qmdHybridQuery: QmdHybridQuery | null = null;
   private qmdEmbedModel: string = "";
   private config: UnifiedRecallConfig;
+  private _lastQuery: string = "";
+  private warn: LogFn;
 
   constructor(
     retriever: MemoryRetriever,
     embedder: Embedder,
-    config: Partial<UnifiedRecallConfig> = {}
+    config: Partial<UnifiedRecallConfig> = {},
+    logger?: { warn: LogFn }
   ) {
     this.retriever = retriever;
     this.embedder = embedder;
     this.config = { ...DEFAULT_UNIFIED_CONFIG, ...config };
+    this.warn = logger?.warn ?? console.warn.bind(console);
   }
 
   /**
@@ -139,26 +165,44 @@ export class UnifiedRecall {
       sources?: ResultSource[];
     } = {}
   ): Promise<UnifiedResult[]> {
+    this._lastQuery = query;
     const limit = options.limit ?? this.config.limit;
     const wantConversation = !options.sources || options.sources.includes("conversation");
     const wantDocuments = !options.sources || options.sources.includes("document");
 
-    // Fan out to both stores in parallel
-    const [conversationResults, documentResults] = await Promise.all([
-      wantConversation
-        ? this.recallConversation(query, {
-            limit: Math.ceil(limit * 1.5), // over-fetch for merge
-            scopeFilter: options.scopeFilter,
-            category: options.category,
-          })
-        : [],
-      wantDocuments && this.hasDocumentSearch
-        ? this.recallDocuments(query, { limit: Math.ceil(limit * 1.5) })
-        : [],
-    ]);
+    let conversationResults: UnifiedResult[] = [];
+    let documentResults: UnifiedResult[] = [];
 
-    // Merge and rank
-    const merged = this.mergeResults(conversationResults, documentResults);
+    const convOpts = {
+      limit: Math.ceil(limit * 1.5), // over-fetch for merge
+      scopeFilter: options.scopeFilter,
+      category: options.category,
+    };
+
+    // Early termination: try conversation first, skip documents if results are strong
+    if (this.config.earlyTermination && wantConversation && wantDocuments && this.hasDocumentSearch) {
+      conversationResults = await this.recallConversation(query, convOpts);
+      const strongEnough = conversationResults.length >= limit
+        && conversationResults.slice(0, limit).every(
+          (r) => r.rawScore >= this.config.highConfidenceThreshold
+        );
+      if (!strongEnough) {
+        documentResults = await this.recallDocuments(query, { limit: Math.ceil(limit * 1.5) });
+      }
+    } else {
+      // Default: fan out to both stores in parallel
+      [conversationResults, documentResults] = await Promise.all([
+        wantConversation
+          ? this.recallConversation(query, convOpts)
+          : [],
+        wantDocuments && this.hasDocumentSearch
+          ? this.recallDocuments(query, { limit: Math.ceil(limit * 1.5) })
+          : [],
+      ]);
+    }
+
+    // Merge and rank (async when cross-source reranking is enabled)
+    const merged = await this.mergeResults(conversationResults, documentResults);
 
     // Apply min score filter and limit
     return merged
@@ -251,7 +295,7 @@ export class UnifiedRecall {
         },
       }));
     } catch (error) {
-      console.error("Document recall error:", error);
+      this.warn(`Document recall error: ${error instanceof Error ? error.message : String(error)}`);
       return [];
     }
   }
@@ -260,10 +304,10 @@ export class UnifiedRecall {
   // Internal: merge results from both sources
   // ---------------------------------------------------------------------------
 
-  private mergeResults(
+  private async mergeResults(
     conversation: UnifiedResult[],
     documents: UnifiedResult[]
-  ): UnifiedResult[] {
+  ): Promise<UnifiedResult[]> {
     // Normalize scores within each source to [0, 1]
     const normConv = this.normalizeScores(conversation);
     const normDocs = this.normalizeScores(documents);
@@ -280,10 +324,79 @@ export class UnifiedRecall {
       })),
     ];
 
+    // Cross-source reranking: use a single cross-encoder pass across all results
+    if (this.config.crossRerank && this.config.rerankConfig && weighted.length > 1) {
+      const reranked = await this.crossEncoderRerank(weighted);
+      if (reranked) return reranked;
+      // Fall through to score-based sort on failure
+    }
+
     // Sort by weighted score descending
     weighted.sort((a, b) => b.score - a.score);
 
     return weighted;
+  }
+
+  /**
+   * Apply cross-encoder reranking across all merged results.
+   * Returns null on failure (caller falls back to score-based sort).
+   */
+  private async crossEncoderRerank(
+    results: UnifiedResult[]
+  ): Promise<UnifiedResult[] | null> {
+    const cfg = this.config.rerankConfig;
+    if (!cfg) return null;
+
+    try {
+      const documents = results.map((r) => r.text);
+
+      // Build provider-specific request
+      const { headers, body } = buildRerankRequest(
+        cfg.provider,
+        cfg.apiKey,
+        cfg.model,
+        this._lastQuery,
+        documents,
+        results.length
+      );
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch(cfg.endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) return null;
+
+      const data = (await response.json()) as Record<string, unknown>;
+      const parsed = parseRerankResponse(cfg.provider, data);
+      if (!parsed) return null;
+
+      // Blend: 60% cross-encoder score + 40% original weighted score
+      const reranked = parsed
+        .filter((item) => item.index >= 0 && item.index < results.length)
+        .map((item) => {
+          const original = results[item.index];
+          const blended = Math.min(1, Math.max(0, item.score * 0.6 + original.score * 0.4));
+          return { ...original, score: blended };
+        });
+
+      // Include unreturned results with penalized scores
+      const returnedIndices = new Set(parsed.map((r) => r.index));
+      const unreturned = results
+        .filter((_, idx) => !returnedIndices.has(idx))
+        .map((r) => ({ ...r, score: r.score * 0.8 }));
+
+      return [...reranked, ...unreturned].sort((a, b) => b.score - a.score);
+    } catch {
+      return null;
+    }
   }
 
   /**

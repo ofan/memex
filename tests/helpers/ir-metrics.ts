@@ -16,6 +16,7 @@ export function recallAtK(relevantIds: string[], resultIds: string[], k: number)
 export function precisionAtK(relevantIds: string[], resultIds: string[], k: number): number {
   if (k === 0) return 0;
   const topK = resultIds.slice(0, k);
+  if (topK.length === 0) return 0;
   const relevantSet = new Set(relevantIds);
   const found = topK.filter((id) => relevantSet.has(id)).length;
   return found / topK.length;

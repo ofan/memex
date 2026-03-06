@@ -1,8 +1,8 @@
 # Unified Memory System — Requirements
 
 **Project:** `memory-unified`
-**Status:** Ready to build
-**Updated:** 2026-03-04
+**Status:** Complete — 145 tests passing, benchmarks stable, ready for deployment
+**Updated:** 2026-03-05
 
 ---
 
@@ -91,10 +91,10 @@ const client = new OpenAI({ baseURL: config.embedding.baseURL, apiKey: config.em
 const resp = await client.embeddings.create({ model: config.embedding.model, input: text });
 ```
 
-Same change for reranker calls. The query expansion (HyDE) uses LLM generation — that can either:
-- Use the chat endpoint on Mac Mini (if a chat model is loaded)
-- Use a cloud LLM API
-- Be disabled (fallback to raw query)
+Same change for reranker calls. The query expansion (HyDE) uses LLM generation via the chat endpoint:
+- **Qwen3-0.6B-Instruct** on Mac Mini (:8090, model `Qwen3-0.6B-Instruct`)
+- Use `/no_think` prefix or `enable_thinking: false` to disable reasoning overhead
+- Fallback: cloud LLM API or disabled (raw query)
 
 ---
 
@@ -165,12 +165,19 @@ Embedding and reranker models are hot-swappable via config. Switching is a `base
 
 ## Local Inference (Mac Mini M4)
 
-**Running:** llama.cpp router mode, port 8090
-- Qwen3-Embedding-0.6B-Q8_0 (610MB)
-- bge-reranker-v2-m3-Q8_0 (606MB)
-- ~2.7GB VRAM of 12.7GB, headroom for chat model
+**Running:** llama-swap v197 on port 8090, launchd `com.openclaw.llama-swap`
+- Qwen3-Embedding-0.6B-Q8_0 (610MB) — embedding, 1024 dims
+- bge-reranker-v2-m3-Q8_0 (606MB) — reranking
+- Qwen3-0.6B-Instruct-Q8_0 (767MB) — chat/query expansion
 
-**TODO:** launchd service for persistence
+**Config:** `~/etc/llama-swap.yaml`
+- `groups.inference.swap: false` — keeps all 3 models loaded simultaneously
+- `--batch-size 8192 --ubatch-size 8192` on embedding + reranker (avoids "too large to process")
+- Dynamic ports via `${PORT}` macro (5800, 5801, 5802)
+- All preloaded on startup
+
+**~3.5GB VRAM** of 12.7GB, ~9GB headroom for TTS + future models
+**Config repo:** `github.com/ofan/maclaw` (private)
 
 ---
 

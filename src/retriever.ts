@@ -116,12 +116,12 @@ function clamp01(value: number, fallback: number): number {
 // Rerank Provider Adapters
 // ============================================================================
 
-type RerankProvider = "jina" | "siliconflow" | "voyage" | "pinecone";
+export type RerankProvider = "jina" | "siliconflow" | "voyage" | "pinecone";
 
-interface RerankItem { index: number; score: number }
+export interface RerankItem { index: number; score: number }
 
 /** Build provider-specific request headers and body */
-function buildRerankRequest(
+export function buildRerankRequest(
   provider: RerankProvider,
   apiKey: string,
   model: string,
@@ -178,7 +178,7 @@ function buildRerankRequest(
 }
 
 /** Parse provider-specific response into unified format */
-function parseRerankResponse(
+export function parseRerankResponse(
   provider: RerankProvider,
   data: Record<string, unknown>,
 ): RerankItem[] | null {

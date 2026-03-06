@@ -2,87 +2,181 @@
 
 ## What This Is
 
-An OpenClaw memory plugin that unifies conversation memory (LanceDB Pro) and document search (QMD) with shared embedding/reranker backends.
+An OpenClaw memory plugin that unifies conversation memory (LanceDB Pro) and document search (QMD) with shared embedding/reranker backends. **Status: Complete — 145 tests passing, benchmarks stable.**
 
 ## Architecture
 
 ```
-memory-unified plugin
-├── LanceDB Pro (forked) → conversation memory
-├── QMD (forked, imported as library) → document search
-├── Unified recall → fan-out both, merge, rerank
-└── Shared embedding + reranker config → llama.cpp on Mac Mini or cloud API
+memory-unified plugin (kind: "memory")
+├── Conversation Memory (LanceDB Pro — forked)
+│   ├── All existing tools: recall, store, forget, update
+│   ├── 7-stage scoring pipeline (hybrid, rerank, recency, importance, time decay, length norm, MMR)
+│   ├── Auto-capture, auto-recall, session memory
+│   └── Multi-scope agent isolation
+│
+├── Document Search (QMD — forked, imported as library)
+│   ├── Smart markdown chunking (scored break points, code fence detection)
+│   ├── Chunk-level reranking via FTS5 + sqlite-vec hybrid search
+│   └── Content-addressable dedup
+│
+├── Unified Recall
+│   ├── Fan-out to both stores in parallel
+│   ├── Normalize scores (different distributions)
+│   ├── Merge with source attribution
+│   ├── Optional cross-source reranking
+│   └── Early termination when conversation results are strong
+│
+└── Shared Embedding + Reranker
+    ├── OpenAI-compatible HTTP client (works with llama.cpp, Gemini, Jina, etc.)
+    ├── LRU cache (256 entries, 30min TTL, >97% hit rate)
+    └── Auto-chunking for long documents
 ```
-
-## Key Modification: QMD Embedding Layer
-
-QMD currently uses `node-llama-cpp` for local embedding. We need to replace that with an OpenAI-compatible HTTP client so it can use the shared endpoint (llama.cpp on Mac Mini at `http://100.122.104.26:8090/v1`).
-
-**Target file:** QMD's `llm.ts` (or equivalent embedding module)
-**Change:** Replace `node-llama-cpp` model.embed() calls with OpenAI SDK embeddings.create() calls
-**Same change for reranker calls**
-
-LLM query expansion (HyDE) in QMD uses generation — configure to use chat endpoint or disable.
 
 ## Project Structure
 
 ```
 memory-unified/
 ├── CLAUDE.md              ← you are here
-├── REQUIREMENTS.md        ← full requirements
-├── RESEARCH.md            ← model comparisons, benchmarks, decisions
-├── BENCHMARKS.md          ← latency data
-├── index.ts               ← plugin entry point
-├── cli.ts                 ← CLI interface
-├── openclaw.plugin.json   ← plugin manifest
+├── index.ts               ← plugin entry point (register, hooks, identity)
+├── openclaw.plugin.json   ← plugin manifest + full config schema
 ├── package.json
 ├── tsconfig.json
+├── docs/
+│   ├── REQUIREMENTS.md    ← full requirements and architecture spec
+│   ├── RESEARCH.md        ← model comparisons, serving options, decisions
+│   └── BENCHMARKS.md      ← latency, memory, and CPU profiling data
 ├── src/
-│   ├── store.ts           ← LanceDB storage (from LanceDB Pro)
-│   ├── retriever.ts       ← 7-stage retrieval pipeline (from LanceDB Pro)
-│   ├── unified-recall.ts  ← fan-out to both stores, merge, rerank [NEW]
-│   ├── embedder.ts        ← shared OpenAI-compat embedding client
-│   ├── chunker.ts         ← smart document chunking (from LanceDB Pro)
+│   ├── cli.ts             ← CLI interface
+│   ├── store.ts           ← LanceDB storage (vector + BM25 + CRUD)
+│   ├── retriever.ts       ← 7-stage retrieval pipeline + rerank utils
+│   ├── unified-recall.ts  ← fan-out, normalize, merge, cross-rerank
+│   ├── embedder.ts        ← shared OpenAI-compat embedding client + LRU cache
+│   ├── doc-indexer.ts     ← QMD document indexer (startup + periodic re-index)
+│   ├── chunker.ts         ← smart document chunking
 │   ├── scopes.ts          ← multi-scope access control
-│   ├── tools.ts           ← agent tools (recall, store, forget, update)
-│   ├── noise-filter.ts    ← noise detection
-│   ├── adaptive-retrieval.ts ← skip retrieval for greetings
-│   └── migrate.ts         ← migration utilities
-└── qmd/                   ← forked QMD source
-    ├── qmd.ts             ← main exports (search, index functions)
-    ├── store.ts           ← SQLite + sqlite-vec storage
-    ├── llm.ts             ← MODIFIED: OpenAI-compat embedding + reranker
-    ├── collections.ts     ← workspace path management
-    ├── db.ts              ← SQLite setup
-    └── formatter.ts       ← result formatting
+│   ├── tools.ts           ← agent tools (recall, store, forget, update, doc_search)
+│   ├── noise-filter.ts    ← noise detection for auto-capture filtering
+│   ├── adaptive-retrieval.ts ← skip retrieval for greetings/commands
+│   ├── migrate.ts         ← migration utilities from legacy formats
+│   └── qmd/               ← forked QMD source (imported as library)
+│       ├── qmd.ts         ← main exports (search, index functions)
+│       ├── store.ts       ← SQLite + sqlite-vec storage
+│       ├── llm.ts         ← MODIFIED: OpenAI-compat embedding + reranker (was node-llama-cpp)
+│       ├── collections.ts ← workspace path management
+│       ├── db.ts          ← SQLite setup
+│       └── formatter.ts   ← result formatting
+└── tests/
+    ├── adaptive-retrieval.test.ts
+    ├── chunker.test.ts
+    ├── doc-indexer.test.ts
+    ├── embedder.test.ts
+    ├── noise-filter.test.ts
+    ├── rerank-utils.test.ts
+    ├── retriever.test.ts
+    ├── scopes.test.ts
+    ├── store.test.ts
+    ├── unified-recall.test.ts
+    └── benchmark.ts       ← latency + memory + CPU benchmark suite
 ```
 
-## Starting Points
+## Forked Code
 
-- LanceDB Pro source: `/home/ubuntu/.openclaw/plugins/memory-lancedb-pro/`
-- QMD source: `/home/ubuntu/.bun/install/cache/@GH@tobi-qmd-1a67e1a@@@1/src/`
+This plugin is built from two forked codebases with a new unified recall layer on top.
+
+### LanceDB Pro (conversation memory)
+
+Forked from `~/.openclaw/plugins/memory-lancedb-pro/`. Most `src/` files are verbatim or near-verbatim copies:
+
+| File | Status | Changes |
+|------|--------|---------|
+| `adaptive-retrieval.ts` | Identical | — |
+| `noise-filter.ts` | Identical | — |
+| `scopes.ts` | Identical | — |
+| `store.ts` | Identical | — |
+| `cli.ts` | Identical | — |
+| `chunker.ts` | ~Identical | Removed dead helper function |
+| `embedder.ts` | ~Identical | `console.log` → `console.warn` |
+| `migrate.ts` | ~Identical | `console.log` → `console.warn` |
+| `retriever.ts` | ~Identical | Exported `buildRerankRequest`/`parseRerankResponse` for unified recall |
+| `tools.ts` | ~8% changed | Added unified recall integration, `doc_search` tool |
+| `index.ts` | ~30% new | Added QMD wiring, doc indexer lifecycle, unified recall setup |
+
+### QMD (document search)
+
+Forked from `@GH@tobi-qmd`. Lives in `src/qmd/`. Imported as a library (no MCP server, no separate process):
+
+| File | Status | Changes |
+|------|--------|---------|
+| `store.ts` | Identical | — |
+| `qmd.ts` | Identical | — |
+| `collections.ts` | Identical | — |
+| `db.ts` | Identical | — |
+| `formatter.ts` | Identical | — |
+| `llm.ts` | **Fully rewritten** | Replaced `node-llama-cpp` with OpenAI-compatible HTTP client |
+
+### New code (this project)
+
+| File | LOC | Purpose |
+|------|-----|---------|
+| `src/unified-recall.ts` | 423 | Fan-out, normalize, merge, cross-rerank, early termination |
+| `src/doc-indexer.ts` | 255 | Library wrapper around QMD store for document indexing |
+| `tests/*.test.ts` (10 files) | ~2400 | Full test suite |
+| `tests/benchmark.ts` | 400 | Latency + memory + CPU benchmark suite |
 
 ## Key Constraints
 
-1. All existing memory tools must work identically (backward compat)
-2. Same plugin kind: `"kind": "memory"` in openclaw.plugin.json
+1. All existing memory tools work identically (backward compat with LanceDB Pro)
+2. Plugin kind: `"kind": "memory"` in openclaw.plugin.json
 3. QMD imported as library — no MCP, no HTTP server, no separate process
 4. One embedding config shared by both LanceDB Pro and QMD
-5. TypeScript, no build step (OpenClaw loads .ts directly)
+5. TypeScript, no build step (OpenClaw loads .ts directly via jiti)
+6. All logging uses `console.warn` (stderr) — `console.log` corrupts the stdio protocol
 
-## Testing
+## Development
 
-1. Deploy to `~/.openclaw/plugins/memory-unified/`
-2. Update openclaw.json to load it instead of memory-lancedb-pro
-3. Restart gateway, verify plugin loads
-4. Test conversation memory tools (should be identical)
-5. Test document search (QMD indexes workspace, search returns docs)
-6. Test unified recall (one query returns both memories + docs)
+### Run tests (145 tests, 10 test files)
+
+```bash
+node --import jiti/register --test tests/*.test.ts
+```
+
+### Run benchmarks (requires Mac Mini llama.cpp at 100.122.104.26:8090)
+
+```bash
+node --import jiti/register tests/benchmark.ts
+```
+
+### Deploy
+
+```bash
+# Copy to plugin directory
+cp -r . ~/.openclaw/plugins/memory-unified/
+
+# Update openclaw.json to load memory-unified instead of memory-lancedb-pro
+# Restart gateway
+```
 
 ## Current Deployment
 
 - **VM:** Ubuntu, Node 25.6.1, OpenClaw gateway
-- **Mac Mini:** llama.cpp router on port 8090 (embedding + reranker)
-- **Embedding:** Qwen3-Embedding-0.6B-Q8_0 (1024 dims, ~45ms)
-- **Reranker:** bge-reranker-v2-m3-Q8_0 (~61ms)
-- **LanceDB data:** `~/.openclaw/memory/lancedb-pro/`
+- **Mac Mini:** llama-swap v197 on port 8090 (3 models via Tailscale, `groups.inference.swap: false`)
+- **Embedding:** Qwen3-Embedding-0.6B-Q8_0 (1024d, ~83ms uncached, <0.03ms cached)
+- **Reranker:** bge-reranker-v2-m3-Q8_0 (~53ms for 5 docs)
+- **Chat/Query Expansion:** Qwen3-0.6B-Instruct-Q8_0 (767MB, ~9.5ms/token)
+- **Config repo:** `github.com/ofan/maclaw` (private)
+- **Full hybrid+rerank pipeline:** ~250ms
+- **Unified recall:** ~300-400ms
+- **Memory footprint:** ~230MB RSS (LanceDB Arrow buffers dominate)
+
+## Performance Profile
+
+| Operation | Latency | CPU Profile |
+|---|---|---|
+| Embed (cached) | <0.03ms | Negligible |
+| Embed (uncached, batch 5) | ~83ms | I/O bound (network) |
+| Vector search | ~33ms | CPU bound (Arrow/SIMD) |
+| BM25 search | ~14ms | CPU bound (FTS index) |
+| Rerank (5 docs) | ~53ms | I/O bound (network) |
+| Full hybrid+rerank | ~250ms | Mixed |
+| Unified recall | ~300-400ms | Mixed |
+| Adaptive skip check | ~0.001ms | Negligible |

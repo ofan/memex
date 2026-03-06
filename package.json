@@ -34,7 +34,7 @@
     ]
   },
   "scripts": {
-    "test": "echo 'no tests yet'"
+    "test": "node --import jiti/register --test tests/*.test.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",

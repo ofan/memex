@@ -1,7 +1,15 @@
 /**
- * Quality Benchmark Harness
+ * Quality Benchmark Harness — Unified Recall Pipeline
  *
- * Measures indexing speed and retrieval quality (IR metrics) across pipeline modes.
+ * Tests the production interface: UnifiedRecall.recall() which fans out to
+ * both LanceDB (conversation memory) and QMD (document search) in parallel.
+ *
+ * Pipeline modes tested:
+ *   - lancedb-vector: LanceDB vector-only (conversation memory baseline)
+ *   - lancedb-hybrid-rerank: LanceDB hybrid + rerank (best single-store mode)
+ *   - qmd-only: QMD document search only (FTS5 + sqlite-vec hybrid)
+ *   - unified: Both stores, score-based merge (no cross-rerank)
+ *   - unified+cross-rerank: Both stores with cross-source reranking
  *
  * CLI:
  *   node --import jiti/register tests/quality-bench.ts [--dataset fiqa|nq|scifact|synthetic] [--max-queries 20]
@@ -12,10 +20,14 @@ import { join } from "node:path";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { parseArgs } from "node:util";
+import { createHash } from "node:crypto";
 
 import { createEmbedder } from "../src/embedder.js";
 import { MemoryStore } from "../src/store.js";
 import { createRetriever } from "../src/retriever.js";
+import { UnifiedRecall, type UnifiedResult, type ResultSource } from "../src/unified-recall.js";
+import { createStore as createQmdStore, hybridQuery as qmdHybridQueryFn, chunkDocument } from "../src/qmd/store.js";
+import { initializeQmdLLM } from "../src/qmd/llm.js";
 import { loadBeirDataset, type BeirDataset, type BeirDatasetName, BEIR_DATASETS } from "./helpers/beir-loader.js";
 import { recallAtK, precisionAtK, mrr, ndcgAtK } from "./helpers/ir-metrics.js";
 import { embedWithCache, type CacheStats } from "./helpers/embedding-cache.js";
@@ -29,6 +41,7 @@ const EMBEDDING_MODEL = "Qwen3-Embedding-0.6B-Q8_0";
 const EMBEDDING_DIMS = 1024;
 const RERANKER_ENDPOINT = "http://100.122.104.26:8090/v1/rerank";
 const RERANKER_MODEL = "bge-reranker-v2-m3-Q8_0";
+const QMD_COLLECTION = "bench";
 
 // ============================================================================
 // Pipeline Modes
@@ -36,16 +49,18 @@ const RERANKER_MODEL = "bge-reranker-v2-m3-Q8_0";
 
 interface PipelineMode {
   name: string;
-  mode: "vector" | "hybrid";
-  rerank: "cross-encoder" | "none";
-  recencyBoost: boolean;
+  sources: ResultSource[];
+  lancedbMode: "vector" | "hybrid";
+  lancedbRerank: "cross-encoder" | "none";
+  crossRerank: boolean;
 }
 
 const PIPELINE_MODES: PipelineMode[] = [
-  { name: "vector-only", mode: "vector", rerank: "none", recencyBoost: false },
-  { name: "hybrid", mode: "hybrid", rerank: "none", recencyBoost: false },
-  { name: "hybrid+rerank", mode: "hybrid", rerank: "cross-encoder", recencyBoost: false },
-  { name: "hybrid+rerank+recency", mode: "hybrid", rerank: "cross-encoder", recencyBoost: true },
+  { name: "lancedb-vector", sources: ["conversation"], lancedbMode: "vector", lancedbRerank: "none", crossRerank: false },
+  { name: "lancedb-hybrid-rerank", sources: ["conversation"], lancedbMode: "hybrid", lancedbRerank: "cross-encoder", crossRerank: false },
+  { name: "qmd-only", sources: ["document"], lancedbMode: "vector", lancedbRerank: "none", crossRerank: false },
+  { name: "unified", sources: ["conversation", "document"], lancedbMode: "hybrid", lancedbRerank: "cross-encoder", crossRerank: false },
+  { name: "unified+cross-rerank", sources: ["conversation", "document"], lancedbMode: "hybrid", lancedbRerank: "cross-encoder", crossRerank: true },
 ];
 
 // ============================================================================
@@ -341,35 +356,43 @@ function parseCli(): { dataset: string; maxQueries: number; maxCorpus: number; r
 }
 
 // ============================================================================
-// Indexing Phase
+// Indexing Phase — Both Stores
 // ============================================================================
 
 interface IndexingStats {
   totalDocs: number;
+  lancedbTimeMs: number;
+  qmdTimeMs: number;
+  embeddingTimeMs: number;
   totalTimeMs: number;
-  perDocAvgMs: number;
   docsPerSec: number;
-  memBefore: NodeJS.MemoryUsage;
-  memAfter: NodeJS.MemoryUsage;
 }
 
-async function indexCorpus(
-  store: MemoryStore,
+/**
+ * Build a docId-to-hash mapping for QMD.
+ * QMD uses content hashes as identifiers; we need to map back to BEIR doc IDs.
+ */
+function contentHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+async function indexBothStores(
+  lanceStore: MemoryStore,
+  qmdStore: ReturnType<typeof createQmdStore>,
   embedder: ReturnType<typeof createEmbedder>,
   corpus: BeirDataset["corpus"],
-  refreshEmbeddings = false,
-): Promise<{ stats: IndexingStats; storeIdToDocId: Map<string, string>; cacheStats: CacheStats }> {
-  const storeIdToDocId = new Map<string, string>();
-  const memBefore = process.memoryUsage();
-
-  console.log(`\n[indexing] embedding and storing ${corpus.length} docs...`);
+  refreshEmbeddings: boolean,
+): Promise<{ stats: IndexingStats; lanceIdToDocId: Map<string, string>; qmdHashToDocId: Map<string, string>; cacheStats: CacheStats }> {
+  const lanceIdToDocId = new Map<string, string>();
+  const qmdHashToDocId = new Map<string, string>();
   const startAll = performance.now();
 
-  // Prepare texts for embedding
+  // Prepare texts
   const texts = corpus.map((doc) => doc.title ? `${doc.title}. ${doc.text}` : doc.text);
 
-  // Embed with disk cache (skips API calls for previously embedded texts)
-  // Use a unique model key when refreshing to bypass cache
+  // ---- Phase 1: Embed all texts (shared between both stores) ----
+  console.log(`\n[indexing] embedding ${corpus.length} docs...`);
+  const embedStart = performance.now();
   const modelKey = refreshEmbeddings ? `${EMBEDDING_MODEL}-refresh-${Date.now()}` : EMBEDDING_MODEL;
   const { vectors: allVectors, stats: cacheStats } = await embedWithCache(
     texts, modelKey, (t) => embedder.embedPassage(t), {
@@ -379,12 +402,12 @@ async function indexCorpus(
       },
     },
   );
-
+  const embeddingTimeMs = performance.now() - embedStart;
   console.log(`  [indexing] cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate})`);
 
-
-  // Bulk store all docs in one LanceDB write
+  // ---- Phase 2: Index into LanceDB ----
   console.log("[indexing] bulk storing into LanceDB...");
+  const lanceStart = performance.now();
   const entriesToStore = corpus.map((doc, i) => ({
     text: texts[i],
     vector: allVectors[i],
@@ -393,33 +416,63 @@ async function indexCorpus(
     importance: 0.7,
     metadata: JSON.stringify({ docId: doc.id }),
   }));
-  const storedEntries = await store.bulkStore(entriesToStore);
+  const storedEntries = await lanceStore.bulkStore(entriesToStore);
   storedEntries.forEach((entry, i) => {
-    storeIdToDocId.set(entry.id, corpus[i].id);
+    lanceIdToDocId.set(entry.id, corpus[i].id);
   });
+  console.log("[indexing] rebuilding LanceDB FTS index...");
+  await lanceStore.rebuildFtsIndex();
+  const lancedbTimeMs = performance.now() - lanceStart;
 
-  // Rebuild FTS index after bulk insert (LanceDB FTS is static at creation time)
-  console.log("[indexing] rebuilding FTS index for BM25 search...");
-  await store.rebuildFtsIndex();
+  // ---- Phase 3: Index into QMD ----
+  console.log("[indexing] inserting into QMD SQLite...");
+  const qmdStart = performance.now();
+  const now = new Date().toISOString();
 
+  // Ensure vec table exists with correct dimensions
+  qmdStore.ensureVecTable(EMBEDDING_DIMS);
+
+  for (let i = 0; i < corpus.length; i++) {
+    const doc = corpus[i];
+    const text = texts[i];
+    const hash = contentHash(text);
+    qmdHashToDocId.set(hash, doc.id);
+
+    // Insert content (content-addressable, deduped)
+    qmdStore.insertContent(hash, text, now);
+
+    // Insert document record (links content to collection/path)
+    const docPath = `bench/${doc.id}.md`;
+    qmdStore.insertDocument(QMD_COLLECTION, docPath, doc.title || doc.id, hash, now, now);
+
+    // Insert embedding — chunk the text, embed each chunk
+    const chunks = chunkDocument(text);
+    for (let seq = 0; seq < chunks.length; seq++) {
+      // Use the precomputed embedding for single-chunk docs (most BEIR docs are short)
+      // For multi-chunk docs, we'd need per-chunk embeddings — use the doc-level one as approximation
+      const embedding = new Float32Array(allVectors[i]);
+      qmdStore.insertEmbedding(hash, seq, chunks[seq].pos, embedding, EMBEDDING_MODEL, now);
+    }
+  }
+
+  const qmdTimeMs = performance.now() - qmdStart;
   const totalTimeMs = performance.now() - startAll;
-  const memAfter = process.memoryUsage();
 
   const stats: IndexingStats = {
     totalDocs: corpus.length,
+    lancedbTimeMs,
+    qmdTimeMs,
+    embeddingTimeMs,
     totalTimeMs,
-    perDocAvgMs: totalTimeMs / corpus.length,
     docsPerSec: (corpus.length / totalTimeMs) * 1000,
-    memBefore,
-    memAfter,
   };
 
-  console.log(`[indexing] done: ${corpus.length} docs in ${totalTimeMs.toFixed(0)}ms (${stats.docsPerSec.toFixed(1)} docs/sec)`);
-  return { stats, storeIdToDocId, cacheStats };
+  console.log(`[indexing] done: ${corpus.length} docs — embed: ${embeddingTimeMs.toFixed(0)}ms, lance: ${lancedbTimeMs.toFixed(0)}ms, qmd: ${qmdTimeMs.toFixed(0)}ms, total: ${totalTimeMs.toFixed(0)}ms`);
+  return { stats, lanceIdToDocId, qmdHashToDocId, cacheStats };
 }
 
 // ============================================================================
-// Retrieval Phase
+// Retrieval Phase — Unified Recall
 // ============================================================================
 
 interface MetricRow {
@@ -435,27 +488,78 @@ interface MetricRow {
   queries: number;
 }
 
-async function evaluatePipeline(
-  pipelineMode: PipelineMode,
-  store: MemoryStore,
+function extractDocId(result: UnifiedResult, lanceIdToDocId: Map<string, string>, qmdHashToDocId: Map<string, string>): string {
+  if (result.source === "conversation") {
+    const meta = result.metadata as any;
+    // Try parsing stored metadata JSON
+    try {
+      // The entry text has the docId stored in LanceDB metadata
+      const memId = meta.memoryId;
+      const mapped = lanceIdToDocId.get(memId);
+      if (mapped) return mapped;
+    } catch {}
+    return result.id;
+  } else {
+    // QMD document — docid is the first 6 chars of the content hash
+    const meta = result.metadata as any;
+    const docid = meta.docid || result.id;
+    // Try to find the full hash from the 6-char docid
+    for (const [hash, beirId] of qmdHashToDocId) {
+      if (hash.startsWith(docid)) return beirId;
+    }
+    // Fallback: try matching by file path
+    const filePath = meta.file || "";
+    const pathMatch = filePath.match(/\/([^/]+)\.md$/);
+    if (pathMatch) return pathMatch[1];
+    return docid;
+  }
+}
+
+async function evaluateUnifiedPipeline(
+  mode: PipelineMode,
+  lanceStore: MemoryStore,
+  qmdStore: ReturnType<typeof createQmdStore>,
   embedder: ReturnType<typeof createEmbedder>,
   dataset: BeirDataset,
-  storeIdToDocId: Map<string, string>,
+  lanceIdToDocId: Map<string, string>,
+  qmdHashToDocId: Map<string, string>,
 ): Promise<MetricRow> {
-  const retriever = createRetriever(store, embedder, {
-    mode: pipelineMode.mode,
-    rerank: pipelineMode.rerank,
+  // Create retriever for LanceDB (used by UnifiedRecall internally)
+  const retriever = createRetriever(lanceStore, embedder, {
+    mode: mode.lancedbMode,
+    rerank: mode.lancedbRerank,
     rerankApiKey: "unused",
     rerankEndpoint: RERANKER_ENDPOINT,
     rerankModel: RERANKER_MODEL,
     rerankProvider: "jina",
     candidatePoolSize: 20,
-    recencyHalfLifeDays: pipelineMode.recencyBoost ? 14 : 0,
-    recencyWeight: pipelineMode.recencyBoost ? 0.1 : 0,
-    hardMinScore: 0, // disable hard cutoff for fair metric evaluation
+    recencyHalfLifeDays: 0,
+    recencyWeight: 0,
+    hardMinScore: 0,
     filterNoise: false,
     minScore: 0,
   });
+
+  // Create UnifiedRecall instance
+  const unifiedRecall = new UnifiedRecall(retriever, embedder, {
+    limit: 10,
+    minScore: 0,
+    conversationWeight: 0.5,
+    documentWeight: 0.5,
+    crossRerank: mode.crossRerank,
+    rerankConfig: mode.crossRerank ? {
+      provider: "jina",
+      apiKey: "unused",
+      model: RERANKER_MODEL,
+      endpoint: RERANKER_ENDPOINT,
+    } : undefined,
+    earlyTermination: false,
+  });
+
+  // Wire QMD store (needed for document modes)
+  if (mode.sources.includes("document")) {
+    unifiedRecall.setQmdStore(qmdStore as any, qmdHybridQueryFn as any, EMBEDDING_MODEL);
+  }
 
   const allRecall1: number[] = [];
   const allRecall5: number[] = [];
@@ -471,30 +575,27 @@ async function evaluatePipeline(
     const qrelMap = dataset.qrels.get(q.id);
     if (!qrelMap || qrelMap.size === 0) continue;
 
-    // Get relevant doc IDs for this query
     const relevantDocIds = Array.from(qrelMap.keys()).filter((docId) => (qrelMap.get(docId) ?? 0) > 0);
     if (relevantDocIds.length === 0) continue;
 
     const start = performance.now();
-    const results = await retriever.retrieve({
-      query: q.text,
+    const results = await unifiedRecall.recall(q.text, {
       limit: 10,
       scopeFilter: ["global"],
+      sources: mode.sources,
     });
     latencies.push(performance.now() - start);
 
-    // Map store IDs back to original doc IDs
-    const resultDocIds = results.map((r) => {
-      // Try metadata first
-      if (r.entry.metadata) {
-        try {
-          const meta = JSON.parse(r.entry.metadata);
-          if (meta.docId) return meta.docId as string;
-        } catch {}
+    // Map results back to BEIR doc IDs, deduplicating (same doc from both stores)
+    const rawDocIds = results.map((r) => extractDocId(r, lanceIdToDocId, qmdHashToDocId));
+    const seen = new Set<string>();
+    const resultDocIds: string[] = [];
+    for (const id of rawDocIds) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        resultDocIds.push(id);
       }
-      // Fall back to mapping
-      return storeIdToDocId.get(r.entry.id) ?? r.entry.id;
-    });
+    }
 
     allRecall1.push(recallAtK(relevantDocIds, resultDocIds, 1));
     allRecall5.push(recallAtK(relevantDocIds, resultDocIds, 5));
@@ -504,23 +605,23 @@ async function evaluatePipeline(
     allMrr.push(mrr(relevantDocIds, resultDocIds));
     allNdcg10.push(ndcgAtK(qrelMap, resultDocIds, 10));
 
-    // Debug: log first few queries to understand ranking
-    if (qi < 3 && pipelineMode.name === "vector-only") {
-      console.warn(`  [debug] Q${qi} "${q.text.slice(0, 50)}..." → relevant: [${relevantDocIds.join(",")}]`);
-      console.warn(`  [debug]   top-3 results: ${resultDocIds.slice(0, 3).map((id, i) => `#${i+1}=${id}(${results[i]?.score.toFixed(3)})`).join(", ")}`);
+    // Debug: log first 3 queries for first and third modes (lancedb baseline + qmd)
+    if (qi < 3 && (mode === PIPELINE_MODES[0] || mode === PIPELINE_MODES[2])) {
+      console.warn(`  [debug] [${mode.name}] Q${qi} "${q.text.slice(0, 50)}..." → relevant: [${relevantDocIds.join(",")}]`);
+      console.warn(`  [debug]   top-3 results: ${resultDocIds.slice(0, 3).map((id, i) => `#${i+1}=${id}(${results[i]?.score.toFixed(3)},${results[i]?.source})`).join(", ")}`);
       const foundAt = resultDocIds.findIndex((id) => relevantDocIds.includes(id));
-      console.warn(`  [debug]   relevant found at rank: ${foundAt >= 0 ? foundAt + 1 : "not in top 10"}`);
+      console.warn(`  [debug]   relevant found at rank: ${foundAt >= 0 ? foundAt + 1 : "not in top 10"} (${results.length} total results, ${rawDocIds.length} raw, ${resultDocIds.length} deduped)`);
     }
 
     if ((qi + 1) % 5 === 0) {
-      console.warn(`  [${pipelineMode.name}] ${qi + 1}/${dataset.queries.length} queries`);
+      console.warn(`  [${mode.name}] ${qi + 1}/${dataset.queries.length} queries`);
     }
   }
 
   const avg = (arr: number[]) => (arr.length === 0 ? 0 : arr.reduce((a, b) => a + b, 0) / arr.length);
 
   return {
-    pipeline: pipelineMode.name,
+    pipeline: mode.name,
     recall1: avg(allRecall1),
     recall5: avg(allRecall5),
     recall10: avg(allRecall10),
@@ -538,9 +639,6 @@ async function evaluatePipeline(
 // ============================================================================
 
 function formatIndexingTable(stats: IndexingStats): string {
-  const memDeltaMB = ((stats.memAfter.rss - stats.memBefore.rss) / 1024 / 1024).toFixed(1);
-  const heapMB = (stats.memAfter.heapUsed / 1024 / 1024).toFixed(1);
-
   return [
     "",
     "## Indexing Performance",
@@ -548,11 +646,11 @@ function formatIndexingTable(stats: IndexingStats): string {
     "| Metric | Value |",
     "|---|---|",
     `| Total docs | ${stats.totalDocs} |`,
+    `| Embedding time | ${stats.embeddingTimeMs.toFixed(0)}ms |`,
+    `| LanceDB index time | ${stats.lancedbTimeMs.toFixed(0)}ms |`,
+    `| QMD index time | ${stats.qmdTimeMs.toFixed(0)}ms |`,
     `| Total time | ${stats.totalTimeMs.toFixed(0)}ms |`,
-    `| Per-doc avg | ${stats.perDocAvgMs.toFixed(1)}ms |`,
     `| Throughput | ${stats.docsPerSec.toFixed(1)} docs/sec |`,
-    `| RSS delta | ${memDeltaMB}MB |`,
-    `| Heap used | ${heapMB}MB |`,
     "",
   ].join("\n");
 }
@@ -561,7 +659,7 @@ function formatRetrievalTable(rows: MetricRow[]): string {
   const pct = (v: number) => (v * 100).toFixed(1);
   const lines = [
     "",
-    "## Retrieval Quality",
+    "## Retrieval Quality (Unified Recall Pipeline)",
     "",
     "| Pipeline | R@1 | R@5 | R@10 | P@1 | P@5 | MRR | nDCG@10 | Latency |",
     "|---|---|---|---|---|---|---|---|---|",
@@ -583,7 +681,7 @@ function formatRetrievalTable(rows: MetricRow[]): string {
 
 async function main() {
   const cli = parseCli();
-  console.log(`\n=== Quality Benchmark ===`);
+  console.log(`\n=== Unified Recall Quality Benchmark ===`);
   console.log(`Dataset: ${cli.dataset}, Max queries: ${cli.maxQueries}\n`);
 
   // Load or generate dataset
@@ -597,17 +695,19 @@ async function main() {
     });
   }
 
-  // Limit queries
   if (dataset.queries.length > cli.maxQueries) {
     dataset.queries = dataset.queries.slice(0, cli.maxQueries);
   }
 
-  // Create temp directory for LanceDB
+  // Create temp directories
   const tmpDir = await mkdtemp(join(tmpdir(), "quality-bench-"));
+  const lanceDir = join(tmpDir, "lance");
+  const qmdDbPath = join(tmpDir, "qmd.sqlite");
+  await mkdir(lanceDir, { recursive: true });
   console.log(`[setup] temp dir: ${tmpDir}`);
 
   try {
-    // Create embedder
+    // Initialize shared embedder (used by LanceDB retriever)
     const embedder = createEmbedder({
       provider: "openai-compatible",
       apiKey: "unused",
@@ -616,17 +716,38 @@ async function main() {
       dimensions: EMBEDDING_DIMS,
     });
 
-    // Create store
-    const store = new MemoryStore({ dbPath: tmpDir, vectorDim: EMBEDDING_DIMS });
+    // Initialize QMD's LlamaCpp singleton (used by hybridQuery internally)
+    initializeQmdLLM({
+      embedding: {
+        baseURL: EMBEDDING_BASE_URL,
+        apiKey: "unused",
+        model: EMBEDDING_MODEL,
+        dimensions: EMBEDDING_DIMS,
+      },
+      reranker: {
+        enabled: true,
+        endpoint: RERANKER_ENDPOINT,
+        apiKey: "unused",
+        model: RERANKER_MODEL,
+        provider: "jina",
+      },
+      queryExpansion: false, // no generation model available
+    });
 
-    // Indexing phase
-    const { stats: indexStats, storeIdToDocId, cacheStats } = await indexCorpus(store, embedder, dataset.corpus, cli.refreshEmbeddings);
+    // Create stores
+    const lanceStore = new MemoryStore({ dbPath: lanceDir, vectorDim: EMBEDDING_DIMS });
+    const qmdStore = createQmdStore(qmdDbPath);
 
-    // Retrieval phase — run each pipeline mode
+    // Index into both stores
+    const { stats: indexStats, lanceIdToDocId, qmdHashToDocId, cacheStats } = await indexBothStores(
+      lanceStore, qmdStore, embedder, dataset.corpus, cli.refreshEmbeddings,
+    );
+
+    // Evaluate each pipeline mode
     const retrievalRows: MetricRow[] = [];
     for (const mode of PIPELINE_MODES) {
-      console.log(`\n[retrieval] evaluating pipeline: ${mode.name}`);
-      const row = await evaluatePipeline(mode, store, embedder, dataset, storeIdToDocId);
+      console.log(`\n[retrieval] evaluating: ${mode.name} (sources: ${mode.sources.join("+")})`);
+      const row = await evaluateUnifiedPipeline(mode, lanceStore, qmdStore, embedder, dataset, lanceIdToDocId, qmdHashToDocId);
       retrievalRows.push(row);
       console.log(`  R@10=${(row.recall10 * 100).toFixed(1)}% MRR=${(row.mrr * 100).toFixed(1)}% nDCG@10=${(row.ndcg10 * 100).toFixed(1)}% latency=${row.avgLatencyMs.toFixed(0)}ms`);
     }
@@ -635,13 +756,14 @@ async function main() {
     const indexTable = formatIndexingTable(indexStats);
     const retrievalTable = formatRetrievalTable(retrievalRows);
     const output = [
-      `# Quality Benchmark: ${dataset.name}`,
+      `# Unified Recall Quality Benchmark: ${dataset.name}`,
       ``,
       `- Date: ${new Date().toISOString()}`,
       `- Queries: ${dataset.queries.length}`,
       `- Corpus: ${dataset.corpus.length} docs`,
       `- Embedding: ${EMBEDDING_MODEL}`,
       `- Reranker: ${RERANKER_MODEL}`,
+      `- Pipeline: UnifiedRecall.recall() → LanceDB + QMD`,
       indexTable,
       retrievalTable,
     ].join("\n");
@@ -667,8 +789,10 @@ async function main() {
     };
     await writeFile(jsonPath, JSON.stringify(jsonData, null, 2));
     console.log(`\n[output] JSON saved to ${jsonPath}`);
+
+    // Cleanup QMD
+    qmdStore.close();
   } finally {
-    // Cleanup
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     console.log(`[cleanup] removed ${tmpDir}`);
   }
