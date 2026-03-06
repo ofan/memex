@@ -37,15 +37,17 @@
 | Ollama | ✅ | ✅ | ❌ no endpoint | ✅ one port | brew | Same as llama.cpp |
 | LocalAI | ✅ | ✅ | ✅ Python backend | ✅ one port | Docker/native | Same as llama.cpp + Python overhead |
 
-**Decision:** llama.cpp router mode. Only option with all 3 endpoints native, one port, no dependencies. Deployed and verified on Mac Mini ✅. mlx-openai-server is the future upgrade path if we need more speed (would need to add reranker support).
+**Decision:** llama-swap v197. Go binary, manages llama-server child processes, proper HTTP reverse proxy, health monitoring, web UI. One port (8090), zero deps. Router mode was tried first but abandoned (child processes crash after 2 requests, never respawn).
 
-### llama.cpp Router Mode Details
-- Added Dec 2025, multi-model on one port
-- `llama-server --models-dir ~/models -ngl 99 --port 8090`
-- Auto-discovers GGUF files, loads on-demand, LRU eviction
-- Each model runs in its own subprocess (crash isolation)
-- Requires `models.ini` preset file for embedding/reranking flags
-- Current setup on Mac Mini: 2 models, port 8090
+### llama-swap Setup
+- Go binary at `~/bin/llama-swap`, config at `~/etc/llama-swap.yaml`
+- `groups.inference.swap: false` keeps all models loaded simultaneously (default `swap: true` would hot-swap)
+- `--batch-size 8192 --ubatch-size 8192` on embedding + reranker (avoids "too large to process" for large docs)
+- Dynamic ports via `${PORT}` macro (embedding :5800, reranker :5801, chat :5802)
+- Preload hooks load all models on startup
+- launchd: `com.openclaw.llama-swap` (RunAtLoad, KeepAlive)
+- Current setup on Mac Mini: 3 models, port 8090
+- Config tracked in `github.com/ofan/maclaw` (private)
 
 ### mlx-openai-server Potential
 - 244 stars, actively maintained (as of Mar 2026)
@@ -64,7 +66,7 @@ Explored using a single model for chat + embedding + reranking:
 | GritLM-7B | ✅ | ✅ | ✅ | 7B | Jack of all trades, master of none. ~5GB Q4. |
 | NV-Embed-v2 | ❌ | ✅ | ✅ | 7B | No chat generation |
 
-**Decision:** Option B — dedicated specialist models. Better quality per-task, less VRAM total (~2.7GB vs ~5GB), headroom for future chat model.
+**Decision:** Option B — dedicated specialist models. Better quality per-task, less VRAM total (~3.5GB vs ~5GB for GritLM), headroom for TTS + future models.
 
 ## Benchmarks (Live, 2026-03-03)
 
@@ -102,7 +104,7 @@ vs current (Gemini, no reranker): ~350ms
 1. **Embedding is the bottleneck.** LanceDB search is <30ms. Switching to local drops embed from 250ms to 45ms.
 2. **Quality gap doesn't matter at our scale.** With <100 memories, MTEB 64.3 vs 68.3 returns identical top-5 results.
 3. **Reranking is new capability.** Currently disabled. Local reranker at 61ms is essentially free to add.
-4. **Mac Mini M4 has tons of headroom.** Using ~2.7GB of 12.7GB VRAM. Room for chat model + TTS (already running).
+4. **Mac Mini M4 has headroom.** Using ~3.5GB of 12.7GB VRAM. TTS already running, ~8-9GB available.
 5. **Model swapping is config-only.** Plugin uses OpenAI-compat API — change baseURL + model name to switch.
 
 ## LanceDB Gotcha: External Writes

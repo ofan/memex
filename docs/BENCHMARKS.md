@@ -4,7 +4,7 @@
 **Environment:**
 - **VM:** Ubuntu, Xeon CPU, 16GB RAM, Node 25.6.1
 - **Mac Mini:** macOS, Apple M4, 16GB unified memory, 11.8GB VRAM, Node 25.7.0
-- **Embedding:** Qwen3-Embedding-0.6B-Q8_0 (1024d) via llama.cpp router on Mac Mini
+- **Embedding:** Qwen3-Embedding-0.6B-Q8_0 (1024d) via llama-swap on Mac Mini (:8090)
 - **Reranker:** bge-reranker-v2-m3-Q8_0 via same endpoint
 - **Network:** VM → Mac Mini via Tailscale (~1ms RTT)
 
@@ -229,7 +229,7 @@ For a typical user with dozens to low hundreds of memories and a workspace of ma
 | Fix hybrid fusion scoring | Fixes 64% unified bug | Code change only | **Worth fixing** but low priority (cross-rerank works) |
 | Tune score weights | +1-2% | Experimentation time | **Not worth it** at small corpus |
 
-**The one optimization with real ROI is query expansion** — adding a small generation model (Qwen3-1.7B, ~2GB) to the llama.cpp router would let QMD expand queries with synonyms and hypothetical documents. This helps when the user's wording doesn't match the document vocabulary (e.g., searching "auth" when the doc says "JWT tokens"). But this is a future optimization — ship and use first, optimize when you feel friction.
+**The one optimization with real ROI is query expansion** — Qwen3-0.6B-Instruct is now deployed on the Mac Mini via llama-swap for this purpose. QMD can expand queries with synonyms and hypothetical documents (HyDE). This helps when the user's wording doesn't match the document vocabulary (e.g., searching "auth" when the doc says "JWT tokens").
 
 ---
 
@@ -318,7 +318,7 @@ QMD indexing is fast: 650-820 files/sec, linear scaling, content-hash dedup for 
 
 ### Embedding Server (llama.cpp Router on Mac Mini)
 
-The llama.cpp router serves embedding + reranking on a single port (8090). Key settings:
+llama-swap serves embedding, reranking, and chat on a single port (8090). Key settings:
 
 | Setting | Value | Why |
 |---|---|---|

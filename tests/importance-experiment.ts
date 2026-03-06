@@ -352,7 +352,7 @@ async function checkLLMAvailable(): Promise<boolean> {
 async function scoreLLM(text: string): Promise<{ score: number; raw: string }> {
   const truncated = text.slice(0, 1000);
   const body = {
-    model: "Qwen3-0.6B", // Will match via llama-swap routing
+    model: "Qwen3-0.6B-Instruct",
     messages: [
       {
         role: "user",

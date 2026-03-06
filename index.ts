@@ -917,6 +917,41 @@ const memoryUnifiedPlugin = {
         // Run initial backup after a short delay, then schedule daily
         setTimeout(() => void runBackup(), 60_000); // 1 min after start
         backupTimer = setInterval(() => void runBackup(), BACKUP_INTERVAL_MS);
+
+        // Auto-index sessions on startup (if configured)
+        if (config.sessionIndexing?.enabled) {
+          const runSessionIndex = async () => {
+            try {
+              const { indexSessions } = await import("./src/session-indexer.js");
+              const agentName = config.sessionIndexing!.agent || "main";
+              const sessionsDir = join(homedir(), ".openclaw", "agents", agentName, "sessions");
+
+              // If autoIndexOnce, skip if store already has memories
+              if (config.sessionIndexing!.autoIndexOnce) {
+                const stats = await store.stats();
+                if (stats.totalCount > 0) {
+                  api.logger.info("memory-unified: session indexing skipped (memories already exist)");
+                  return;
+                }
+              }
+
+              const result = await indexSessions(store, embedder, {
+                sessionsDir,
+                targetScope: config.sessionIndexing!.scope || scopeManager.getDefaultScope(),
+                minImportance: config.sessionIndexing!.minImportance ?? 0.1,
+              });
+
+              api.logger.info(
+                `memory-unified: session indexing complete — ` +
+                `${result.indexedTurns} indexed from ${result.totalSessions - result.skippedSessions} sessions`
+              );
+            } catch (err) {
+              api.logger.warn(`memory-unified: session indexing failed: ${String(err)}`);
+            }
+          };
+          // Delay to not block startup
+          setTimeout(() => void runSessionIndex(), 5_000);
+        }
       },
       stop: async () => {
         if (backupTimer) {
