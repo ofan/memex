@@ -314,17 +314,19 @@ function generateSyntheticDataset(): BeirDataset {
 // CLI Argument Parsing
 // ============================================================================
 
-function parseCli(): { dataset: string; maxQueries: number } {
+function parseCli(): { dataset: string; maxQueries: number; maxCorpus: number } {
   const { values } = parseArgs({
     options: {
       dataset: { type: "string", default: "synthetic" },
       "max-queries": { type: "string", default: "20" },
+      "max-corpus": { type: "string", default: "1000" },
     },
     strict: false,
   });
 
   const dataset = (values.dataset as string) ?? "synthetic";
   const maxQueries = parseInt((values["max-queries"] as string) ?? "20", 10);
+  const maxCorpus = parseInt((values["max-corpus"] as string) ?? "1000", 10);
 
   const validDatasets = ["fiqa", "nq", "scifact", "synthetic"];
   if (!validDatasets.includes(dataset)) {
@@ -332,7 +334,7 @@ function parseCli(): { dataset: string; maxQueries: number } {
     process.exit(1);
   }
 
-  return { dataset, maxQueries };
+  return { dataset, maxQueries, maxCorpus };
 }
 
 // ============================================================================
@@ -359,18 +361,30 @@ async function indexCorpus(
   console.log(`\n[indexing] embedding and storing ${corpus.length} docs...`);
   const startAll = performance.now();
 
-  // Batch embed for efficiency
-  const EMBED_BATCH = 32;
+  // Embed one at a time with retry — llama.cpp router is fragile under batch load
   const allVectors: number[][] = [];
 
-  for (let i = 0; i < corpus.length; i += EMBED_BATCH) {
-    const batch = corpus.slice(i, i + EMBED_BATCH);
-    const texts = batch.map((d) => (d.title ? `${d.title}. ${d.text}` : d.text));
-    const vectors = await embedder.embedBatch(texts);
-    allVectors.push(...vectors);
+  for (let i = 0; i < corpus.length; i++) {
+    const doc = corpus[i];
+    const text = doc.title ? `${doc.title}. ${doc.text}` : doc.text;
 
-    const pct = Math.min(100, Math.round(((i + batch.length) / corpus.length) * 100));
-    console.warn(`  [indexing] embedded ${i + batch.length}/${corpus.length} (${pct}%)`);
+    let vec: number[] | null = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        vec = await embedder.embedPassage(text);
+        break;
+      } catch (err: any) {
+        console.warn(`  [indexing] doc ${i} attempt ${attempt + 1} failed: ${err.message?.slice(0, 80)}`);
+        if (attempt < 4) await new Promise((r) => setTimeout(r, 5000 * (attempt + 1)));
+      }
+    }
+    if (!vec) throw new Error(`Failed to embed doc ${i} after 5 retries`);
+    allVectors.push(vec);
+
+    if ((i + 1) % 50 === 0 || i + 1 === corpus.length) {
+      const pct = Math.round(((i + 1) / corpus.length) * 100);
+      console.warn(`  [indexing] embedded ${i + 1}/${corpus.length} (${pct}%)`);
+    }
   }
 
   // Store each doc
@@ -387,6 +401,10 @@ async function indexCorpus(
     });
     storeIdToDocId.set(storedEntry.id, doc.id);
   }
+
+  // Rebuild FTS index after bulk insert (LanceDB FTS is static at creation time)
+  console.log("[indexing] rebuilding FTS index for BM25 search...");
+  await store.rebuildFtsIndex();
 
   const totalTimeMs = performance.now() - startAll;
   const memAfter = process.memoryUsage();
@@ -571,7 +589,7 @@ async function main() {
   } else {
     dataset = await loadBeirDataset(cli.dataset as BeirDatasetName, {
       maxQueries: cli.maxQueries,
-      maxCorpus: 5000, // cap corpus for reasonable indexing time
+      maxCorpus: cli.maxCorpus,
     });
   }
 

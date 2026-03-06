@@ -305,27 +305,73 @@ Same environment. Added `process.cpuUsage()` tracking per benchmark.
    - hybrid+rerank: 0.19 nDCG-points/ms (best quality)
    - For interactive use (<500ms budget), hybrid+rerank is the right choice at 423ms
 
-### BEIR Comparison (Deferred)
+### BEIR Benchmark: SciFact (2026-03-06)
 
-BEIR datasets (FiQA, SciFact) are downloaded and cached. Benchmark run failed due to llama.cpp server crash under load (5000-doc corpus requires ~156 batch embedding calls). Infrastructure gap: the single-process llama.cpp router cannot handle sustained high-throughput embedding workloads.
+**Dataset:** SciFact — 500 docs (of 5183 total), 20 queries with relevance judgments
+**Note:** Subset corpus means many relevant documents are missing, limiting absolute scores.
 
-**Action items for BEIR benchmarks:**
-1. Add retry/backoff logic to `quality-bench.ts` for transient server failures
-2. Reduce batch concurrency or add rate limiting for large corpora
-3. Re-run once llama.cpp process is restarted on Mac Mini
+| Pipeline | R@1 | R@5 | R@10 | P@1 | P@5 | MRR | nDCG@10 | Latency |
+|---|---|---|---|---|---|---|---|---|
+| vector-only | 0.0% | 5.0% | 10.0% | 0.0% | 1.0% | 1.5% | 3.4% | 179ms |
+| hybrid | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 1151ms |
+| hybrid+rerank | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 1629ms |
+| hybrid+rerank+recency | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 1413ms |
 
-**Published nDCG@10 comparison targets** (from BEIR leaderboard):
-| System | FiQA | SciFact |
-|---|---|---|
-| BM25 baseline | 23.6 | 66.5 |
-| Cohere embed-v3 | 44.4 | 72.2 |
-| OpenAI text-embedding-3-large | 45.0 | 73.0 |
-| ColBERT v2 | 35.6 | 69.3 |
-| memory-unified (Qwen3-0.6B) | TBD | TBD |
+**Indexing:** 500 docs in 110s (4.5 docs/sec), RSS delta +238MB
+
+**Why hybrid modes score 0%:**
+1. **BM25-only results flood the top-k.** The fusion scoring gives BM25-only results a score of ~0.5 (sigmoid-normalized), while the few relevant docs found by vector search had lower cosine similarities. This pushes relevant docs out of the top 10.
+2. **Reranker batch size too small.** The llama.cpp reranker is configured with 512-token physical batch, but SciFact abstracts are 513-749 tokens. Every rerank call failed, falling back to cosine scoring.
+3. **Subset corpus limits recall.** With only 500/5183 docs, most relevant documents simply aren't present.
+
+**Lesson:** The BM25 fusion formula (designed for short conversational memories) doesn't generalize well to academic IR tasks with long documents. The sigmoid normalization gives weak BM25 matches a floor of 0.5, which is competitive with vector similarity scores in sparse corpora.
+
+**Published nDCG@10 comparison targets** (from BEIR leaderboard, full corpus):
+| System | SciFact |
+|---|---|
+| BM25 baseline | 66.5 |
+| Cohere embed-v3 | 72.2 |
+| OpenAI text-embedding-3-large | 73.0 |
+| ColBERT v2 | 69.3 |
+| memory-unified vector-only (500 docs) | 3.4 |
+
+**Note:** Our 3.4% nDCG is not directly comparable — published benchmarks use the full 5183-doc corpus and larger models (1.5B+ params vs our 0.6B). A fair comparison requires: (a) full corpus indexing, (b) fixing the reranker batch size, and (c) tuning BM25 fusion weights for long documents.
 
 ---
 
 ## Usage Simulation Results (2026-03-06)
+
+### Scenario 1: Day-in-the-life
+
+Simulates a full day of OpenClaw plugin usage: morning conversations (auto-capture), afternoon recalls, end-of-day maintenance (delete, update).
+
+| Metric | Value |
+|---|---|
+| Memories stored | 81 |
+| Noise skipped | 0 |
+| Store latency (avg / p50 / p95) | 24ms / 5.4ms / 40ms |
+| Recall latency (avg / p50 / p95) | 5691ms / 720ms / 11878ms |
+| Cache hit rate | 64.1% (37 misses, 66 hits) |
+| Memory | heap 18.6MB, RSS 183MB |
+
+**Key finding:** Recall latency is inflated by reranker timeouts (5s timeout, ~50% of queries trigger it). Without reranker failures, recall would average ~720ms (p50). The reranker's 512-token batch limit causes failures on longer memory entries.
+
+### Scenario 2: Corpus Growth (Partial — crashed at 1000 docs)
+
+Measures how recall latency scales as the memory corpus grows.
+
+| Corpus Size | Recall Avg | Recall p50 | Recall p95 | Heap | RSS |
+|---|---|---|---|---|---|
+| 50 | 10925ms | 11547ms | 11787ms | 18.5MB | 176MB |
+| 200 | 1131ms | 660ms | 5431ms | 23.4MB | 232MB |
+| 500 | 11097ms | 11606ms | 12133ms | 18.8MB | 331MB |
+| 1000 | 12505ms | 12851ms | 13832ms | 20.9MB | 615MB |
+
+**Key findings:**
+1. **RSS scales linearly** — ~0.6MB per stored memory (dominated by LanceDB Arrow buffers)
+2. **Recall latency dominated by reranker timeouts** — true search latency is ~660ms (p50 at 200 docs, where fewer reranker failures occurred)
+3. **Server crashes at sustained load** — died at 1000→2000 doc transition after ~15 minutes of continuous requests
+4. **Heap is stable** — JS heap stays at ~20MB regardless of corpus size (LanceDB memory is off-heap)
 
 ### Scenario 3: Document Indexing (QMD)
 
@@ -339,80 +385,91 @@ Synthetic markdown workspaces indexed into QMD SQLite + sqlite-vec store. No emb
 
 **Key findings:**
 1. **Indexing throughput is high** — 650-820 files/sec, well within interactive performance
-2. **Linear scaling** — index time and DB size scale linearly with file count (500 files = ~15x of 30 files)
+2. **Linear scaling** — index time and DB size scale linearly with file count
 3. **Incremental re-index is fast** — 9-63ms when no files changed (content-hash dedup)
 4. **Small DB footprint** — 500 files = 1.8MB SQLite database
-5. **Memory-efficient** — only +4MB heap, +32MB RSS for the entire indexing pipeline
 
-### Scenarios 1, 2, 4: Deferred
+### Scenario 4: Concurrent Patterns (Failed)
 
-Daily, growth, and concurrent simulation scenarios require the embedding server. From the previous session run (Task 5 implementation):
-
-**Day-in-the-life (from earlier test run):**
-- 82 memories stored from 5 conversations
-- 20 recall queries, avg 330ms per recall
-- 64% embedding cache hit rate
-- Store latency: avg ~50ms (embed + write)
-
-**Remaining scenarios blocked on:**
-- llama.cpp embedding server recovery on Mac Mini
-- Re-run with: `node --import jiti/register tests/simulation-bench.ts --scenario all`
+Server crashed under concurrent embedding + rerank load. The llama.cpp router proxy cannot handle overlapping requests to the reranker model while also serving embedding requests. This is a single-process bottleneck.
 
 ---
 
-## Optimization Targets (Ranked)
+## Infrastructure Issues Discovered
 
-Based on all benchmark data collected across Runs 1-4, quality benchmarks, and simulation results:
+### 1. llama.cpp Router Proxy — Duplicate Content-Length Headers
 
-### 1. Embedding Server Resilience (Critical)
+The Python BaseHTTP proxy in llama-swap passes through llama.cpp's response headers AND adds its own, creating duplicate `Content-Length` and `Server` headers. Node.js 25's undici (built-in fetch) and `node:http` both reject this as `HPE_UNEXPECTED_CONTENT_LENGTH`.
 
-**Problem:** Single-process llama.cpp router crashes under sustained load (>100 rapid embedding calls). This blocks BEIR benchmarks and would affect production workloads.
+**Fix applied:** `lenientFetch` in `src/embedder.ts` — tries standard fetch first, falls back to raw TCP socket on duplicate header error. The fallback uses HTTP/1.0 to avoid chunked transfer encoding.
 
-**Fix:** Add retry with exponential backoff in `src/embedder.ts`. Consider: connection pooling, request queuing, or running multiple llama-server instances behind a load balancer.
+### 2. Reranker Physical Batch Size Too Small
 
-**Impact:** Unblocks BEIR benchmarks + prevents production outages.
+The bge-reranker-v2-m3 model on llama.cpp is configured with `--batch-size 512`. Any query+document pair exceeding 512 tokens triggers a 500 error. SciFact abstracts (513-749 tokens) and many real-world memory entries exceed this limit.
 
-### 2. BM25 Fusion Without Reranking is Harmful (High)
+**Fix needed:** Increase `--batch-size` to 1024+ on the Mac Mini llama.cpp config.
 
-**Problem:** Hybrid mode without reranking degrades nDCG from 75.2→57.4% (23% drop). BM25 pulls in keyword-matching distractors that dilute vector search results.
+### 3. Server Stability Under Load
+
+The single-process llama.cpp router crashes after sustained load (~1000+ sequential requests or concurrent embed+rerank requests). No automatic restart mechanism.
+
+**Fix needed:** Add process supervision (launchd/systemd), request queuing, or run separate instances for embedding and reranking.
+
+---
+
+## Optimization Targets (Ranked, Updated)
+
+Based on all benchmark data: Runs 1-4, quality benchmarks (synthetic + SciFact), and simulation results.
+
+### 1. Reranker Batch Size (Critical, Easy Fix)
+
+**Problem:** 512-token batch limit causes reranker to fail on most real-world documents. Every SciFact rerank failed; ~50% of simulation recalls timed out.
+
+**Fix:** Set `--batch-size 1024` (or higher) on llama.cpp reranker model config.
+
+**Impact:** Unblocks reranking for real documents. Expected to improve hybrid+rerank quality significantly.
+
+### 2. BM25 Fusion Scoring for Long Documents (High)
+
+**Problem:** The BM25 sigmoid normalization gives weak keyword matches a floor score of 0.5, which competes with vector similarity scores. In hybrid mode, this floods the top-k with irrelevant BM25-only results.
 
 **Options:**
-- A) Always enable reranking when hybrid mode is on (recommended — +200ms is acceptable)
-- B) Tune RRF fusion weights to favor vector scores over BM25
-- C) Add BM25 score threshold to filter low-quality keyword matches
+- A) Increase BM25 score threshold (only include BM25 matches with raw score > X)
+- B) Always enable reranking when hybrid mode is on (+200ms but rescues quality)
+- C) Weight RRF fusion to favor vector scores (e.g., 70/30 instead of 50/50)
+- D) Cap BM25-only result scores at max(vector_scores) * 0.5
 
-**Impact:** Prevents quality regression for users who enable hybrid but not reranking.
+**Impact:** Fixes hybrid mode quality degradation seen in both synthetic (-23% nDCG) and BEIR (-100% nDCG) benchmarks.
 
-### 3. Recency Boost Needs Guardrails (Medium)
+### 3. Embedding Server Resilience (High)
 
-**Problem:** Recency boost with uniform timestamps destroys quality (nDCG drops from 79.3→48.3%). The boost is multiplicative and assumes timestamp diversity.
+**Problem:** Single-process llama.cpp router crashes under sustained load (>1000 sequential requests or concurrent embed+rerank).
 
-**Fix:** Add a minimum timestamp spread check — if all entries are within the same hour, disable recency scoring automatically. Or switch to additive recency bonus instead of multiplicative.
+**Fix:** Process supervision + retry with exponential backoff (partially done in quality-bench.ts, need in production code). Consider request queuing or separate model instances.
 
-**Impact:** Prevents quality regression in scenarios with batch-imported data.
+**Impact:** Production stability for large workspaces and heavy usage.
 
-### 4. Embedding Batch Throughput (Medium)
+### 4. LanceDB FTS Index Rebuild After Bulk Insert (Medium, Fixed)
 
-**Problem:** 43.6 docs/sec indexing throughput means 5000 BEIR docs take ~2 minutes. For large workspaces, this is a bottleneck.
+**Problem:** LanceDB FTS (Tantivy) index is static at creation time. After bulk inserts, BM25 search returns stale/missing results.
 
-**Options:**
-- Increase batch size from 32 to 64-128 (if llama.cpp supports it)
-- Pipeline embedding and storage (overlap network I/O with LanceDB writes)
-- Pre-compute and cache embeddings for static corpora
+**Fix applied:** Added `store.rebuildFtsIndex()` method. Called after bulk indexing in quality-bench.ts. Production code should call this after `doc-indexer.ts` completes a full re-index cycle.
 
-**Impact:** 2-4x faster corpus indexing.
+### 5. Recency Boost Needs Guardrails (Medium)
 
-### 5. Vector-Only Mode as Fast Path (Low)
+**Problem:** Recency boost with uniform timestamps destroys quality (nDCG drops from 79.3→48.3%).
 
-**Problem:** Vector-only is 4x faster (105ms vs 423ms) with 95% R@10. For many queries, the extra 318ms of hybrid+rerank adds marginal quality.
+**Fix:** Add minimum timestamp spread check — if all entries are within the same hour, disable recency scoring automatically.
 
-**Fix:** Implement confidence-based mode selection: if vector-only returns a top result with score > 0.85, skip reranking. Fall back to hybrid+rerank only when confidence is low.
+### 6. Vector-Only Mode as Fast Path (Low)
 
-**Impact:** Reduce average latency by 50-100ms for high-confidence queries.
+**Problem:** Vector-only is 4-7x faster (99-179ms vs 689-1629ms) with comparable or better R@10.
 
-### 6. Model Upgrade Evaluation (Deferred)
+**Fix:** Confidence-based mode selection: if top vector result score > 0.85, skip hybrid+rerank.
+
+### 7. Model Upgrade Evaluation (Deferred)
 
 **Current:** Qwen3-Embedding-0.6B (MTEB 64.3, 1024d, ~83ms/batch)
 **Candidates:** stella_en_1.5B_v5 (MTEB 71.19, 1536d) or Gemini-embedding-001 (MTEB 68.3, 3072d, API)
 
-**Decision:** Run BEIR benchmarks first to establish baseline nDCG@10, then evaluate if the +7 MTEB points from stella justify 2.5x more VRAM and potentially slower inference.
+**Decision:** Fix reranker batch size and BM25 fusion first — these are bottlenecks that mask true pipeline quality. Then re-evaluate model upgrade.

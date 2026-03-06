@@ -653,4 +653,15 @@ export class MemoryStore {
   get hasFtsSupport(): boolean {
     return this.ftsIndexCreated;
   }
+
+  /** Force-rebuild the FTS index (needed after bulk inserts). */
+  async rebuildFtsIndex(): Promise<void> {
+    await this.ensureInitialized();
+    const lancedb = await loadLanceDB();
+    await this.table!.createIndex("text", {
+      config: (lancedb as any).Index.fts(),
+      replace: true,
+    });
+    this.ftsIndexCreated = true;
+  }
 }

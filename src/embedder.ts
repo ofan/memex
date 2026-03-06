@@ -10,7 +10,81 @@
 
 import OpenAI from "openai";
 import { createHash } from "node:crypto";
+import { connect as netConnect, type Socket } from "node:net";
 import { smartChunk } from "./chunker.js";
+
+/**
+ * Custom fetch using raw TCP sockets that tolerates malformed HTTP responses
+ * (e.g. duplicate Content-Length headers from llama.cpp router proxy).
+ * Falls back to standard fetch for well-behaved servers.
+ */
+async function lenientFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    return await globalThis.fetch(input, init);
+  } catch (err: any) {
+    const msg = err?.cause?.message ?? err?.message ?? "";
+    if (!msg.includes("Duplicate Content-Length") && !msg.includes("HPE_UNEXPECTED_CONTENT_LENGTH")) {
+      throw err;
+    }
+  }
+
+  // Fallback: raw TCP socket for servers with duplicate Content-Length
+  return new Promise((resolve, reject) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const method = init?.method ?? "GET";
+    const bodyStr = init?.body ? String(init.body) : "";
+
+    const hdrs: Record<string, string> = {};
+    if (init?.headers) {
+      const h = init.headers;
+      if (h instanceof Headers) h.forEach((v, k) => { hdrs[k] = v; });
+      else if (Array.isArray(h)) for (const [k, v] of h) hdrs[k] = v;
+      else Object.assign(hdrs, h);
+    }
+    if (bodyStr && !hdrs["content-length"] && !hdrs["Content-Length"])
+      hdrs["Content-Length"] = Buffer.byteLength(bodyStr).toString();
+    if (!hdrs["Host"] && !hdrs["host"]) hdrs["Host"] = url.host;
+
+    const headerLines = Object.entries(hdrs).map(([k, v]) => `${k}: ${v}`).join("\r\n");
+    const httpReq = `${method} ${url.pathname}${url.search} HTTP/1.0\r\n${headerLines}\r\n\r\n${bodyStr}`;
+
+    const socket: Socket = netConnect({ host: url.hostname, port: parseInt(url.port || "80") }, () => {
+      socket.write(httpReq);
+    });
+
+    const chunks: Buffer[] = [];
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    socket.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf-8");
+      const headerEnd = raw.indexOf("\r\n\r\n");
+      if (headerEnd === -1) { reject(new Error("Malformed HTTP response")); return; }
+
+      const headerSection = raw.slice(0, headerEnd);
+      const body = raw.slice(headerEnd + 4);
+      const statusLine = headerSection.split("\r\n")[0];
+      const statusMatch = statusLine.match(/HTTP\/[\d.]+ (\d+)/);
+      const status = statusMatch ? parseInt(statusMatch[1]) : 200;
+
+      const responseHeaders = new Headers();
+      const seen = new Set<string>();
+      for (const line of headerSection.split("\r\n").slice(1)) {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx === -1) continue;
+        const key = line.slice(0, colonIdx).trim().toLowerCase();
+        const val = line.slice(colonIdx + 1).trim();
+        if (!seen.has(key)) { responseHeaders.set(key, val); seen.add(key); }
+      }
+
+      resolve(new Response(body, { status, headers: responseHeaders }));
+    });
+    socket.on("error", reject);
+    socket.setTimeout(30000, () => { socket.destroy(); reject(new Error("Socket timeout")); });
+    if (init?.signal) init.signal.addEventListener("abort", () => socket.destroy());
+  });
+}
 
 // ============================================================================
 // Embedding Cache (LRU with TTL)
@@ -180,6 +254,7 @@ export class Embedder {
     this.client = new OpenAI({
       apiKey: resolvedApiKey,
       ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+      fetch: lenientFetch as unknown as typeof globalThis.fetch,
     });
 
     this.dimensions = getVectorDimensions(config.model, config.dimensions);
@@ -287,7 +362,7 @@ export class Embedder {
 
       if (isContextError && this._autoChunk) {
         try {
-          console.log(`Document exceeded context limit (${errorMsg}), attempting chunking...`);
+          console.warn(`Document exceeded context limit (${errorMsg}), attempting chunking...`);
           const chunkResult = smartChunk(text, this._model);
           
           if (chunkResult.chunks.length === 0) {
@@ -295,7 +370,7 @@ export class Embedder {
           }
 
           // Embed all chunks in parallel
-          console.log(`Split document into ${chunkResult.chunkCount} chunks for embedding`);
+          console.warn(`Split document into ${chunkResult.chunkCount} chunks for embedding`);
           const chunkEmbeddings = await Promise.all(
             chunkResult.chunks.map(async (chunk, idx) => {
               try {
@@ -323,7 +398,7 @@ export class Embedder {
           
           // Cache the result for the original text (using its hash)
           this._cache.set(text, task, finalEmbedding);
-          console.log(`Successfully embedded long document as ${chunkEmbeddings.length} averaged chunks`);
+          console.warn(`Successfully embedded long document as ${chunkEmbeddings.length} averaged chunks`);
           
           return finalEmbedding;
         } catch (chunkError) {
@@ -392,7 +467,7 @@ export class Embedder {
 
       if (isContextError && this._autoChunk) {
         try {
-          console.log(`Batch embedding failed with context error, attempting chunking...`);
+          console.warn(`Batch embedding failed with context error, attempting chunking...`);
           
           const chunkResults = await Promise.all(
             validTexts.map(async (text, idx) => {
@@ -425,7 +500,7 @@ export class Embedder {
             })
           );
 
-          console.log(`Successfully chunked and embedded ${chunkResults.length} long documents`);
+          console.warn(`Successfully chunked and embedded ${chunkResults.length} long documents`);
 
           // Build results array
           const results: number[][] = new Array(texts.length);
