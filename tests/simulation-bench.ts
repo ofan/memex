@@ -587,7 +587,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("=== memory-unified Usage Simulation Benchmark ===");
+  console.log("=== memclaw Usage Simulation Benchmark ===");
   console.log(`Date: ${new Date().toISOString()}`);
   console.log(`Node: ${process.version}`);
   console.log(`Scenario: ${scenario}`);

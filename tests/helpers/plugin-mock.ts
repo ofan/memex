@@ -30,8 +30,8 @@ export function createMockPluginApi(): MockPluginApi {
 
   return {
     identity: {
-      pluginId: "memory-unified-mock",
-      pluginName: "memory-unified",
+      pluginId: "memclaw-mock",
+      pluginName: "memclaw",
       pluginVersion: "0.0.0-test",
     },
 

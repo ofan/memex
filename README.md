@@ -1,4 +1,4 @@
-# memory-unified
+# memclaw
 
 An [OpenClaw](https://github.com/nichochar/openclaw) memory plugin that unifies conversation memory and document search with shared embedding and reranker backends.
 
@@ -44,8 +44,8 @@ npm install
 node --import jiti/register --test tests/*.test.ts
 
 # Deploy
-cp -r . ~/.openclaw/plugins/memory-unified/
-# Update openclaw.json to load memory-unified, restart gateway
+cp -r . ~/.openclaw/plugins/memclaw/
+# Update openclaw.json to load memclaw, restart gateway
 ```
 
 ## License

@@ -2,13 +2,13 @@
 
 ## Summary
 
-This document compares memory-unified against five prominent AI memory systems: mem0, Zep, MemGPT/Letta, LangChain ConversationMemory, and LlamaIndex Memory. Each system takes a different architectural approach to the core problem of giving LLM-based agents persistent, retrievable memory across conversations and sessions.
+This document compares memclaw against five prominent AI memory systems: mem0, Zep, MemGPT/Letta, LangChain ConversationMemory, and LlamaIndex Memory. Each system takes a different architectural approach to the core problem of giving LLM-based agents persistent, retrievable memory across conversations and sessions.
 
-The landscape divides into two camps: **hosted platforms** (mem0, Zep, Letta Cloud) that offer managed infrastructure with graph-enhanced retrieval, and **library-based solutions** (LangChain, LlamaIndex, memory-unified) that embed directly into application code. memory-unified occupies a unique position as a self-hosted plugin with production-grade hybrid retrieval (vector + BM25 + cross-encoder reranking) and unified document search, running entirely on local infrastructure at zero ongoing cost.
+The landscape divides into two camps: **hosted platforms** (mem0, Zep, Letta Cloud) that offer managed infrastructure with graph-enhanced retrieval, and **library-based solutions** (LangChain, LlamaIndex, memclaw) that embed directly into application code. memclaw occupies a unique position as a self-hosted plugin with production-grade hybrid retrieval (vector + BM25 + cross-encoder reranking) and unified document search, running entirely on local infrastructure at zero ongoing cost.
 
 ## Feature Matrix
 
-| Dimension | memory-unified | mem0 | Zep | MemGPT / Letta | LangChain Memory | LlamaIndex Memory |
+| Dimension | memclaw | mem0 | Zep | MemGPT / Letta | LangChain Memory | LlamaIndex Memory |
 |---|---|---|---|---|---|---|
 | **Retrieval** | Hybrid: vector (LanceDB) + BM25 with RRF fusion, cross-encoder reranking | Hybrid: vector + graph traversal, semantic + relational search | Hybrid: semantic embeddings + BM25 + graph traversal | Tool-based: agent decides when to search archival/recall memory | Simple: buffer, window, summary, or vector store lookup | Composable: buffer, summary, vector block, fact extraction |
 | **Reranking** | Cross-encoder (bge-reranker-v2-m3) in retrieval pipeline | LLM-based relevance scoring; configurable reranking | Implicit via graph community ranking | None (LLM judges relevance in-context) | None | None built-in (can add via node postprocessors) |
@@ -63,7 +63,7 @@ LlamaIndex provides a composable memory system with short-term (FIFO chat buffer
 
 Like LangChain, LlamaIndex memory is a toolkit rather than a turnkey system. It offers slightly more sophistication with its block-based composition and fact extraction, but still lacks hybrid search, reranking, importance scoring, auto-capture with noise filtering, and multi-agent scoping. Its strength is tight integration with LlamaIndex's powerful RAG infrastructure (indexes, query engines, node postprocessors), which means document search and memory can share the same retrieval pipeline.
 
-## Where memory-unified Stands
+## Where memclaw Stands
 
 ### Strengths
 
@@ -78,19 +78,19 @@ Like LangChain, LlamaIndex memory is a toolkit rather than a turnkey system. It 
 
 ### Weaknesses / Gaps
 
-- **No knowledge graph**: mem0 and Zep both leverage graph databases for relational reasoning. memory-unified has no graph layer, which limits multi-hop reasoning and relationship discovery across memories.
-- **No LLM-driven memory extraction**: mem0 and Zep use LLMs to distill conversations into discrete facts and resolve contradictions. memory-unified stores raw content with metadata, relying on retrieval-time scoring rather than storage-time intelligence.
-- **No summarization**: LangChain, LlamaIndex, and MemGPT all offer conversation summarization to manage growing context. memory-unified has no summarization capability, which could become a limitation for very long-running sessions.
-- **No temporal reasoning**: Zep's bi-temporal model tracks when facts were true and when they were ingested. memory-unified has time decay but no explicit temporal validity tracking.
-- **No contradiction resolution**: mem0 automatically detects and resolves contradictory memories. memory-unified requires manual updates via the update tool.
+- **No knowledge graph**: mem0 and Zep both leverage graph databases for relational reasoning. memclaw has no graph layer, which limits multi-hop reasoning and relationship discovery across memories.
+- **No LLM-driven memory extraction**: mem0 and Zep use LLMs to distill conversations into discrete facts and resolve contradictions. memclaw stores raw content with metadata, relying on retrieval-time scoring rather than storage-time intelligence.
+- **No summarization**: LangChain, LlamaIndex, and MemGPT all offer conversation summarization to manage growing context. memclaw has no summarization capability, which could become a limitation for very long-running sessions.
+- **No temporal reasoning**: Zep's bi-temporal model tracks when facts were true and when they were ingested. memclaw has time decay but no explicit temporal validity tracking.
+- **No contradiction resolution**: mem0 automatically detects and resolves contradictory memories. memclaw requires manual updates via the update tool.
 - **Single-node only**: Embedded LanceDB and SQLite limit horizontal scalability. mem0 and Zep scale via managed cloud infrastructure.
-- **No published benchmark numbers**: mem0 has LOCOMO results; Zep has DMR benchmark results. memory-unified has no standardized benchmark evaluation, making it hard to compare retrieval quality objectively.
+- **No published benchmark numbers**: mem0 has LOCOMO results; Zep has DMR benchmark results. memclaw has no standardized benchmark evaluation, making it hard to compare retrieval quality objectively.
 - **OpenClaw-only integration**: Tightly coupled to the OpenClaw plugin SDK. mem0 and Zep offer REST APIs and multi-framework SDKs (LangChain, LlamaIndex, CrewAI integrations).
 - **No Python SDK**: TypeScript-only implementation. mem0, Zep, LangChain, and LlamaIndex all have Python as their primary language.
 
 ## Recommendations
 
-Based on the identified gaps, the following priorities would most improve memory-unified's competitive position:
+Based on the identified gaps, the following priorities would most improve memclaw's competitive position:
 
 1. **Benchmark on standard datasets** (high priority, low effort): Run LOCOMO or DMR benchmarks to produce comparable recall/accuracy numbers. Without published metrics, the sophisticated retrieval pipeline cannot be objectively validated against mem0 or Zep.
 

@@ -265,7 +265,7 @@ Use web search to gather architecture, features, published benchmarks, pricing f
 Structure:
 1. Feature matrix table (all systems x all dimensions)
 2. Per-system analysis (1-2 paragraphs each)
-3. Strengths and weaknesses of memory-unified
+3. Strengths and weaknesses of memclaw
 4. Recommendations for what to prioritize
 
 Dimensions: retrieval approach, storage backend, memory management, scoping, document search, quality, latency, cost, integration model.
@@ -274,7 +274,7 @@ Dimensions: retrieval approach, storage backend, memory management, scoping, doc
 
 ```bash
 git add docs/COMPARISON.md
-git commit -m "add feature comparison: memory-unified vs mem0, Zep, MemGPT, LangChain, LlamaIndex"
+git commit -m "add feature comparison: memclaw vs mem0, Zep, MemGPT, LangChain, LlamaIndex"
 ```
 
 ---

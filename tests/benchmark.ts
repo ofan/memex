@@ -1,5 +1,5 @@
 /**
- * Benchmark Suite for memory-unified
+ * Benchmark Suite for memclaw
  *
  * Measures latency, memory usage, and throughput for key operations:
  * 1. Embedding (single + batch)
@@ -114,7 +114,7 @@ function memUsage(): { heapMB: number; rssMB: number } {
 // ============================================================================
 
 async function main() {
-  console.log("=== memory-unified Benchmark Suite ===\n");
+  console.log("=== memclaw Benchmark Suite ===\n");
   console.log(`Date: ${new Date().toISOString()}`);
   console.log(`Node: ${process.version}`);
   const startMem = memUsage();

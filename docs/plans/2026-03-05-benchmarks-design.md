@@ -96,7 +96,7 @@ Uses a thin OpenClaw plugin API mock to exercise real tool handlers (auto-captur
 ## 3. Feature Comparison (`docs/COMPARISON.md`)
 
 ### Systems compared
-- **memory-unified** (ours) — live benchmarks
+- **memclaw** (ours) — live benchmarks
 - **mem0** — documentation + published benchmarks
 - **Zep** — documentation + published benchmarks
 - **MemGPT/Letta** — documentation + published benchmarks

@@ -1,4 +1,4 @@
-# Benchmarks — memory-unified
+# Benchmarks — memclaw
 
 **Updated:** 2026-03-06
 **Environment:**
@@ -161,7 +161,7 @@ This is the one real UX pain point — and it's an infrastructure issue, not a p
 | ColBERT v2 | 69.3% | 110M | Late interaction |
 | Cohere embed-v3 | 72.2% | Unknown | Vector only, API |
 | OpenAI text-embedding-3-large | 73.0% | Unknown | Vector only, API |
-| **memory-unified unified+cross-rerank** | **86.0%** | 0.6B embed + 0.6B rerank | Two small local models |
+| **memclaw unified+cross-rerank** | **86.0%** | 0.6B embed + 0.6B rerank | Two small local models |
 
 Our pipeline with two 0.6B models running locally on Apple M4 outperforms published vector-only results from much larger cloud models. The cross-encoder reranker compensates for weaker initial embeddings by re-scoring the top candidates with full attention.
 

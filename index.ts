@@ -349,7 +349,7 @@ function getPluginVersion(): string {
 
 const memoryUnifiedPlugin = {
   id: "memclaw",
-  name: "Memory (Unified)",
+  name: "Memclaw",
   description: "Unified memory: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker",
   kind: "memory" as const,
 

@@ -1,6 +1,6 @@
 # Unified Memory System — Requirements
 
-**Project:** `memory-unified`
+**Project:** `memclaw`
 **Status:** Complete — 145 tests passing, benchmarks stable, ready for deployment
 **Updated:** 2026-03-05
 
@@ -19,7 +19,7 @@ A single OpenClaw memory plugin that:
 ## Architecture
 
 ```
-memory-unified (OpenClaw plugin, kind: "memory")
+memclaw (OpenClaw plugin, kind: "memory")
 │
 ├── Conversation Memory (LanceDB Pro — forked)
 │   ├── All existing tools: recall, store, forget, update
@@ -158,7 +158,7 @@ Embedding and reranker models are hot-swappable via config. Switching is a `base
 - `gte-reranker-modernbert-base` — local, 149M params, smallest
 
 ### Re-embedding on Model Switch
-- CLI: `memory-unified reindex --all`
+- CLI: `memclaw reindex --all`
 - Detect dimension mismatch on startup → warn + block until reindex
 
 ---
@@ -183,8 +183,8 @@ Embedding and reranker models are hot-swappable via config. Switching is a `base
 
 ## Implementation Steps
 
-1. Fork LanceDB Pro → `~/projects/memory-unified/`
-2. Fork QMD → `~/projects/memory-unified/qmd/` (or as dependency)
+1. Fork LanceDB Pro → `~/projects/memclaw/`
+2. Fork QMD → `~/projects/memclaw/qmd/` (or as dependency)
 3. Modify QMD `llm.ts`: replace node-llama-cpp with OpenAI-compat HTTP client
 4. Add shared embedding/reranker config to plugin
 5. Wire QMD's search functions into the recall path

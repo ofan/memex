@@ -1,4 +1,4 @@
-# CLAUDE.md — memory-unified
+# CLAUDE.md — memclaw
 
 ## What This Is
 
@@ -7,7 +7,7 @@ An OpenClaw memory plugin that unifies conversation memory (LanceDB Pro) and doc
 ## Architecture
 
 ```
-memory-unified plugin (kind: "memory")
+memclaw plugin (kind: "memory")
 ├── Conversation Memory (LanceDB Pro — forked)
 │   ├── All existing tools: recall, store, forget, update
 │   ├── 7-stage scoring pipeline (hybrid, rerank, recency, importance, time decay, length norm, MMR)
@@ -35,7 +35,7 @@ memory-unified plugin (kind: "memory")
 ## Project Structure
 
 ```
-memory-unified/
+memclaw/
 ├── CLAUDE.md              ← you are here
 ├── index.ts               ← plugin entry point (register, hooks, identity)
 ├── openclaw.plugin.json   ← plugin manifest + full config schema
@@ -150,9 +150,9 @@ node --import jiti/register tests/benchmark.ts
 
 ```bash
 # Copy to plugin directory
-cp -r . ~/.openclaw/plugins/memory-unified/
+cp -r . ~/.openclaw/plugins/memclaw/
 
-# Update openclaw.json to load memory-unified instead of memory-lancedb-pro
+# Update openclaw.json to load memclaw instead of memory-lancedb-pro
 # Restart gateway
 ```
 
