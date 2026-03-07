@@ -1,7 +1,7 @@
 {
-  "id": "memory-unified",
-  "name": "Memory (Unified)",
-  "description": "Unified memory: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker and unified recall",
+  "id": "memclaw",
+  "name": "Memclaw",
+  "description": "Unified memory for OpenClaw: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker and unified recall",
   "version": "0.1.0",
   "kind": "memory",
   "configSchema": {
@@ -275,6 +275,40 @@
             "minimum": 1,
             "maximum": 100,
             "default": 15
+          }
+        }
+      },
+      "sessionIndexing": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Bulk-import past conversation sessions as searchable memories",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable session indexing"
+          },
+          "agent": {
+            "type": "string",
+            "default": "main",
+            "description": "Agent name to index sessions from"
+          },
+          "scope": {
+            "type": "string",
+            "default": "global",
+            "description": "Target scope for indexed memories"
+          },
+          "minImportance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.1,
+            "description": "Minimum importance threshold (0.0-1.0)"
+          },
+          "autoIndexOnce": {
+            "type": "boolean",
+            "default": true,
+            "description": "Only auto-index on first startup (skip if memories already exist)"
           }
         }
       },

@@ -59,7 +59,7 @@ function formatJson(obj: any): string {
 
 export function registerMemoryCLI(program: Command, context: CLIContext): void {
   const memory = program
-    .command("memory-unified")
+    .command("memclaw")
     .description("Enhanced memory management commands (LanceDB Pro)");
 
   // Version

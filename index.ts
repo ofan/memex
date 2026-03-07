@@ -348,7 +348,7 @@ function getPluginVersion(): string {
 // ============================================================================
 
 const memoryUnifiedPlugin = {
-  id: "memory-unified",
+  id: "memclaw",
   name: "Memory (Unified)",
   description: "Unified memory: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker",
   kind: "memory" as const,
@@ -365,7 +365,7 @@ const memoryUnifiedPlugin = {
       validateStoragePath(resolvedDbPath);
     } catch (err) {
       api.logger.warn(
-        `memory-unified: storage path issue — ${String(err)}\n` +
+        `memclaw: storage path issue — ${String(err)}\n` +
         `  The plugin will still attempt to start, but writes may fail.`
       );
     }
@@ -392,15 +392,15 @@ const memoryUnifiedPlugin = {
       try {
         const probe = await embedder.test();
         if (!probe.success) {
-          api.logger.warn(`memory-unified: embedding probe failed — ${probe.error}. Recall may not work.`);
+          api.logger.warn(`memclaw: embedding probe failed — ${probe.error}. Recall may not work.`);
         } else if (probe.dimensions !== vectorDim) {
           api.logger.warn(
-            `memory-unified: dimension mismatch! Config expects ${vectorDim}d but model returns ${probe.dimensions}d. ` +
+            `memclaw: dimension mismatch! Config expects ${vectorDim}d but model returns ${probe.dimensions}d. ` +
             `Set embedding.dimensions to ${probe.dimensions} or use a compatible model.`
           );
         }
       } catch (err) {
-        api.logger.warn(`memory-unified: embedding probe error — ${String(err)}`);
+        api.logger.warn(`memclaw: embedding probe error — ${String(err)}`);
       }
     })();
 
@@ -515,22 +515,22 @@ const memoryUnifiedPlugin = {
 
             if (!silent && (totals.indexed > 0 || totals.updated > 0)) {
               api.logger.info(
-                `memory-unified: indexed ${totals.indexed} new, ${totals.updated} updated, ${totals.unchanged} unchanged, ${totals.removed} removed docs`
+                `memclaw: indexed ${totals.indexed} new, ${totals.updated} updated, ${totals.unchanged} unchanged, ${totals.removed} removed docs`
               );
             }
 
             const backlog = getEmbeddingBacklog(qmdDb);
             if (backlog > 0) {
-              if (!silent) api.logger.info(`memory-unified: embedding ${backlog} document hashes...`);
+              if (!silent) api.logger.info(`memclaw: embedding ${backlog} document hashes...`);
               const embedResult = await embedDocuments(qmdDb, embDims);
               if (!silent) {
                 api.logger.info(
-                  `memory-unified: embedded ${embedResult.embedded} docs (${embedResult.chunks} chunks)${embedResult.errors.length > 0 ? `, ${embedResult.errors.length} errors` : ""}`
+                  `memclaw: embedded ${embedResult.embedded} docs (${embedResult.chunks} chunks)${embedResult.errors.length > 0 ? `, ${embedResult.errors.length} errors` : ""}`
                 );
               }
             }
           } catch (err) {
-            api.logger.warn(`memory-unified: background indexing failed: ${String(err)}`);
+            api.logger.warn(`memclaw: background indexing failed: ${String(err)}`);
           }
         };
 
@@ -544,15 +544,15 @@ const memoryUnifiedPlugin = {
         }
 
         api.logger.info(
-          `memory-unified: QMD document search enabled (db: ${qmdDbFile}, paths: ${config.documents.paths.map((p: any) => p.name).join(", ")})`
+          `memclaw: QMD document search enabled (db: ${qmdDbFile}, paths: ${config.documents.paths.map((p: any) => p.name).join(", ")})`
         );
       } catch (err) {
-        api.logger.warn(`memory-unified: QMD initialization failed (document search disabled): ${String(err)}`);
+        api.logger.warn(`memclaw: QMD initialization failed (document search disabled): ${String(err)}`);
       }
     }
 
     api.logger.info(
-      `memory-unified@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
+      `memclaw@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
     );
 
     // ========================================================================
@@ -586,7 +586,7 @@ const memoryUnifiedPlugin = {
         migrator,
         embedder,
       }),
-      { commands: ["memory-unified"] }
+      { commands: ["memclaw"] }
     );
 
     // ========================================================================
@@ -621,7 +621,7 @@ const memoryUnifiedPlugin = {
             .join("\n");
 
           api.logger.info?.(
-            `memory-unified: injecting ${results.length} memories into context for agent ${agentId}`
+            `memclaw: injecting ${results.length} memories into context for agent ${agentId}`
           );
 
           return {
@@ -633,7 +633,7 @@ const memoryUnifiedPlugin = {
               `</relevant-memories>`,
           };
         } catch (err) {
-          api.logger.warn(`memory-unified: recall failed: ${String(err)}`);
+          api.logger.warn(`memclaw: recall failed: ${String(err)}`);
         }
       });
     }
@@ -718,11 +718,11 @@ const memoryUnifiedPlugin = {
 
           if (stored > 0) {
             api.logger.info(
-              `memory-unified: auto-captured ${stored} memories for agent ${agentId} in scope ${defaultScope}`
+              `memclaw: auto-captured ${stored} memories for agent ${agentId} in scope ${defaultScope}`
             );
           }
         } catch (err) {
-          api.logger.warn(`memory-unified: capture failed: ${String(err)}`);
+          api.logger.warn(`memclaw: capture failed: ${String(err)}`);
         }
       });
     }
@@ -857,9 +857,9 @@ const memoryUnifiedPlugin = {
           }
         }
 
-        api.logger.info(`memory-unified: backup completed (${allMemories.length} entries → ${backupFile})`);
+        api.logger.info(`memclaw: backup completed (${allMemories.length} entries → ${backupFile})`);
       } catch (err) {
-        api.logger.warn(`memory-unified: backup failed: ${String(err)}`);
+        api.logger.warn(`memclaw: backup failed: ${String(err)}`);
       }
     }
 
@@ -868,7 +868,7 @@ const memoryUnifiedPlugin = {
     // ========================================================================
 
     api.registerService({
-      id: "memory-unified",
+      id: "memclaw",
       start: async () => {
         // IMPORTANT: Do not block gateway startup on external network calls.
         // If embedding/retrieval tests hang (bad network / slow provider), the gateway
@@ -893,7 +893,7 @@ const memoryUnifiedPlugin = {
             const retrievalTest = await withTimeout(retriever.test(), 8_000, "retriever.test()");
 
             api.logger.info(
-              `memory-unified: initialized successfully ` +
+              `memclaw: initialized successfully ` +
               `(embedding: ${embedTest.success ? "OK" : "FAIL"}, ` +
               `retrieval: ${retrievalTest.success ? "OK" : "FAIL"}, ` +
               `mode: ${retrievalTest.mode}, ` +
@@ -901,13 +901,13 @@ const memoryUnifiedPlugin = {
             );
 
             if (!embedTest.success) {
-              api.logger.warn(`memory-unified: embedding test failed: ${embedTest.error}`);
+              api.logger.warn(`memclaw: embedding test failed: ${embedTest.error}`);
             }
             if (!retrievalTest.success) {
-              api.logger.warn(`memory-unified: retrieval test failed: ${retrievalTest.error}`);
+              api.logger.warn(`memclaw: retrieval test failed: ${retrievalTest.error}`);
             }
           } catch (error) {
-            api.logger.warn(`memory-unified: startup checks failed: ${String(error)}`);
+            api.logger.warn(`memclaw: startup checks failed: ${String(error)}`);
           }
         };
 
@@ -930,7 +930,7 @@ const memoryUnifiedPlugin = {
               if (config.sessionIndexing!.autoIndexOnce) {
                 const stats = await store.stats();
                 if (stats.totalCount > 0) {
-                  api.logger.info("memory-unified: session indexing skipped (memories already exist)");
+                  api.logger.info("memclaw: session indexing skipped (memories already exist)");
                   return;
                 }
               }
@@ -942,11 +942,11 @@ const memoryUnifiedPlugin = {
               });
 
               api.logger.info(
-                `memory-unified: session indexing complete — ` +
+                `memclaw: session indexing complete — ` +
                 `${result.indexedTurns} indexed from ${result.totalSessions - result.skippedSessions} sessions`
               );
             } catch (err) {
-              api.logger.warn(`memory-unified: session indexing failed: ${String(err)}`);
+              api.logger.warn(`memclaw: session indexing failed: ${String(err)}`);
             }
           };
           // Delay to not block startup
@@ -970,7 +970,7 @@ const memoryUnifiedPlugin = {
         try {
           if (qmdStore) qmdStore.close();
         } catch { /* ignore */ }
-        api.logger.info("memory-unified: stopped");
+        api.logger.info("memclaw: stopped");
       },
     });
   },
@@ -979,7 +979,7 @@ const memoryUnifiedPlugin = {
 
 function parsePluginConfig(value: unknown): PluginConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("memory-unified config required");
+    throw new Error("memclaw config required");
   }
   const cfg = value as Record<string, unknown>;
 

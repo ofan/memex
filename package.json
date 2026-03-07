@@ -1,5 +1,5 @@
 {
-  "name": "memory-unified",
+  "name": "memclaw",
   "version": "0.1.0",
   "description": "OpenClaw unified memory plugin: LanceDB Pro conversation memory + QMD document search with shared embedding/reranker",
   "type": "module",

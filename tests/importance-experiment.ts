@@ -355,17 +355,26 @@ async function scoreLLM(text: string): Promise<{ score: number; raw: string }> {
     model: "Qwen3-0.6B-Instruct",
     messages: [
       {
+        role: "system",
+        content: `Score messages for an AI memory system (0.0-1.0). Remember = preference, decision, fact, technical detail. Forget = greeting, filler, acknowledgment, status, system output, short reactions. Examples:
+"I prefer dark mode" → 0.9
+"Hello" → 0.0
+"We decided to use PostgreSQL" → 0.9
+"OK sounds good" → 0.1
+"Sure, go ahead" → 0.0
+"yeah go for it" → 0.1
+"thanks" → 0.0
+"HEARTBEAT_OK" → 0.0
+"My SSH key is on the bastion host" → 0.8
+Reply with ONLY the score number.`,
+      },
+      {
         role: "user",
-        content: `Rate how memorable this conversation message is for a personal AI assistant's long-term memory.
-Consider: Is this a preference, decision, fact, technical detail, or important context?
-Score 0.0 (not worth remembering) to 1.0 (definitely remember).
-Reply with just the number, nothing else.
-
-Message: "${truncated}"`,
+        content: truncated,
       },
     ],
     temperature: 0.0,
-    max_tokens: 10,
+    max_tokens: 512, // Qwen3 uses reasoning tokens; needs headroom
   };
 
   try {

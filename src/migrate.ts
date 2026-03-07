@@ -1,6 +1,6 @@
 /**
  * Migration Utilities
- * Migrates data from old memory-lancedb plugin to memory-unified
+ * Migrates data from old memory-lancedb plugin to memclaw
  */
 
 import { homedir } from "node:os";

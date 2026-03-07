@@ -45,7 +45,7 @@ export const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> 
   try {
     return await lancedbImportPromise;
   } catch (err) {
-    throw new Error(`memory-unified: failed to load LanceDB. ${String(err)}`, { cause: err });
+    throw new Error(`memclaw: failed to load LanceDB. ${String(err)}`, { cause: err });
   }
 };
 
