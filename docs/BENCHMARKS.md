@@ -18,13 +18,17 @@
 
 ## LongMemEval (ICLR 2025)
 
-Cross-system memory retrieval benchmark. N=50, LongMemEval_s subset.
+Cross-system memory retrieval benchmark. N=50, LongMemEval_s subset. Official LongMemEval prompts + GPT-4o-mini LLM-judge.
 
-| Metric | Score |
-|---|---|
-| **R@1** | **78%** |
-| **R@3** | **90%** |
-| **E2E (GPT-4o)** | **90%** |
+| Metric | Score | What it measures |
+|---|---|---|
+| **R@1** | **78%** | Correct session ranked #1 |
+| **R@3** | **90%** | Correct session in top 3 |
+| **E2E** | **90%** | LLM extracts correct answer from retrieved sessions |
+
+- **R@1** is the strictest — requires the retriever to put the exact right session at position 1.
+- **R@3** reflects production behavior where the LLM sees the top 3 results.
+- **E2E** is what users experience — can the system actually answer the question? E2E ≥ R@1 because the LLM reads multiple sessions and may find the answer in an alternative session even when the "official" correct one isn't ranked first.
 
 | System | R@1 | R@3 | E2E Accuracy | Reader LLM |
 |---|---|---|---|---|
