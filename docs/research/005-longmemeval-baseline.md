@@ -21,10 +21,11 @@
 |---|---|
 | **R@1** | **39/50 (78%)** |
 | **R@3** | **45/50 (90%)** |
-| **E2E (Gemini Flash)** | **44/50 (88%)** |
-| **E2E (GPT-4o)** | **34/50 (68%)** |
+| **E2E (GPT-4o)** | **45/50 (90%)** |
 
-GPT-4o says "NOT FOUND" on 16 queries where retrieval was correct (R@1 hit). It's too conservative with noisy context. Gemini Flash extracts answers more aggressively.
+Evaluated with official LongMemEval reader prompt and GPT-4o-mini LLM-judge.
+
+Note: earlier runs with a custom reader prompt ("say NOT FOUND if not in history") scored 68% E2E with GPT-4o due to the model refusing to answer. The official prompt ("answer based on the relevant chat history") does not trigger this behavior.
 
 ## Progression
 
