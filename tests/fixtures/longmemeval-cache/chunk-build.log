@@ -1,0 +1,102 @@
+Loading research cache...
+Loaded 50 examples.
+Chunk size: 2000, overlap: 200, batch: 16, parallel: 1
+
+Unique sessions: 2375
+Sessions needing chunk embedding: 2258
+Total chunks to embed: 16691
+Estimated batches: 1044
+
+Loaded checkpoint: 9776 vectors already embedded
+Starting embedding (1 parallel, batch 16)...
+Remaining chunks to embed: 6915 (9776 from checkpoint)
+  [checkpoint saved: 9984 vectors]
+  10000/16691 chunks (1.0/s, ETA 108min, 0 errors)
+  [checkpoint saved: 10192 vectors]
+  10400/16691 chunks (1.0/s, ETA 106min, 0 errors)
+  [checkpoint saved: 10400 vectors]
+  [checkpoint saved: 10608 vectors]
+  10800/16691 chunks (1.0/s, ETA 100min, 0 errors)
+  [checkpoint saved: 10816 vectors]
+  [checkpoint saved: 11024 vectors]
+  11200/16691 chunks (1.0/s, ETA 94min, 0 errors)
+  [checkpoint saved: 11232 vectors]
+  [checkpoint saved: 11440 vectors]
+  11600/16691 chunks (1.0/s, ETA 87min, 0 errors)
+  [checkpoint saved: 11648 vectors]
+  [checkpoint saved: 11856 vectors]
+  12000/16691 chunks (1.0/s, ETA 80min, 0 errors)
+  [checkpoint saved: 12064 vectors]
+  [checkpoint saved: 12272 vectors]
+  12400/16691 chunks (1.0/s, ETA 73min, 0 errors)
+  [checkpoint saved: 12480 vectors]
+  [checkpoint saved: 12688 vectors]
+  12800/16691 chunks (1.0/s, ETA 66min, 0 errors)
+  [checkpoint saved: 12896 vectors]
+  [checkpoint saved: 13104 vectors]
+  13200/16691 chunks (1.0/s, ETA 59min, 0 errors)
+  [checkpoint saved: 13312 vectors]
+  [checkpoint saved: 13520 vectors]
+  13600/16691 chunks (1.0/s, ETA 53min, 0 errors)
+  [checkpoint saved: 13728 vectors]
+  [checkpoint saved: 13936 vectors]
+  14000/16691 chunks (1.0/s, ETA 46min, 0 errors)
+  [checkpoint saved: 14144 vectors]
+  [checkpoint saved: 14352 vectors]
+  14400/16691 chunks (1.0/s, ETA 39min, 0 errors)
+  [checkpoint saved: 14560 vectors]
+  [checkpoint saved: 14768 vectors]
+  14800/16691 chunks (1.0/s, ETA 32min, 0 errors)
+  [checkpoint saved: 14976 vectors]
+  [checkpoint saved: 15184 vectors]
+  15200/16691 chunks (1.0/s, ETA 26min, 0 errors)
+  [checkpoint saved: 15392 vectors]
+  15600/16691 chunks (1.0/s, ETA 19min, 0 errors)
+  [checkpoint saved: 15600 vectors]
+  [checkpoint saved: 15808 vectors]
+  16000/16691 chunks (1.0/s, ETA 12min, 0 errors)
+  [checkpoint saved: 16016 vectors]
+  [checkpoint saved: 16224 vectors]
+  16400/16691 chunks (1.0/s, ETA 5min, 0 errors)
+  [checkpoint saved: 16432 vectors]
+  [checkpoint saved: 16640 vectors]
+  16691/16691 chunks (1.0/s, ETA 0min, 0 errors)
+
+
+Embedding done in 119.0 min
+
+Computing chunk scores...
+
+Chunk scores written to /home/ubuntu/projects/memclaw/tests/fixtures/longmemeval-cache/chunk-scores-50.json (1.0 MB)
+Checkpoint cleaned up.
+
+=== Improvement Preview ===
+
+  e47becba rank 33→14 (12 chunks, best@9109) "What degree did I graduate with?"
+  118b2229 rank 15→3 (10 chunks, best@9395) "How long is my daily commute to work?"
+  1e043500 rank 11→2 (10 chunks, best@10154) "What is the name of the playlist I created on Spot"
+  6f9b354f rank 22→1 (10 chunks, best@4434) "What color did I repaint my bedroom walls?"
+  7527f7e2 rank 9→1 (12 chunks, best@3083) "How much did I spend on a designer handbag?"
+  c960da58 rank 2→1 (10 chunks, best@2918) "How many playlists do I have on Spotify?"
+  3b6f954b rank 20→1 (8 chunks, best@11382) "Where did I attend for my study abroad program?"
+  726462e0 rank 25→1 (11 chunks, best@3600) "What was the discount I got on my first purchase f"
+  94f70d80 rank 5→1 (11 chunks, best@7915) "How long did it take me to assemble the IKEA books"
+  ad7109d1 rank 40→1 (10 chunks, best@4949) "What speed is my new internet plan?"
+  c8c3f81d rank 2→1 (8 chunks, best@2684) "What brand are my favorite running shoes?"
+  8ebdbe50 rank 2→1 (12 chunks, best@4831) "What certification did I complete last month?"
+  853b0a1d rank 3→1 (8 chunks, best@11183) "How old was I when my grandma gave me the silver n"
+  b86304ba rank 14→1 (8 chunks, best@8709) "How much is the painting of a sunset worth in term"
+  d52b4f67 rank 6→2 (7 chunks, best@8288) "Where did I attend my cousin's wedding?"
+  caf9ead2 rank 2→1 (6 chunks, best@5596) "How long did it take to move to the new apartment?"
+  8550ddae rank 3→2 (12 chunks, best@10097) "What type of cocktail recipe did I try last weeken"
+  60d45044 rank 32→1 (11 chunks, best@6559) "What type of rice is my favorite?"
+  3f1e9474 rank 3→2 (14 chunks, best@20193) "Who did I have a conversation with about destiny?"
+  86b68151 rank 5→1 (9 chunks, best@10788) "Where did I buy my new bookshelf from?"
+  577d4d32 rank 28→1 (10 chunks, best@5663) "What time do I stop checking work emails and messa"
+  bc8a6e93 rank 20→4 (11 chunks, best@1800) "What did I bake for my niece's birthday party?"
+  ccb36322 rank 13→4 (8 chunks, best@8747) "What is the name of the music streaming service ha"
+  001be529 rank 6→1 (10 chunks, best@6554) "How long did I wait for the decision on my asylum "
+  545bd2b5 rank 4→1 (12 chunks, best@6147) "How much screen time have I been averaging on Inst"
+
+  Vec-only R@1: 20 → 35  (+15)
+  Vec-only R@3: 30 → 45  (+15)

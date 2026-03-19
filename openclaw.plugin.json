@@ -1,0 +1,411 @@
+{
+  "id": "memex",
+  "name": "Memex",
+  "description": "Unified memory for OpenClaw: conversation memory + document search in a single SQLite database with shared embedding/reranker",
+  "version": "0.5.0",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "openai-compatible"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseURL": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "taskQuery": {
+            "type": "string",
+            "description": "Embedding task for queries (provider-specific, e.g. Jina: retrieval.query)"
+          },
+          "taskPassage": {
+            "type": "string",
+            "description": "Embedding task for passages/documents (provider-specific, e.g. Jina: retrieval.passage)"
+          },
+          "normalized": {
+            "type": "boolean",
+            "description": "Request normalized embeddings when supported by the provider (e.g. Jina v5)"
+          },
+          "chunking": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable automatic chunking for documents exceeding embedding context limits"
+          }
+        },
+        "required": [
+          "apiKey"
+        ]
+      },
+      "reranker": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Shared reranker configuration used by both conversation memory and document search",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "endpoint": {
+            "type": "string",
+            "default": "https://api.jina.ai/v1/rerank"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "default": "jina-reranker-v3"
+          },
+          "provider": {
+            "type": "string",
+            "enum": ["jina", "siliconflow", "voyage", "pinecone"],
+            "default": "jina"
+          }
+        }
+      },
+      "dbPath": {
+        "type": "string"
+      },
+      "enableManagementTools": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable memory_list and memory_stats management tools"
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically capture important information from conversations"
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "default": false
+      },
+      "autoRecallDocFilter": {
+        "type": "boolean",
+        "default": true,
+        "description": "Filter QMD document results to the current agent's workspace during auto-recall. When false, auto-recall searches all collections. Explicit tool calls always search all collections."
+      },
+      "autoRecallMinLength": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 15,
+        "description": "Minimum prompt length (in characters) to trigger auto-recall. Default: 15 for English, 6 for CJK."
+      },
+      "captureAssistant": {
+        "type": "boolean"
+      },
+      "captureMinImportance": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "default": 0.5,
+        "description": "Minimum reranker importance score for auto-capture. Higher = fewer but higher-quality captures."
+      },
+      "memoryInstructions": {
+        "type": "string",
+        "enum": ["off", "default", "aggressive"],
+        "default": "default",
+        "description": "Controls the memory instruction prompt injected during auto-recall. 'off' disables it, 'default' gives a concise nudge, 'aggressive' encourages broader capture."
+      },
+      "autoFixNoise": {
+        "type": "boolean",
+        "default": false,
+        "description": "Automatically purge detected noise entries from the store on startup. Useful after deploying improved noise filters."
+      },
+      "retrieval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["hybrid", "vector"],
+            "default": "hybrid"
+          },
+          "vectorWeight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.7
+          },
+          "bm25Weight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.3
+          },
+          "minScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.3
+          },
+          "rerank": {
+            "type": "string",
+            "enum": ["cross-encoder", "lightweight", "none"],
+            "default": "cross-encoder"
+          },
+          "rerankApiKey": {
+            "type": "string",
+            "description": "API key for reranker service (enables cross-encoder reranking)"
+          },
+          "rerankModel": {
+            "type": "string",
+            "default": "jina-reranker-v3",
+            "description": "Reranker model name"
+          },
+          "rerankEndpoint": {
+            "type": "string",
+            "default": "https://api.jina.ai/v1/rerank",
+            "description": "Reranker API endpoint URL"
+          },
+          "rerankProvider": {
+            "type": "string",
+            "enum": ["jina", "siliconflow", "voyage", "pinecone"],
+            "default": "jina"
+          },
+          "candidatePoolSize": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 100,
+            "default": 20
+          },
+          "recencyHalfLifeDays": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 365,
+            "default": 14
+          },
+          "recencyWeight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.5,
+            "default": 0.1
+          },
+          "filterNoise": {
+            "type": "boolean",
+            "default": true
+          },
+          "lengthNormAnchor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5000,
+            "default": 500
+          },
+          "hardMinScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.40
+          },
+          "timeDecayHalfLifeDays": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 365,
+            "default": 60
+          }
+        }
+      },
+      "documents": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Document search configuration (QMD-backed)",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "dbPath": {
+            "type": "string",
+            "default": "~/.openclaw/memory/qmd",
+            "description": "Directory for QMD SQLite database"
+          },
+          "paths": {
+            "type": "array",
+            "description": "Workspace paths to index for document search",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Absolute path to the directory"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Collection name for this path"
+                },
+                "pattern": {
+                  "type": "string",
+                  "default": "**/*.md",
+                  "description": "Glob pattern for files to index"
+                }
+              },
+              "required": ["path", "name"]
+            }
+          },
+          "queryExpansion": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable LLM-based query expansion (requires a generation model)"
+          },
+          "reindexIntervalMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 30,
+            "description": "Interval in minutes for periodic background re-indexing. Set to 0 to disable."
+          }
+        }
+      },
+      "generation": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional generation model for query expansion (HyDE)",
+        "properties": {
+          "baseURL": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "sessionMemory": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "messageCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 15
+          }
+        }
+      },
+      "sessionIndexing": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Bulk-import past conversation sessions as searchable memories",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable session indexing"
+          },
+          "agent": {
+            "type": "string",
+            "default": "main",
+            "description": "Agent name to index sessions from"
+          },
+          "scope": {
+            "type": "string",
+            "default": "global",
+            "description": "Legacy — ignored. Indexed memories are stored with per-session scopes (session:<sessionKey>)."
+          },
+          "minImportance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.1,
+            "description": "Minimum importance threshold (0.0-1.0)"
+          },
+          "autoIndexOnce": {
+            "type": "boolean",
+            "default": true,
+            "description": "Only auto-index on first startup (skip if memories already exist)"
+          }
+        }
+      },
+      "scopes": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "type": "string",
+            "default": "global"
+          },
+          "definitions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "agentAccess": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "required": [
+      "embedding"
+    ]
+  },
+  "uiHints": {
+    "embedding.apiKey": {
+      "label": "API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-... or 'unused' for keyless endpoints",
+      "help": "API key for the embedding provider"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "Qwen3-Embedding-0.6B-Q8_0",
+      "help": "Embedding model name"
+    },
+    "embedding.baseURL": {
+      "label": "Base URL",
+      "placeholder": "http://localhost:8090/v1",
+      "help": "OpenAI-compatible embedding endpoint",
+      "advanced": true
+    },
+    "reranker.enabled": {
+      "label": "Enable Reranker",
+      "help": "Enable cross-encoder reranking for better result quality"
+    },
+    "reranker.endpoint": {
+      "label": "Reranker Endpoint",
+      "placeholder": "http://localhost:8090/v1/rerank",
+      "help": "Reranker API endpoint"
+    },
+    "documents.enabled": {
+      "label": "Enable Document Search",
+      "help": "Enable QMD-based workspace document search"
+    },
+    "documents.paths": {
+      "label": "Document Paths",
+      "help": "Workspace directories to index for document search"
+    }
+  }
+}

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memex Flow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e0e0e0; padding: 60px 20px; font-size: 18px; }
+  h1 { text-align: center; font-size: 2.4rem; color: #8b9cf7; margin-bottom: 50px; letter-spacing: 2px; text-transform: uppercase; }
+  .flow { max-width: 900px; margin: 0 auto 60px; }
+  .section-title { font-size: 1.1rem; text-transform: uppercase; letter-spacing: 3px; color: #555; margin-bottom: 20px; }
+
+  /* Nodes */
+  .node { position: relative; border-radius: 14px; padding: 24px 28px; margin-bottom: 6px; }
+  .node-label { font-size: 1.3rem; font-weight: 600; }
+  .node-detail { font-size: 1rem; color: #999; margin-top: 6px; }
+  .node-time { position: absolute; right: 24px; top: 24px; font-size: 1.1rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* Colors */
+  .user { background: #1a1a2e; border: 1px solid #2a2a4e; }
+  .user .node-label { color: #7ec8e3; }
+  .hook { background: #1a1e2e; border: 1px solid #2a3a5e; }
+  .hook .node-label { color: #8b9cf7; }
+  .hook .node-time { color: #6b7cf7; }
+  .llm { background: #1e1a2e; border: 1px solid #3a2a5e; }
+  .llm .node-label { color: #c49cf7; }
+  .tool { background: #162016; border: 1px solid #2a4a2a; }
+  .tool .node-label { color: #7ecf7e; }
+  .tool .node-time { color: #5eaf5e; }
+  .store { background: #1e1a16; border: 1px solid #4a3a2a; }
+  .store .node-label { color: #cfaa6e; }
+  .store .node-time { color: #af8a4e; }
+  .off { background: #111; border: 1px dashed #333; opacity: 0.5; }
+  .off .node-label { color: #666; }
+  .response { background: #0e1e1a; border: 1px solid #1a4a3a; }
+  .response .node-label { color: #5ecfaa; }
+
+  /* Connector */
+  .arrow { text-align: center; color: #333; font-size: 1.4rem; line-height: 1.2; margin: 0; padding: 4px 0; }
+
+  /* Tool list inside LLM */
+  .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .mini-tool { font-size: 1rem; background: #0a0f0a; border: 1px solid #1a2a1a; border-radius: 8px; padding: 10px 14px; color: #6eaf6e; }
+
+  /* Pipeline steps */
+  .pipeline { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .step { font-size: 0.95rem; background: #0a0a14; border: 1px solid #1a1a3a; border-radius: 6px; padding: 6px 12px; color: #7788bb; }
+  .step b { color: #99aadd; }
+
+  /* Badge */
+  .badge { display: inline-block; font-size: 0.9rem; padding: 3px 10px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
+  .badge-off { background: #2a1a1a; color: #aa5555; }
+  .badge-on { background: #1a2a1a; color: #55aa55; }
+
+  /* Separator */
+  hr { border: none; border-top: 1px solid #1a1a2a; margin: 40px 0 28px; }
+
+  /* Config summary */
+  .config { max-width: 900px; margin: 0 auto; }
+  .config-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; font-size: 1.1rem; border-bottom: 1px solid #111; }
+  .config-icon { width: 24px; text-align: center; font-size: 1.2rem; }
+  .config-name { flex: 1; color: #aaa; }
+  .config-val { color: #666; font-size: 0.95rem; }
+</style>
+</head>
+<body>
+
+<h1>Memex Per-Turn Flow</h1>
+
+<div class="flow">
+  <div class="node user">
+    <div class="node-label">User Message</div>
+  </div>
+  <p class="arrow">↓</p>
+
+  <div class="node hook">
+    <div class="node-label">Inject Memory Instruction</div>
+    <div class="node-time">0ms</div>
+    <div class="node-detail">"After each message, consider: did the user reveal a fact? Store it."</div>
+  </div>
+  <p class="arrow">↓</p>
+
+  <div class="node hook">
+    <div class="node-label">Auto-Recall <span class="badge badge-on">ON</span></div>
+    <div class="node-time">~150ms</div>
+    <div class="node-detail">Embed query → vec+BM25 search → inject context into prompt.</div>
+  </div>
+  <p class="arrow">↓</p>
+
+  <div class="node llm">
+    <div class="node-label">LLM Processes</div>
+    <div class="node-detail">System prompt nudges storing. Tools always available:</div>
+    <div class="tools-grid">
+      <div class="mini-tool">memory_recall</div>
+      <div class="mini-tool">memory_store (learn)</div>
+      <div class="mini-tool">memory_forget</div>
+    </div>
+  </div>
+  <p class="arrow">↓</p>
+
+  <div class="node response">
+    <div class="node-label">Response to User</div>
+  </div>
+  <p class="arrow">↓</p>
+
+  <div class="node off">
+    <div class="node-label">Auto-Capture <span class="badge badge-off">OFF</span></div>
+    <div class="node-time">~834ms</div>
+    <div class="node-detail">Sliding window → filter → embed → dedup → store. Fire-and-forget. Opt-in.</div>
+  </div>
+
+  <hr>
+  <p class="section-title">When LLM calls memory_store</p>
+
+  <div class="node tool">
+    <div class="node-label">memory_store</div>
+    <div class="node-time">~145ms</div>
+    <div class="pipeline">
+      <span class="step">noise filter</span>
+      <span class="step"><b>embed</b> 130ms</span>
+      <span class="step">dedup 0.98</span>
+      <span class="step">SQLite 15ms</span>
+    </div>
+    <div class="node-detail" style="margin-top:6px">Long text (&gt;1500c): chunk → batch embed → storeWithChunks</div>
+  </div>
+
+  <hr>
+  <p class="section-title">When LLM calls memory_recall</p>
+
+  <div class="node tool">
+    <div class="node-label">Unified Retriever</div>
+    <div class="node-time">~150ms</div>
+    <div class="pipeline">
+      <span class="step"><b>embed</b> 130ms</span>
+      <span class="step">vec 4ms</span>
+      <span class="step">BM25 &lt;1ms</span>
+      <span class="step">z-score fuse</span>
+      <span class="step">max-sim</span>
+      <span class="step">rank</span>
+    </div>
+    <div class="node-detail" style="margin-top:6px">Parallel: memories (vec+BM25) + documents (FTS+vec) → fuse → top-K</div>
+  </div>
+
+  <hr>
+  <p class="section-title">Default Config</p>
+
+  <div class="config">
+    <div class="config-row"><span class="config-icon">✅</span><span class="config-name">Memory instruction</span><span class="config-val">injected every turn, 0ms</span></div>
+    <div class="config-row"><span class="config-icon">✅</span><span class="config-name">Tools</span><span class="config-val">always available to LLM</span></div>
+    <div class="config-row"><span class="config-icon">✅</span><span class="config-name">Doc indexer</span><span class="config-val">background, every 30min</span></div>
+    <div class="config-row"><span class="config-icon">✅</span><span class="config-name">Auto-recall</span><span class="config-val">on by default, ~150ms</span></div>
+    <div class="config-row"><span class="config-icon">❌</span><span class="config-name">Auto-capture</span><span class="config-val">opt-in: autoCapture: true</span></div>
+  </div>
+
+  <p style="text-align:center; margin-top:30px; font-size:1rem; color:#444;">Zero added latency by default. LLM decides when to recall/store.</p>
+</div>
+
+</body>
+</html>
