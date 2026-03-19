@@ -84,7 +84,8 @@ interface PluginConfig {
     agentAccess?: Record<string, string[]>;
   };
   enableManagementTools?: boolean;
-  sessionMemory?: { enabled?: boolean; messageCount?: number };
+  /** @deprecated — do not use */
+  sessionMemory?: { enabled?: boolean };
   /** Shared reranker config */
   reranker?: {
     enabled?: boolean;
@@ -187,97 +188,6 @@ function sanitizeForContext(text: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 300);
-}
-
-// ============================================================================
-// Session Content Reading (for session-memory hook)
-// ============================================================================
-
-async function readSessionMessages(filePath: string, messageCount: number): Promise<string | null> {
-  try {
-    const lines = (await readFile(filePath, "utf-8")).trim().split("\n");
-    const messages: string[] = [];
-
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry.type === "message" && entry.message) {
-          const msg = entry.message;
-          const role = msg.role;
-          if ((role === "user" || role === "assistant") && msg.content) {
-            const text = Array.isArray(msg.content)
-              ? msg.content.find((c: any) => c.type === "text")?.text
-              : msg.content;
-            if (text && !text.startsWith("/") && !text.includes("<relevant-memories>")) {
-              messages.push(`${role}: ${text}`);
-            }
-          }
-        }
-      } catch { }
-    }
-
-    if (messages.length === 0) return null;
-    return messages.slice(-messageCount).join("\n");
-  } catch {
-    return null;
-  }
-}
-
-async function readSessionContentWithResetFallback(sessionFilePath: string, messageCount = 15): Promise<string | null> {
-  const primary = await readSessionMessages(sessionFilePath, messageCount);
-  if (primary) return primary;
-
-  // If /new already rotated the file, try .reset.* siblings
-  try {
-    const dir = dirname(sessionFilePath);
-    const resetPrefix = `${basename(sessionFilePath)}.reset.`;
-    const files = await readdir(dir);
-    const resetCandidates = files.filter(name => name.startsWith(resetPrefix)).sort();
-
-    if (resetCandidates.length > 0) {
-      const latestResetPath = join(dir, resetCandidates[resetCandidates.length - 1]);
-      return await readSessionMessages(latestResetPath, messageCount);
-    }
-  } catch { }
-
-  return primary;
-}
-
-function stripResetSuffix(fileName: string): string {
-  const resetIndex = fileName.indexOf(".reset.");
-  return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
-}
-
-async function findPreviousSessionFile(sessionsDir: string, currentSessionFile?: string, sessionId?: string): Promise<string | undefined> {
-  try {
-    const files = await readdir(sessionsDir);
-    const fileSet = new Set(files);
-
-    // Try recovering the non-reset base file
-    const baseFromReset = currentSessionFile ? stripResetSuffix(basename(currentSessionFile)) : undefined;
-    if (baseFromReset && fileSet.has(baseFromReset)) return join(sessionsDir, baseFromReset);
-
-    // Try canonical session ID file
-    const trimmedId = sessionId?.trim();
-    if (trimmedId) {
-      const canonicalFile = `${trimmedId}.jsonl`;
-      if (fileSet.has(canonicalFile)) return join(sessionsDir, canonicalFile);
-
-      // Try topic variants
-      const topicVariants = files
-        .filter(name => name.startsWith(`${trimmedId}-topic-`) && name.endsWith(".jsonl") && !name.includes(".reset."))
-        .sort().reverse();
-      if (topicVariants.length > 0) return join(sessionsDir, topicVariants[0]);
-    }
-
-    // Fallback to most recent non-reset JSONL
-    if (currentSessionFile) {
-      const nonReset = files
-        .filter(name => name.endsWith(".jsonl") && !name.includes(".reset."))
-        .sort().reverse();
-      if (nonReset.length > 0) return join(sessionsDir, nonReset[0]);
-    }
-  } catch { }
 }
 
 // ============================================================================
@@ -1023,92 +933,7 @@ const memoryUnifiedPlugin = {
     // Session Memory Hook (replaces built-in session-memory)
     // ========================================================================
 
-    if (config.sessionMemory?.enabled === true) {
-      // DISABLED by default (2026-07-09): session summaries stored in memory pollute
-      // retrieval quality. OpenClaw already saves .jsonl files to ~/.openclaw/agents/*/sessions/
-      // and memorySearch.sources: ["memory", "sessions"] can search them directly.
-      // Set sessionMemory.enabled: true in plugin config to re-enable.
-      const sessionMessageCount = config.sessionMemory?.messageCount ?? 15;
-
-      api.registerHook("command:new", async (event) => {
-        try {
-          api.logger.debug("session-memory: hook triggered for /new command");
-
-          const context = (event.context || {}) as Record<string, unknown>;
-          const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<string, unknown>;
-          const currentSessionId = sessionEntry.sessionId as string | undefined;
-          let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
-          const source = (context.commandSource as string) || "unknown";
-
-          // Resolve session file (handle reset rotation)
-          if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-            const searchDirs = new Set<string>();
-            if (currentSessionFile) searchDirs.add(dirname(currentSessionFile));
-
-            const workspaceDir = context.workspaceDir as string | undefined;
-            if (workspaceDir) searchDirs.add(join(workspaceDir, "sessions"));
-
-            for (const sessionsDir of searchDirs) {
-              const recovered = await findPreviousSessionFile(sessionsDir, currentSessionFile, currentSessionId);
-              if (recovered) {
-                currentSessionFile = recovered;
-                api.logger.debug(`session-memory: recovered session file: ${recovered}`);
-                break;
-              }
-            }
-          }
-
-          if (!currentSessionFile) {
-            api.logger.debug("session-memory: no session file found, skipping");
-            return;
-          }
-
-          // Read session content
-          const sessionContent = await readSessionContentWithResetFallback(currentSessionFile, sessionMessageCount);
-          if (!sessionContent) {
-            api.logger.debug("session-memory: no session content found, skipping");
-            return;
-          }
-
-          // Format as memory entry
-          const now = new Date(event.timestamp);
-          const dateStr = now.toISOString().split("T")[0];
-          const timeStr = now.toISOString().split("T")[1].split(".")[0];
-
-          const memoryText = [
-            `Session: ${dateStr} ${timeStr} UTC`,
-            `Session Key: ${event.sessionKey}`,
-            `Session ID: ${currentSessionId || "unknown"}`,
-            `Source: ${source}`,
-            "",
-            "Conversation Summary:",
-            sessionContent,
-          ].join("\n");
-
-          // Embed and store
-          const vector = await embedder.embedPassage(memoryText);
-          await store.store({
-            text: memoryText,
-            vector,
-            category: "fact",
-            scope: "global",
-            importance: 0.5,
-            metadata: JSON.stringify({
-              type: "session-summary",
-              sessionKey: event.sessionKey,
-              sessionId: currentSessionId || "unknown",
-              date: dateStr,
-            }),
-          });
-
-          api.logger.info(`session-memory: stored session summary for ${currentSessionId || "unknown"}`);
-        } catch (err) {
-          api.logger.warn(`session-memory: failed to save: ${String(err)}`);
-        }
-      });
-
-      api.logger.info("session-memory: hook registered for command:new");
-    }
+    // sessionMemory: deprecated and removed. Session summaries polluted retrieval quality.
 
     // ========================================================================
     // Auto-Backup (daily JSONL export)
