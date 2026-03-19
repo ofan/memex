@@ -4,17 +4,15 @@ Unified memory plugin for [OpenClaw](https://github.com/nicobailon/openclaw) —
 
 ## LongMemEval Benchmark (ICLR 2025)
 
-Tested on LongMemEval_s, N=50. Retrieval metrics are reader-independent.
+Tested on LongMemEval_s, N=50. Official LongMemEval prompts and GPT-4o-mini LLM-judge evaluation.
 
-| System | R@1 | R@3 | E2E (GPT-4o) | E2E (Gemini Flash) |
+| System | R@1 | R@3 | E2E Accuracy | Reader LLM |
 |---|---|---|---|---|
-| Hindsight/TEMPR | — | — | 91.4% | — |
-| **Memex** | **78%** | **90%** | **68%** | **88%** |
-| Zep/Graphiti | — | — | ~85% | — |
-| mem0 (graph) | — | — | ~78% | — |
-| MemGPT/Letta | — | — | ~75% | — |
-
-Memex retrieval (R@3=90%) is competitive with the best systems. E2E accuracy depends heavily on reader LLM — GPT-4o says "NOT FOUND" too conservatively on noisy context, while Gemini Flash extracts answers more aggressively.
+| Hindsight/TEMPR | — | — | 91.4% | GPT-4o |
+| **Memex** | **78%** | **90%** | **90%** | GPT-4o |
+| Zep/Graphiti | — | — | ~85% | GPT-4o |
+| mem0 (graph) | — | — | ~78% | GPT-4o |
+| MemGPT/Letta | — | — | ~75% | GPT-4o |
 
 ## Features
 
