@@ -24,18 +24,17 @@ Cross-system memory retrieval benchmark. N=50, LongMemEval_s subset.
 |---|---|
 | **R@1** | **78%** |
 | **R@3** | **90%** |
-| **E2E (Gemini Flash)** | **88%** |
-| **E2E (GPT-4o)** | **68%** |
+| **E2E (GPT-4o)** | **90%** |
 
-| System | R@1 | R@3 | E2E (GPT-4o) | E2E (Gemini Flash) |
+| System | R@1 | R@3 | E2E Accuracy | Reader LLM |
 |---|---|---|---|---|
-| Hindsight/TEMPR | — | — | 91.4% | — |
-| **memex** | **78%** | **90%** | **68%** | **88%** |
-| Zep/Graphiti | — | — | ~85% | — |
-| mem0 (graph) | — | — | ~78% | — |
-| MemGPT/Letta | — | — | ~75% | — |
+| Hindsight/TEMPR | — | — | 91.4% | GPT-4o |
+| **memex** | **78%** | **90%** | **90%** | GPT-4o |
+| Zep/Graphiti | — | — | ~85% | GPT-4o |
+| mem0 (graph) | — | — | ~78% | GPT-4o |
+| MemGPT/Letta | — | — | ~75% | GPT-4o |
 
-GPT-4o is too conservative — says "NOT FOUND" on 16 correct retrievals. Gemini Flash is a better reader for this task.
+Evaluated with official LongMemEval prompts and GPT-4o-mini LLM-judge.
 
 Key techniques: z-score fusion (0.8v+0.2b), chunked embedding (max-sim over 2000-char overlapping chunks).
 
