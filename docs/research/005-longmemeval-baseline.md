@@ -21,7 +21,10 @@
 |---|---|
 | **R@1** | **39/50 (78%)** |
 | **R@3** | **45/50 (90%)** |
-| **E2E** | **44/50 (88%)** |
+| **E2E (Gemini Flash)** | **44/50 (88%)** |
+| **E2E (GPT-4o)** | **34/50 (68%)** |
+
+GPT-4o says "NOT FOUND" on 16 queries where retrieval was correct (R@1 hit). It's too conservative with noisy context. Gemini Flash extracts answers more aggressively.
 
 ## Progression
 

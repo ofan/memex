@@ -24,15 +24,18 @@ Cross-system memory retrieval benchmark. N=50, LongMemEval_s subset.
 |---|---|
 | **R@1** | **78%** |
 | **R@3** | **90%** |
-| **E2E** | **88%** (Gemini 2.5 Flash reader) |
+| **E2E (Gemini Flash)** | **88%** |
+| **E2E (GPT-4o)** | **68%** |
 
-| System | E2E Accuracy | Reader LLM |
-|---|---|---|
-| Hindsight/TEMPR | 91.4% | GPT-4o |
-| **memex** | **88.0%** | Gemini 2.5 Flash |
-| Zep/Graphiti | ~85% | GPT-4o |
-| mem0 (graph) | ~78% | GPT-4o |
-| MemGPT/Letta | ~75% | GPT-4o |
+| System | R@1 | R@3 | E2E (GPT-4o) | E2E (Gemini Flash) |
+|---|---|---|---|---|
+| Hindsight/TEMPR | — | — | 91.4% | — |
+| **memex** | **78%** | **90%** | **68%** | **88%** |
+| Zep/Graphiti | — | — | ~85% | — |
+| mem0 (graph) | — | — | ~78% | — |
+| MemGPT/Letta | — | — | ~75% | — |
+
+GPT-4o is too conservative — says "NOT FOUND" on 16 correct retrievals. Gemini Flash is a better reader for this task.
 
 Key techniques: z-score fusion (0.8v+0.2b), chunked embedding (max-sim over 2000-char overlapping chunks).
 
