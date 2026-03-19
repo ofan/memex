@@ -1,7 +1,7 @@
 {
   "id": "memex",
   "name": "Memex",
-  "description": "Unified memory for OpenClaw: conversation memory + document search in a single SQLite database with shared embedding/reranker",
+  "description": "Unified memory for OpenClaw: conversation memory + document search in a single SQLite database",
   "version": "0.5.0",
   "kind": "memory",
   "configSchema": {
@@ -11,6 +11,7 @@
       "embedding": {
         "type": "object",
         "additionalProperties": false,
+        "description": "Embedding model config (required). Any OpenAI-compatible API.",
         "properties": {
           "provider": {
             "type": "string",
@@ -35,11 +36,11 @@
           },
           "taskPassage": {
             "type": "string",
-            "description": "Embedding task for passages/documents (provider-specific, e.g. Jina: retrieval.passage)"
+            "description": "Embedding task for passages (provider-specific, e.g. Jina: retrieval.passage)"
           },
           "normalized": {
             "type": "boolean",
-            "description": "Request normalized embeddings when supported by the provider (e.g. Jina v5)"
+            "description": "Request normalized embeddings when supported by the provider"
           },
           "chunking": {
             "type": "boolean",
@@ -51,320 +52,182 @@
           "apiKey"
         ]
       },
-      "reranker": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Shared reranker configuration used by both conversation memory and document search",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true
-          },
-          "endpoint": {
-            "type": "string",
-            "default": "https://api.jina.ai/v1/rerank"
-          },
-          "apiKey": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string",
-            "default": "jina-reranker-v3"
-          },
-          "provider": {
-            "type": "string",
-            "enum": ["jina", "siliconflow", "voyage", "pinecone"],
-            "default": "jina"
-          }
-        }
-      },
       "dbPath": {
-        "type": "string"
-      },
-      "enableManagementTools": {
-        "type": "boolean",
-        "default": false,
-        "description": "Enable memory_list and memory_stats management tools"
-      },
-      "autoCapture": {
-        "type": "boolean",
-        "default": true,
-        "description": "Automatically capture important information from conversations"
+        "type": "string",
+        "description": "Path to the SQLite database directory"
       },
       "autoRecall": {
         "type": "boolean",
-        "default": false
-      },
-      "autoRecallDocFilter": {
-        "type": "boolean",
         "default": true,
-        "description": "Filter QMD document results to the current agent's workspace during auto-recall. When false, auto-recall searches all collections. Explicit tool calls always search all collections."
+        "description": "Inject relevant memories into prompt before each turn (~150ms)"
       },
       "autoRecallMinLength": {
         "type": "integer",
         "minimum": 1,
         "maximum": 200,
         "default": 15,
-        "description": "Minimum prompt length (in characters) to trigger auto-recall. Default: 15 for English, 6 for CJK."
+        "description": "Minimum prompt length (chars) to trigger auto-recall"
+      },
+      "autoRecallDocFilter": {
+        "type": "boolean",
+        "default": true,
+        "description": "Filter document results to current agent's workspace during auto-recall"
+      },
+      "memoryInstructions": {
+        "type": "string",
+        "default": "on",
+        "description": "Set to 'off' to disable memory instruction injection"
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": false,
+        "description": "Heuristic auto-capture on agent_end. Off by default — LLM-driven storage via tools is preferred."
       },
       "captureAssistant": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true,
+        "description": "Include filtered assistant output in auto-capture windows"
       },
       "captureMinImportance": {
         "type": "number",
         "minimum": 0,
         "maximum": 1,
         "default": 0.5,
-        "description": "Minimum reranker importance score for auto-capture. Higher = fewer but higher-quality captures."
+        "description": "Minimum importance score for auto-capture"
       },
-      "memoryInstructions": {
-        "type": "string",
-        "enum": ["off", "default", "aggressive"],
-        "default": "default",
-        "description": "Controls the memory instruction prompt injected during auto-recall. 'off' disables it, 'default' gives a concise nudge, 'aggressive' encourages broader capture."
+      "enableManagementTools": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable memory_list and memory_stats tools"
       },
       "autoFixNoise": {
         "type": "boolean",
         "default": false,
-        "description": "Automatically purge detected noise entries from the store on startup. Useful after deploying improved noise filters."
-      },
-      "retrieval": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "mode": {
-            "type": "string",
-            "enum": ["hybrid", "vector"],
-            "default": "hybrid"
-          },
-          "vectorWeight": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "default": 0.7
-          },
-          "bm25Weight": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "default": 0.3
-          },
-          "minScore": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "default": 0.3
-          },
-          "rerank": {
-            "type": "string",
-            "enum": ["cross-encoder", "lightweight", "none"],
-            "default": "cross-encoder"
-          },
-          "rerankApiKey": {
-            "type": "string",
-            "description": "API key for reranker service (enables cross-encoder reranking)"
-          },
-          "rerankModel": {
-            "type": "string",
-            "default": "jina-reranker-v3",
-            "description": "Reranker model name"
-          },
-          "rerankEndpoint": {
-            "type": "string",
-            "default": "https://api.jina.ai/v1/rerank",
-            "description": "Reranker API endpoint URL"
-          },
-          "rerankProvider": {
-            "type": "string",
-            "enum": ["jina", "siliconflow", "voyage", "pinecone"],
-            "default": "jina"
-          },
-          "candidatePoolSize": {
-            "type": "integer",
-            "minimum": 10,
-            "maximum": 100,
-            "default": 20
-          },
-          "recencyHalfLifeDays": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 365,
-            "default": 14
-          },
-          "recencyWeight": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 0.5,
-            "default": 0.1
-          },
-          "filterNoise": {
-            "type": "boolean",
-            "default": true
-          },
-          "lengthNormAnchor": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 5000,
-            "default": 500
-          },
-          "hardMinScore": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "default": 0.40
-          },
-          "timeDecayHalfLifeDays": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 365,
-            "default": 60
-          }
-        }
+        "description": "Purge detected noise entries on startup"
       },
       "documents": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Document search configuration (QMD-backed)",
+        "description": "Document search config. Auto-discovers agent workspace markdown files.",
         "properties": {
           "enabled": {
             "type": "boolean",
             "default": true
           },
           "dbPath": {
-            "type": "string",
-            "default": "~/.openclaw/memory/qmd",
-            "description": "Directory for QMD SQLite database"
+            "type": "string"
           },
           "paths": {
             "type": "array",
-            "description": "Workspace paths to index for document search",
+            "description": "Additional document paths beyond auto-discovered agent workspaces",
             "items": {
               "type": "object",
               "properties": {
-                "path": {
-                  "type": "string",
-                  "description": "Absolute path to the directory"
-                },
-                "name": {
-                  "type": "string",
-                  "description": "Collection name for this path"
-                },
-                "pattern": {
-                  "type": "string",
-                  "default": "**/*.md",
-                  "description": "Glob pattern for files to index"
-                }
+                "path": { "type": "string" },
+                "name": { "type": "string" },
+                "pattern": { "type": "string", "default": "**/*.md" }
               },
               "required": ["path", "name"]
             }
-          },
-          "queryExpansion": {
-            "type": "boolean",
-            "default": false,
-            "description": "Enable LLM-based query expansion (requires a generation model)"
           },
           "reindexIntervalMinutes": {
             "type": "integer",
             "minimum": 0,
             "default": 30,
-            "description": "Interval in minutes for periodic background re-indexing. Set to 0 to disable."
+            "description": "Background re-index interval in minutes (0 = disabled)"
+          },
+          "queryExpansion": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable LLM-based query expansion (requires generation config)"
           }
+        }
+      },
+      "retrieval": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Advanced retrieval tuning. Defaults work well for most setups.",
+        "properties": {
+          "mode": { "type": "string", "enum": ["hybrid", "vector"], "default": "hybrid" },
+          "vectorWeight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.7 },
+          "bm25Weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
+          "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
+          "hardMinScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.40 },
+          "candidatePoolSize": { "type": "integer", "minimum": 10, "maximum": 100, "default": 20 },
+          "recencyHalfLifeDays": { "type": "number", "minimum": 0, "maximum": 365, "default": 14 },
+          "recencyWeight": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0.1 },
+          "timeDecayHalfLifeDays": { "type": "number", "minimum": 0, "maximum": 365, "default": 60 },
+          "lengthNormAnchor": { "type": "integer", "minimum": 0, "maximum": 5000, "default": 500 },
+          "filterNoise": { "type": "boolean", "default": true },
+          "rerank": { "type": "string", "enum": ["cross-encoder", "lightweight", "none"], "default": "none" },
+          "rerankApiKey": { "type": "string" },
+          "rerankModel": { "type": "string" },
+          "rerankEndpoint": { "type": "string" },
+          "rerankProvider": { "type": "string", "enum": ["jina", "siliconflow", "voyage", "pinecone"] }
+        }
+      },
+      "reranker": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional shared reranker (cross-encoder). Not needed — benchmark shows no E2E improvement.",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "endpoint": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" },
+          "provider": { "type": "string", "enum": ["jina", "siliconflow", "voyage", "pinecone"] }
         }
       },
       "generation": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Optional generation model for query expansion (HyDE)",
+        "description": "Optional generation model for query expansion and session import LLM extraction. Not needed for normal operation.",
         "properties": {
-          "baseURL": {
-            "type": "string"
-          },
-          "apiKey": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          }
-        }
-      },
-      "sessionMemory": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true
-          },
-          "messageCount": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100,
-            "default": 15
-          }
-        }
-      },
-      "sessionIndexing": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Bulk-import past conversation sessions as searchable memories",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": false,
-            "description": "Enable session indexing"
-          },
-          "agent": {
-            "type": "string",
-            "default": "main",
-            "description": "Agent name to index sessions from"
-          },
-          "scope": {
-            "type": "string",
-            "default": "global",
-            "description": "Legacy — ignored. Indexed memories are stored with per-session scopes (session:<sessionKey>)."
-          },
-          "minImportance": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "default": 0.1,
-            "description": "Minimum importance threshold (0.0-1.0)"
-          },
-          "autoIndexOnce": {
-            "type": "boolean",
-            "default": true,
-            "description": "Only auto-index on first startup (skip if memories already exist)"
-          }
+          "baseURL": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" }
         }
       },
       "scopes": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "default": {
-            "type": "string",
-            "default": "global"
-          },
+          "default": { "type": "string", "default": "global" },
           "definitions": {
             "type": "object",
             "additionalProperties": {
               "type": "object",
-              "properties": {
-                "description": {
-                  "type": "string"
-                }
-              }
+              "properties": { "description": { "type": "string" } }
             }
           },
           "agentAccess": {
             "type": "object",
             "additionalProperties": {
               "type": "array",
-              "items": {
-                "type": "string"
-              }
+              "items": { "type": "string" }
             }
           }
+        }
+      },
+      "sessionMemory": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Deprecated. Session summaries pollute retrieval quality.",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "messageCount": { "type": "integer", "minimum": 1, "maximum": 100, "default": 15 }
+        }
+      },
+      "sessionIndexing": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One-time bulk import of past sessions. Use CLI: memex import-sessions",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "agent": { "type": "string", "default": "main" },
+          "scope": { "type": "string", "description": "Legacy — ignored" },
+          "minImportance": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 },
+          "autoIndexOnce": { "type": "boolean", "default": true }
         }
       }
     },
@@ -376,36 +239,18 @@
     "embedding.apiKey": {
       "label": "API Key",
       "sensitive": true,
-      "placeholder": "sk-proj-... or 'unused' for keyless endpoints",
+      "placeholder": "sk-... or 'unused' for keyless endpoints",
       "help": "API key for the embedding provider"
     },
     "embedding.model": {
       "label": "Embedding Model",
-      "placeholder": "Qwen3-Embedding-0.6B-Q8_0",
+      "placeholder": "text-embedding-3-small",
       "help": "Embedding model name"
     },
     "embedding.baseURL": {
       "label": "Base URL",
-      "placeholder": "http://localhost:8090/v1",
-      "help": "OpenAI-compatible embedding endpoint",
-      "advanced": true
-    },
-    "reranker.enabled": {
-      "label": "Enable Reranker",
-      "help": "Enable cross-encoder reranking for better result quality"
-    },
-    "reranker.endpoint": {
-      "label": "Reranker Endpoint",
-      "placeholder": "http://localhost:8090/v1/rerank",
-      "help": "Reranker API endpoint"
-    },
-    "documents.enabled": {
-      "label": "Enable Document Search",
-      "help": "Enable QMD-based workspace document search"
-    },
-    "documents.paths": {
-      "label": "Document Paths",
-      "help": "Workspace directories to index for document search"
+      "placeholder": "https://api.openai.com/v1",
+      "help": "OpenAI-compatible embedding endpoint"
     }
   }
 }
