@@ -212,22 +212,9 @@
       "sessionMemory": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Deprecated. Session summaries pollute retrieval quality.",
+        "description": "Deprecated — do not use.",
         "properties": {
-          "enabled": { "type": "boolean", "default": false },
-          "messageCount": { "type": "integer", "minimum": 1, "maximum": 100, "default": 15 }
-        }
-      },
-      "sessionIndexing": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "One-time bulk import of past sessions. Use CLI: memex import-sessions",
-        "properties": {
-          "enabled": { "type": "boolean", "default": false },
-          "agent": { "type": "string", "default": "main" },
-          "scope": { "type": "string", "description": "Legacy — ignored" },
-          "minImportance": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 },
-          "autoIndexOnce": { "type": "boolean", "default": true }
+          "enabled": { "type": "boolean", "default": false }
         }
       }
     },
