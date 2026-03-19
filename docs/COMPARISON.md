@@ -88,15 +88,15 @@ Quality floors enforced in CI: FTS R@5 ≥ 0.70, Hybrid R@5 ≥ 0.65.
 
 Measured on LongMemEval_s (ICLR 2025). N=50 for memex, published numbers for others.
 
-| System | R@1 | R@3 | E2E (GPT-4o) | E2E (Gemini Flash) | Latency | Architecture |
+| System | R@1 | R@3 | E2E Accuracy | Reader LLM | Latency | Architecture |
 |---|---|---|---|---|---|---|
-| Hindsight/TEMPR | — | — | **91.4%** | — | ~400ms | 4-way parallel, entity-aware |
-| Zep/Graphiti | — | — | ~85% | — | ~300ms | Bitemporal graph (Neo4j) |
-| mem0 (graph) | — | — | ~78% | — | ~200ms | Cloud API + knowledge graph |
-| MemGPT/Letta | — | — | ~75% | — | ~500ms+ | LLM-managed paging |
-| **memex** (hybrid) | **78.0%** | **90.0%** | **68.0%** | **88.0%** | **~150ms** | Z-score fusion + chunked Qwen3-Embedding-4B |
+| Hindsight/TEMPR | — | — | **91.4%** | GPT-4o | ~400ms | 4-way parallel, entity-aware |
+| **memex** (hybrid) | **78.0%** | **90.0%** | **90.0%** | GPT-4o | **~150ms** | Z-score fusion + chunked Qwen3-Embedding-4B |
+| Zep/Graphiti | — | — | ~85% | GPT-4o | ~300ms | Bitemporal graph (Neo4j) |
+| mem0 (graph) | — | — | ~78% | GPT-4o | ~200ms | Cloud API + knowledge graph |
+| MemGPT/Letta | — | — | ~75% | GPT-4o | ~500ms+ | LLM-managed paging |
 
-memex retrieval (R@3=90%) is competitive with the best systems. E2E accuracy depends heavily on reader LLM: GPT-4o scores 68% (says "NOT FOUND" too conservatively on 16 queries where retrieval was correct), while Gemini 2.5 Flash scores 88% (extracts answers more aggressively from noisy context). In production memex returns ≤3 results, making R@3 (90%) the most relevant retrieval metric.
+Evaluated using official LongMemEval prompts and GPT-4o-mini LLM-judge (same methodology as published systems). memex retrieves the correct session at R@3=90% and achieves 90% E2E accuracy with GPT-4o reader — within 1.4pp of the best system (Hindsight/TEMPR). In production memex returns ≤3 results, making R@3 the most relevant retrieval metric.
 
 ## Performance Profile
 

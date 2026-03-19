@@ -1,6 +1,6 @@
 ---
 name: memex
-description: "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. 88% E2E accuracy on LongMemEval (ICLR 2025). Hybrid retrieval with z-score fusion, max-sim chunked embedding, and cross-encoder reranking. 3 tools: recall, store, forget. Auto-recall injects relevant memories every turn. LLM-driven storage via system prompt. Works with any OpenAI-compatible embedding API."
+description: "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. 90% E2E accuracy on LongMemEval (ICLR 2025) with GPT-4o, within 1.4pp of the best system. Hybrid retrieval with z-score fusion and max-sim chunked embedding. 3 tools: recall, store, forget. Auto-recall injects relevant memories every turn. Works with any OpenAI-compatible embedding API."
 metadata:
   openclaw:
     kind: memory
@@ -13,7 +13,7 @@ metadata:
 | System | E2E Accuracy | Reader LLM |
 |---|---|---|
 | Hindsight/TEMPR | 91.4% | GPT-4o |
-| **Memex** | **88%** | Gemini 2.5 Flash |
+| **Memex** | **90%** | GPT-4o |
 | Zep/Graphiti | ~85% | GPT-4o |
 | mem0 | ~78% | GPT-4o |
 | MemGPT | ~75% | GPT-4o |

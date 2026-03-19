@@ -45,6 +45,10 @@ const BM25_WEIGHT = parseFloat(process.env.BM25_WEIGHT || "0.2");
 const POOL_VEC = parseInt(process.env.POOL_VEC || "30");
 const POOL_BM25 = parseInt(process.env.POOL_BM25 || "20");
 const USE_CHUNKS = process.env.CHUNKS !== "0"; // default: use chunks if available
+const RERANK = process.env.RERANK === "1";
+const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "http://REDACTED_IP:8090/v1/rerank";
+const RERANK_MODEL = process.env.RERANK_MODEL || "bge-reranker-v2-m3-Q8_0";
+const RERANK_API_KEY = process.env.RERANK_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
 const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai";
 const LLM_MODEL = process.env.LLM_MODEL || "gemini-2.5-flash";
 const LLM_API_KEY = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || "";
@@ -168,7 +172,20 @@ function checkAnswerMatch(expected: string, generated: string): boolean {
 // Tier: Fast (pure computation, ~1s)
 // ============================================================================
 
-function runFast(cache: ResearchCache, chunkCache: ChunkScoreCache | null): ExampleResult[] {
+async function rerankCandidates(query: string, candidates: Array<{ sid: string; text: string }>): Promise<string[]> {
+  const resp = await fetch(RERANK_ENDPOINT, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${RERANK_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: RERANK_MODEL, query, documents: candidates.map(c => c.text.slice(0, 2000)) }),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!resp.ok) return candidates.map(c => c.sid); // fallback to original order
+  const data = await resp.json() as any;
+  const sorted = data.results.sort((a: any, b: any) => b.relevance_score - a.relevance_score);
+  return sorted.map((r: any) => candidates[r.index].sid);
+}
+
+async function runFast(cache: ResearchCache, chunkCache: ChunkScoreCache | null): Promise<ExampleResult[]> {
   const results: ExampleResult[] = [];
 
   // Build chunk score lookup: question_id -> session_id -> max_cosine
@@ -214,10 +231,30 @@ function runFast(cache: ResearchCache, chunkCache: ChunkScoreCache | null): Exam
 
     // Fuse
     const fused = applyFusion(vecMap, bm25Map, [...new Set([...vecPool, ...bm25Pool])]);
-    const ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]).map(([sid]) => sid);
+    let ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]).map(([sid]) => sid);
 
     // Build text lookup for E2E tier
     const textMap = new Map(ex.sessions.map(s => [s.session_id, s.text]));
+
+    // Rerank top candidates if enabled — use best chunk text, not full session
+    if (RERANK && chunkCache) {
+      const chunkEx = chunkCache.examples.find(e => e.question_id === ex.question_id);
+      const topCandidates = ranked.slice(0, 10).map(sid => {
+        const fullText = textMap.get(sid) || "";
+        // Find best chunk position for this session
+        const cs = chunkEx?.session_scores.find(s => s.session_id === sid);
+        if (cs && cs.best_chunk_pos > 0) {
+          // Use text around the best chunk
+          return { sid, text: fullText.slice(cs.best_chunk_pos, cs.best_chunk_pos + 2000) };
+        }
+        return { sid, text: fullText.slice(0, 2000) };
+      });
+      ranked = await rerankCandidates(ex.question, topCandidates);
+    } else if (RERANK) {
+      const topCandidates = ranked.slice(0, 10).map(sid => ({ sid, text: (textMap.get(sid) || "").slice(0, 2000) }));
+      ranked = await rerankCandidates(ex.question, topCandidates);
+    }
+
     const top10 = ranked.slice(0, 10);
 
     results.push({
@@ -432,8 +469,7 @@ async function addE2E(results: ExampleResult[]): Promise<void> {
               body: JSON.stringify({
                 model: LLM_MODEL,
                 messages: [
-                  { role: "system", content: "Answer the question based ONLY on the provided conversation history. Be concise — answer in one sentence or phrase. If the answer is not in the history, say 'NOT FOUND'." },
-                  { role: "user", content: `Conversation history:\n${context}\n\nQuestion: ${r.question}` },
+                  { role: "user", content: `I will give you several history chats between you and a user. Please answer the question based on the relevant chat history.\n\n\nHistory Chats:\n\n${context}\n\nQuestion: ${r.question}\nAnswer:` },
                 ],
                 max_tokens: 500, temperature: 0,
               }),
@@ -459,13 +495,53 @@ async function addE2E(results: ExampleResult[]): Promise<void> {
     }
 
     r.generated_answer = answer;
-    r.e2e_correct = checkAnswerMatch(r.expected_answer, answer);
     newResponses.push({ question_id: r.question_id, answer });
   }
 
   if (!cached) {
     writeFileSync(responsesPath, JSON.stringify(newResponses, null, 2));
     console.log(`Responses saved to ${responsesPath}`);
+  }
+
+  // Official LongMemEval LLM-judge evaluation
+  // Uses GPT-4o-mini as judge (same as official eval)
+  const JUDGE_KEY = process.env.OPENAI_API_KEY || LLM_API_KEY;
+  const JUDGE_MODEL = "gpt-4o-mini";
+  console.log(`Judging with ${JUDGE_MODEL}...`);
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (!r.generated_answer) { r.e2e_correct = false; continue; }
+
+    // Official judge prompt from LongMemEval evaluate_qa.py
+    const judgePrompt = `I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: ${r.question}\n\nCorrect Answer: ${r.expected_answer}\n\nModel Response: ${r.generated_answer}\n\nIs the model response correct? Answer yes or no only.`;
+
+    for (let attempt = 0; attempt <= 3; attempt++) {
+      try {
+        const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${JUDGE_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: JUDGE_MODEL,
+            messages: [{ role: "user", content: judgePrompt }],
+            max_tokens: 10, temperature: 0,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (resp.status === 429) {
+          await new Promise(resolve => setTimeout(resolve, 3000 * Math.pow(2, attempt)));
+          continue;
+        }
+        if (!resp.ok) { r.e2e_correct = false; break; }
+        const data = await resp.json() as any;
+        const verdict = (data.choices?.[0]?.message?.content || "").toLowerCase().trim();
+        r.e2e_correct = verdict.includes("yes");
+        break;
+      } catch {
+        if (attempt === 3) r.e2e_correct = false;
+        else await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
   }
 }
 
@@ -533,7 +609,7 @@ async function main() {
   let results: ExampleResult[];
 
   if (TIER === "fast" || TIER === "e2e") {
-    results = runFast(cache, chunkCache);
+    results = await runFast(cache, chunkCache);
   } else {
     results = await runPipeline(cache);
   }
