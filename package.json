@@ -1,0 +1,63 @@
+{
+  "name": "@ofan/memex",
+  "version": "0.5.0",
+  "description": "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database",
+  "type": "module",
+  "main": "index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ofan/memex.git"
+  },
+  "author": "ofan",
+  "homepage": "https://github.com/ofan/memex#readme",
+  "bugs": { "url": "https://github.com/ofan/memex/issues" },
+  "engines": { "node": ">=22" },
+  "files": [
+    "index.ts",
+    "src/",
+    "openclaw.plugin.json",
+    "tsconfig.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "memory",
+    "sqlite",
+    "qmd",
+    "vector-search",
+    "bm25",
+    "hybrid-retrieval",
+    "rerank",
+    "unified-recall",
+    "document-search"
+  ],
+  "license": "MIT",
+  "optionalDependencies": {
+    "@lancedb/lancedb": "^0.26.2"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "openai": "^6.21.0",
+    "better-sqlite3": "^11.0.0",
+    "fast-glob": "^3.3.0",
+    "picomatch": "^4.0.0",
+    "sqlite-vec": "^0.1.7-alpha.2",
+    "yaml": "^2.8.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --import jiti/register --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "commander": "^14.0.0",
+    "jiti": "^2.6.0",
+    "typescript": "^5.9.3"
+  }
+}
