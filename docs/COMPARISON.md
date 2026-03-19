@@ -88,15 +88,15 @@ Quality floors enforced in CI: FTS R@5 ≥ 0.70, Hybrid R@5 ≥ 0.65.
 
 Measured on LongMemEval_s (ICLR 2025). N=50 for memex, published numbers for others.
 
-| System | R@1 | R@3 | E2E Accuracy | Reader LLM | Latency | Architecture |
+| System | R@1 | R@3 | E2E (GPT-4o) | E2E (Gemini Flash) | Latency | Architecture |
 |---|---|---|---|---|---|---|
-| Hindsight/TEMPR | — | — | **91.4%** | GPT-4o | ~400ms | 4-way parallel, entity-aware |
-| Zep/Graphiti | — | — | ~85% | GPT-4o | ~300ms | Bitemporal graph (Neo4j) |
-| mem0 (graph) | — | — | ~78% | GPT-4o | ~200ms | Cloud API + knowledge graph |
-| MemGPT/Letta | — | — | ~75% | GPT-4o | ~500ms+ | LLM-managed paging |
-| **memex** (hybrid) | **78.0%** | **90.0%** | **88.0%** | Gemini 2.5 Flash | **~130ms** | Z-score fusion + chunked Qwen3-Embedding-4B |
+| Hindsight/TEMPR | — | — | **91.4%** | — | ~400ms | 4-way parallel, entity-aware |
+| Zep/Graphiti | — | — | ~85% | — | ~300ms | Bitemporal graph (Neo4j) |
+| mem0 (graph) | — | — | ~78% | — | ~200ms | Cloud API + knowledge graph |
+| MemGPT/Letta | — | — | ~75% | — | ~500ms+ | LLM-managed paging |
+| **memex** (hybrid) | **78.0%** | **90.0%** | **68.0%** | **88.0%** | **~150ms** | Z-score fusion + chunked Qwen3-Embedding-4B |
 
-memex retrieves the correct session at rank 1 78% of the time using z-score normalized fusion (0.8 vector + 0.2 BM25) with chunked embedding (max-sim over 2000-char overlapping chunks). E2E accuracy is 88% with Gemini 2.5 Flash as reader. In production memex returns ≤3 results, making R@3 (90%) the most relevant retrieval metric. Only 5 retrieval misses remain at R@3 — these are genuinely hard cases where the query and answer don't share strong semantic similarity even at the chunk level. Full evaluation tracked in issue #9.
+memex retrieval (R@3=90%) is competitive with the best systems. E2E accuracy depends heavily on reader LLM: GPT-4o scores 68% (says "NOT FOUND" too conservatively on 16 queries where retrieval was correct), while Gemini 2.5 Flash scores 88% (extracts answers more aggressively from noisy context). In production memex returns ≤3 results, making R@3 (90%) the most relevant retrieval metric.
 
 ## Performance Profile
 
