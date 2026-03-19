@@ -4,15 +4,22 @@ Unified memory plugin for [OpenClaw](https://github.com/nicobailon/openclaw) —
 
 ## LongMemEval Benchmark (ICLR 2025)
 
-Tested on LongMemEval_s, N=50. Official LongMemEval prompts and GPT-4o-mini LLM-judge evaluation.
+**90% end-to-end accuracy** — #2 overall, within 1.4pp of the best system.
 
-| System | R@1 | R@3 | E2E Accuracy | Reader LLM |
-|---|---|---|---|---|
-| Hindsight/TEMPR | — | — | 91.4% | GPT-4o |
-| **Memex** | **78%** | **90%** | **90%** | GPT-4o |
-| Zep/Graphiti | — | — | ~85% | GPT-4o |
-| mem0 (graph) | — | — | ~78% | GPT-4o |
-| MemGPT/Letta | — | — | ~75% | GPT-4o |
+Tested on LongMemEval_s (N=50) using official prompts and GPT-4o-mini LLM-judge.
+
+| System | E2E Accuracy | Reader LLM |
+|---|---|---|
+| Hindsight/TEMPR | 91.4% | GPT-4o |
+| **Memex** | **90.0%** | GPT-4o |
+| Zep/Graphiti | ~85% | GPT-4o |
+| mem0 (graph) | ~78% | GPT-4o |
+| MemGPT/Letta | ~75% | GPT-4o |
+
+**What the metrics mean:**
+- **R@1 (78%)** — correct session ranked #1. Strictest measure of retrieval precision.
+- **R@3 (90%)** — correct session in top 3. Reflects production behavior (LLM sees top 3).
+- **E2E (90%)** — can the system actually answer the question? This is what users experience. E2E can exceed R@1 because the LLM reads multiple retrieved sessions and may find the answer even when the "official" correct session isn't ranked first.
 
 ## Features
 
