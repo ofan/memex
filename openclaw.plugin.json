@@ -11,115 +11,32 @@
       "embedding": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Embedding model config (required). Any OpenAI-compatible API.",
+        "description": "Embedding model (required). Any OpenAI-compatible API.",
         "properties": {
-          "provider": {
-            "type": "string",
-            "const": "openai-compatible"
-          },
-          "apiKey": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "baseURL": {
-            "type": "string"
-          },
-          "dimensions": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "taskQuery": {
-            "type": "string",
-            "description": "Embedding task for queries (provider-specific, e.g. Jina: retrieval.query)"
-          },
-          "taskPassage": {
-            "type": "string",
-            "description": "Embedding task for passages (provider-specific, e.g. Jina: retrieval.passage)"
-          },
-          "normalized": {
-            "type": "boolean",
-            "description": "Request normalized embeddings when supported by the provider"
-          },
-          "chunking": {
-            "type": "boolean",
-            "default": true,
-            "description": "Enable automatic chunking for documents exceeding embedding context limits"
-          }
+          "provider": { "type": "string", "const": "openai-compatible" },
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" },
+          "baseURL": { "type": "string" },
+          "dimensions": { "type": "integer", "minimum": 1 },
+          "taskQuery": { "type": "string", "description": "Embedding task for queries (e.g. Jina: retrieval.query)" },
+          "taskPassage": { "type": "string", "description": "Embedding task for passages (e.g. Jina: retrieval.passage)" },
+          "normalized": { "type": "boolean" },
+          "chunking": { "type": "boolean", "default": true }
         },
-        "required": [
-          "apiKey"
-        ]
+        "required": ["apiKey"]
       },
-      "dbPath": {
-        "type": "string",
-        "description": "Path to the SQLite database directory"
-      },
-      "autoRecall": {
-        "type": "boolean",
-        "default": true,
-        "description": "Inject relevant memories into prompt before each turn (~150ms)"
-      },
-      "autoRecallMinLength": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 200,
-        "default": 15,
-        "description": "Minimum prompt length (chars) to trigger auto-recall"
-      },
-      "autoRecallDocFilter": {
-        "type": "boolean",
-        "default": true,
-        "description": "Filter document results to current agent's workspace during auto-recall"
-      },
-      "memoryInstructions": {
-        "type": "string",
-        "default": "on",
-        "description": "Set to 'off' to disable memory instruction injection"
-      },
-      "autoCapture": {
-        "type": "boolean",
-        "default": false,
-        "description": "Heuristic auto-capture on agent_end. Off by default — LLM-driven storage via tools is preferred."
-      },
-      "captureAssistant": {
-        "type": "boolean",
-        "default": true,
-        "description": "Include filtered assistant output in auto-capture windows"
-      },
-      "captureMinImportance": {
-        "type": "number",
-        "minimum": 0,
-        "maximum": 1,
-        "default": 0.5,
-        "description": "Minimum importance score for auto-capture"
-      },
-      "enableManagementTools": {
-        "type": "boolean",
-        "default": false,
-        "description": "Enable memory_list and memory_stats tools"
-      },
-      "autoFixNoise": {
-        "type": "boolean",
-        "default": false,
-        "description": "Purge detected noise entries on startup"
-      },
+      "dbPath": { "type": "string" },
+      "autoRecall": { "type": "boolean", "default": true, "description": "Inject relevant memories before each turn" },
+      "autoCapture": { "type": "boolean", "default": false, "description": "Heuristic auto-capture (off by default, LLM-driven storage preferred)" },
+      "memoryInstructions": { "type": "string", "default": "on", "description": "Set to 'off' to disable" },
       "documents": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Document search config. Auto-discovers agent workspace markdown files.",
+        "description": "Document search. Auto-discovers agent workspace markdown files.",
         "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true
-          },
-          "dbPath": {
-            "type": "string"
-          },
+          "enabled": { "type": "boolean", "default": true },
           "paths": {
             "type": "array",
-            "description": "Additional document paths beyond auto-discovered agent workspaces",
             "items": {
               "type": "object",
               "properties": {
@@ -130,23 +47,13 @@
               "required": ["path", "name"]
             }
           },
-          "reindexIntervalMinutes": {
-            "type": "integer",
-            "minimum": 0,
-            "default": 30,
-            "description": "Background re-index interval in minutes (0 = disabled)"
-          },
-          "queryExpansion": {
-            "type": "boolean",
-            "default": false,
-            "description": "Enable LLM-based query expansion (requires generation config)"
-          }
+          "reindexIntervalMinutes": { "type": "integer", "minimum": 0, "default": 30 }
         }
       },
       "retrieval": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Advanced retrieval tuning. Defaults work well for most setups.",
+        "description": "Advanced retrieval tuning. Defaults work well.",
         "properties": {
           "mode": { "type": "string", "enum": ["hybrid", "vector"], "default": "hybrid" },
           "vectorWeight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.7 },
@@ -154,22 +61,14 @@
           "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
           "hardMinScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.40 },
           "candidatePoolSize": { "type": "integer", "minimum": 10, "maximum": 100, "default": 20 },
-          "recencyHalfLifeDays": { "type": "number", "minimum": 0, "maximum": 365, "default": 14 },
-          "recencyWeight": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0.1 },
           "timeDecayHalfLifeDays": { "type": "number", "minimum": 0, "maximum": 365, "default": 60 },
-          "lengthNormAnchor": { "type": "integer", "minimum": 0, "maximum": 5000, "default": 500 },
-          "filterNoise": { "type": "boolean", "default": true },
-          "rerank": { "type": "string", "enum": ["cross-encoder", "lightweight", "none"], "default": "none" },
-          "rerankApiKey": { "type": "string" },
-          "rerankModel": { "type": "string" },
-          "rerankEndpoint": { "type": "string" },
-          "rerankProvider": { "type": "string", "enum": ["jina", "siliconflow", "voyage", "pinecone"] }
+          "filterNoise": { "type": "boolean", "default": true }
         }
       },
       "reranker": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Optional shared reranker (cross-encoder). Not needed — benchmark shows no E2E improvement.",
+        "description": "Optional cross-encoder reranker.",
         "properties": {
           "enabled": { "type": "boolean", "default": false },
           "endpoint": { "type": "string" },
@@ -181,7 +80,7 @@
       "generation": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Optional generation model for query expansion and session import LLM extraction. Not needed for normal operation.",
+        "description": "Optional LLM for query expansion and session import extraction.",
         "properties": {
           "baseURL": { "type": "string" },
           "apiKey": { "type": "string" },
@@ -191,53 +90,19 @@
       "scopes": {
         "type": "object",
         "additionalProperties": false,
+        "description": "Multi-agent scope isolation.",
         "properties": {
           "default": { "type": "string", "default": "global" },
-          "definitions": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object",
-              "properties": { "description": { "type": "string" } }
-            }
-          },
-          "agentAccess": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "array",
-              "items": { "type": "string" }
-            }
-          }
-        }
-      },
-      "sessionMemory": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Deprecated — do not use.",
-        "properties": {
-          "enabled": { "type": "boolean", "default": false }
+          "definitions": { "type": "object", "additionalProperties": { "type": "object", "properties": { "description": { "type": "string" } } } },
+          "agentAccess": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } }
         }
       }
     },
-    "required": [
-      "embedding"
-    ]
+    "required": ["embedding"]
   },
   "uiHints": {
-    "embedding.apiKey": {
-      "label": "API Key",
-      "sensitive": true,
-      "placeholder": "sk-... or 'unused' for keyless endpoints",
-      "help": "API key for the embedding provider"
-    },
-    "embedding.model": {
-      "label": "Embedding Model",
-      "placeholder": "text-embedding-3-small",
-      "help": "Embedding model name"
-    },
-    "embedding.baseURL": {
-      "label": "Base URL",
-      "placeholder": "https://api.openai.com/v1",
-      "help": "OpenAI-compatible embedding endpoint"
-    }
+    "embedding.apiKey": { "label": "API Key", "sensitive": true, "placeholder": "sk-..." },
+    "embedding.model": { "label": "Model", "placeholder": "text-embedding-3-small" },
+    "embedding.baseURL": { "label": "Base URL", "placeholder": "https://api.openai.com/v1" }
   }
 }
