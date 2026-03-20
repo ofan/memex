@@ -812,8 +812,8 @@ export function registerAllMemoryTools(
   // Document search (enabled when QMD is configured)
   registerDocumentSearchTool(api, context);
 
-  // Management tools (optional)
-  if (options.enableManagementTools) {
+  // Management tools (always enabled)
+  if (options.enableManagementTools !== false) {
     registerMemoryStatsTool(api, context);
     registerMemoryListTool(api, context);
   }
