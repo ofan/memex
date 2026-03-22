@@ -19,8 +19,7 @@ import { createScopeManager } from "./src/scopes.js";
 import { registerAllMemoryTools } from "./src/tools.js";
 import { shouldSkipRetrieval } from "./src/adaptive-retrieval.js";
 import { isNoise, isStructuralNoise, identifyNoiseEntries, extractHumanText } from "./src/noise-filter.js";
-import { buildCaptureWindows, type CaptureMessage } from "./src/capture-windows.js";
-import { heuristicImportance } from "./src/importance.js";
+// capture-windows.ts kept for potential future compaction-based extraction
 import { UnifiedRecall } from "./src/unified-recall.js";
 import { UnifiedRetriever } from "./src/unified-retriever.js";
 import type { DocumentCandidate } from "./src/unified-retriever.js";
@@ -51,14 +50,10 @@ interface PluginConfig {
     chunking?: boolean;
   };
   dbPath?: string;
-  autoCapture?: boolean;
   autoRecall?: boolean;
   autoRecallAgents?: string[];
   autoRecallLimit?: number;
   autoRecallMinLength?: number;
-  captureAssistant?: boolean;
-  /** Minimum reranker importance score to auto-capture (default: 0.5) */
-  captureMinImportance?: number;
   /** Set to 'off' to disable memory instruction injection */
   memoryInstructions?: "off" | string;
   /** Automatically purge noise entries from store on startup (default: false) */
@@ -642,7 +637,6 @@ const memoryUnifiedPlugin = {
           vectorDim,
           documentsEnabled: unifiedRecall.hasDocumentSearch,
           autoRecall: config.autoRecall !== false,
-          autoCapture: config.autoCapture === true,
           memoryCount,
         });
       })().catch(() => {});
@@ -837,136 +831,8 @@ const memoryUnifiedPlugin = {
       });
     }
 
-    // Auto-capture: heuristic memory extraction after agent ends.
-    // Disabled by default — LLM-driven store tool produces higher quality memories.
-    // Enable with autoCapture: true in plugin config.
-    if (config.autoCapture === true) {
-      api.on("agent_end", (event, ctx) => {
-        if (!event.success || !event.messages || event.messages.length === 0) {
-          return;
-        }
-
-        // Fire-and-forget: don't block the gateway
-        (async () => { try {
-          // Determine agent ID and default scope
-          const agentId = ctx?.agentId || "main";
-          const defaultScope = scopeManager.getDefaultScope(agentId);
-
-          // Extract messages for sliding window capture
-          const rawMessages: CaptureMessage[] = [];
-          for (const msg of event.messages) {
-            if (!msg || typeof msg !== "object") continue;
-            const msgObj = msg as Record<string, unknown>;
-            const role = msgObj.role as string;
-            if (role !== "user" && role !== "assistant") continue;
-
-            let text = "";
-            const content = msgObj.content;
-            if (typeof content === "string") {
-              text = content;
-            } else if (Array.isArray(content)) {
-              text = (content as any[])
-                .filter(b => b?.type === "text" && typeof b.text === "string")
-                .map(b => b.text)
-                .join("\n");
-            }
-            if (!text.trim()) continue;
-
-            // For user messages, extract from envelope
-            if (role === "user") {
-              const extracted = extractHumanText(text);
-              if (!extracted) continue;
-              text = extracted;
-            }
-
-            rawMessages.push({ role, text });
-          }
-
-          // Build sliding windows (maxChars < 2000 to avoid isStructuralNoise length filter)
-          const includeAssistant = config.captureAssistant !== false;
-          const windows = buildCaptureWindows(
-            includeAssistant ? rawMessages : rawMessages.filter(m => m.role === "user"),
-            { windowSize: 6, maxChars: 1800, stride: 3 },
-          );
-
-          // Filter noise + score importance
-          const candidates: string[] = [];
-          for (const w of windows) {
-            if (isStructuralNoise(w)) continue;
-            if (isNoise(w)) continue;
-            candidates.push(w);
-          }
-          if (candidates.length === 0) {
-            return;
-          }
-
-          // Score importance via heuristic keyword triggers
-          const scores = candidates.map(t => heuristicImportance(t));
-
-          const minImportance = config.captureMinImportance ?? 0.5;
-
-          // Store high-importance candidates (limit to 3 per conversation)
-          let stored = 0;
-          for (let i = 0; i < candidates.length && stored < 3; i++) {
-            if (scores[i] < minImportance) continue;
-
-            const text = candidates[i];
-            const category = detectCategory(text);
-
-            // Chunk long text for multi-vector embedding
-            const chunks = store.chunkForEmbedding(text);
-
-            let dupFound = false;
-            if (chunks.length === 1) {
-              const vector = await embedder.embedPassage(text);
-              const existing = await store.vectorSearch(vector, 1, 0.1, [defaultScope]);
-              if (existing.length > 0 && existing[0].score > 0.95) { dupFound = true; }
-              if (!dupFound) {
-                for (let attempt = 0; attempt < 2; attempt++) {
-                  try {
-                    await store.store({ text, vector, importance: scores[i], category, scope: defaultScope, metadata: JSON.stringify({ source: "auto-capture" }) });
-                    stored++;
-                    break;
-                  } catch (writeErr) {
-                    if (attempt === 0 && String(writeErr).includes("conflict")) {
-                      await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
-                    } else { throw writeErr; }
-                  }
-                }
-              }
-            } else {
-              const chunkVectors = await embedder.embedBatchPassage(chunks);
-              const existing = await store.vectorSearch(chunkVectors[0], 1, 0.1, [defaultScope]);
-              if (existing.length > 0 && existing[0].score > 0.95) { dupFound = true; }
-              if (!dupFound) {
-                for (let attempt = 0; attempt < 2; attempt++) {
-                  try {
-                    await store.storeWithChunks({ text, chunkVectors, importance: scores[i], category, scope: defaultScope, metadata: JSON.stringify({ source: "auto-capture" }) });
-                    stored++;
-                    break;
-                  } catch (writeErr) {
-                    if (attempt === 0 && String(writeErr).includes("conflict")) {
-                      await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
-                    } else { throw writeErr; }
-                  }
-                }
-              }
-            }
-            if (dupFound) continue;
-          }
-
-          if (stored > 0) {
-            track("store", { chunked: false, chunks: stored, source: "auto", category: "mixed" });
-            api.logger.info(
-              `memex: auto-captured ${stored} memories for agent ${agentId} in scope ${defaultScope}`
-            );
-          }
-        } catch (err) {
-          track("error", { operation: "auto_capture", message: String(err) });
-          api.logger.warn(`memex: capture failed: ${String(err)}`);
-        } })().catch(() => {}); // swallow unhandled rejection
-      });
-    }
+    // Auto-capture removed — LLM-driven storage via memory_store tool is preferred.
+    // Future: compaction-based extraction via session_before_compact hook.
 
     // ========================================================================
     // Session Memory Hook (replaces built-in session-memory)
@@ -1266,14 +1132,11 @@ function parsePluginConfig(value: unknown): PluginConfig {
       chunking: typeof embedding.chunking === "boolean" ? embedding.chunking : undefined,
     },
     dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : undefined,
-    autoCapture: cfg.autoCapture === true,
     autoRecall: cfg.autoRecall !== false,
     autoRecallAgents: Array.isArray(cfg.autoRecallAgents) ? cfg.autoRecallAgents as string[] : undefined,
     autoRecallLimit: parsePositiveInt(cfg.autoRecallLimit),
     autoRecallMinLength: parsePositiveInt(cfg.autoRecallMinLength),
     autoRecallDocFilter: cfg.autoRecallDocFilter !== false,
-    captureAssistant: cfg.captureAssistant !== false,
-    captureMinImportance: typeof cfg.captureMinImportance === "number" ? cfg.captureMinImportance : undefined,
     autoFixNoise: cfg.autoFixNoise === true,
     retrieval: typeof cfg.retrieval === "object" && cfg.retrieval !== null ? cfg.retrieval as any : undefined,
     scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes as any : undefined,
