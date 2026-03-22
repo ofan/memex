@@ -13,6 +13,7 @@ import type { MemoryScopeManager } from "./scopes.js";
 import type { Embedder } from "./embedder.js";
 import type { UnifiedRecall, UnifiedResult, ResultSource } from "./unified-recall.js";
 import type { UnifiedRetriever, UnifiedResult as UnifiedRetrieverResult } from "./unified-retriever.js";
+import type { TrackFn } from "./telemetry.js";
 
 // ============================================================================
 // Types
@@ -30,6 +31,8 @@ interface ToolContext {
   unifiedRecall?: UnifiedRecall;
   /** New unified retriever (replaces dual-pipeline when set) */
   unifiedRetriever?: UnifiedRetriever;
+  /** Telemetry track function (no-op when disabled) */
+  track?: TrackFn;
 }
 
 // ============================================================================
@@ -93,6 +96,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
         };
 
         try {
+          const t0 = Date.now();
           const safeLimit = clampInt(limit, 1, 20);
 
           // Determine accessible scopes
@@ -138,6 +142,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             const convCount = results.filter(r => r.source === "conversation").length;
             const docCount = results.filter(r => r.source === "document").length;
 
+            context.track?.("recall", { results: results.length, latency_ms: Date.now() - t0, source: "tool", mode: "unified-retriever" });
             return {
               content: [{ type: "text", text: `Found ${results.length} results (${convCount} memories, ${docCount} documents):\n\n${text}` }],
               details: {
@@ -188,6 +193,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             const convCount = results.filter(r => r.source === "conversation").length;
             const docCount = results.filter(r => r.source === "document").length;
 
+            context.track?.("recall", { results: results.length, latency_ms: Date.now() - t0, source: "tool", mode: "unified" });
             return {
               content: [{ type: "text", text: `Found ${results.length} results (${convCount} memories, ${docCount} documents):\n\n${text}` }],
               details: {
@@ -228,6 +234,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             })
             .join("\n");
 
+          context.track?.("recall", { results: results.length, latency_ms: Date.now() - t0, source: "tool", mode: "fallback" });
           return {
             content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
             details: {
@@ -239,6 +246,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             },
           };
         } catch (error) {
+          context.track?.("error", { operation: "recall", message: error instanceof Error ? error.message : String(error) });
           return {
             content: [{ type: "text", text: `Memory recall failed: ${error instanceof Error ? error.message : String(error)}` }],
             details: { error: "recall_failed", message: String(error) },
@@ -336,6 +344,7 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             });
           }
 
+          context.track?.("store", { chunked: chunks.length > 1, chunks: chunks.length, source: "tool", category });
           return {
             content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" in scope '${targetScope}'` }],
             details: {
@@ -347,6 +356,7 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             },
           };
         } catch (error) {
+          context.track?.("error", { operation: "store", message: error instanceof Error ? error.message : String(error) });
           return {
             content: [{ type: "text", text: `Memory storage failed: ${error instanceof Error ? error.message : String(error)}` }],
             details: { error: "store_failed", message: String(error) },
@@ -393,11 +403,13 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
           if (memoryId) {
             const deleted = await context.store.delete(memoryId, scopeFilter);
             if (deleted) {
+              context.track?.("forget", { found: true });
               return {
                 content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
                 details: { action: "deleted", id: memoryId },
               };
             } else {
+              context.track?.("forget", { found: false });
               return {
                 content: [{ type: "text", text: `Memory ${memoryId} not found or access denied.` }],
                 details: { error: "not_found", id: memoryId },
@@ -413,6 +425,7 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
             });
 
             if (results.length === 0) {
+              context.track?.("forget", { found: false });
               return {
                 content: [{ type: "text", text: "No matching memories found." }],
                 details: { found: 0, query },
@@ -422,6 +435,7 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
             if (results.length === 1 && results[0].score > 0.9) {
               const deleted = await context.store.delete(results[0].entry.id, scopeFilter);
               if (deleted) {
+                context.track?.("forget", { found: true });
                 return {
                   content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
                   details: { action: "deleted", id: results[0].entry.id },
@@ -452,6 +466,7 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
             details: { error: "missing_param" },
           };
         } catch (error) {
+          context.track?.("error", { operation: "forget", message: error instanceof Error ? error.message : String(error) });
           return {
             content: [{ type: "text", text: `Memory deletion failed: ${error instanceof Error ? error.message : String(error)}` }],
             details: { error: "delete_failed", message: String(error) },

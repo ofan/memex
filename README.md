@@ -19,6 +19,7 @@ Tested on LongMemEval_s (N=50) using official prompts and GPT-4o-mini LLM-judge.
 **What the metrics mean:**
 - **R@1 (78%)** — correct session ranked #1. Strictest measure of retrieval precision.
 - **R@3 (90%)** — correct session in top 3. Reflects production behavior (LLM sees top 3).
+- **R@5 (96%)** — correct session in top 5. Matches auto-recall window. Only 2 queries miss.
 - **E2E (90%)** — can the system actually answer the question? This is what users experience. E2E can exceed R@1 because the LLM reads multiple retrieved sessions and may find the answer even when the "official" correct session isn't ranked first.
 
 ## Features
