@@ -88,10 +88,10 @@ Quality floors enforced in CI: FTS R@5 ≥ 0.70, Hybrid R@5 ≥ 0.65.
 
 Measured on LongMemEval_s (ICLR 2025). N=50 for memex, published numbers for others.
 
-| System | R@1 | R@3 | E2E Accuracy | Reader LLM | Latency | Architecture |
-|---|---|---|---|---|---|---|
-| Hindsight/TEMPR | — | — | **91.4%** | GPT-4o | ~400ms | 4-way parallel, entity-aware |
-| **memex** (hybrid) | **78.0%** | **90.0%** | **90.0%** | GPT-4o | **~150ms** | Z-score fusion + chunked Qwen3-Embedding-4B |
+| System | R@1 | R@3 | R@5 | E2E Accuracy | Reader LLM | Latency | Architecture |
+|---|---|---|---|---|---|---|---|
+| Hindsight/TEMPR | — | — | — | **91.4%** | GPT-4o | ~400ms | 4-way parallel, entity-aware |
+| **memex** (hybrid) | **78%** | **90%** | **96%** | **90%** | GPT-4o | **~150ms** | Z-score fusion + chunked Qwen3-Embedding-4B |
 | Zep/Graphiti | — | — | ~85% | GPT-4o | ~300ms | Bitemporal graph (Neo4j) |
 | mem0 (graph) | — | — | ~78% | GPT-4o | ~200ms | Cloud API + knowledge graph |
 | MemGPT/Letta | — | — | ~75% | GPT-4o | ~500ms+ | LLM-managed paging |
