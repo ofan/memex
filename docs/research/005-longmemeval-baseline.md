@@ -21,6 +21,7 @@
 |---|---|
 | **R@1** | **39/50 (78%)** |
 | **R@3** | **45/50 (90%)** |
+| **R@5** | **48/50 (96%)** |
 | **E2E (GPT-4o)** | **45/50 (90%)** |
 
 Evaluated with official LongMemEval reader prompt and GPT-4o-mini LLM-judge.

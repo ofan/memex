@@ -32,6 +32,7 @@ import type { HttpLLMConfig } from "./src/llm.js";
 import { createStore as createSearchStore, hybridQuery as searchHybridQuery, searchFTS } from "./src/search.js";
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-indexer.js";
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
+import { initTelemetry } from "./src/telemetry.js";
 
 // ============================================================================
 // Configuration & Types
@@ -52,6 +53,8 @@ interface PluginConfig {
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
+  autoRecallAgents?: string[];
+  autoRecallLimit?: number;
   autoRecallMinLength?: number;
   captureAssistant?: boolean;
   /** Minimum reranker importance score to auto-capture (default: 0.5) */
@@ -208,8 +211,6 @@ function getPluginVersion(): string {
 // Plugin Definition
 // ============================================================================
 
-let _registered = false;
-
 const memoryUnifiedPlugin = {
   id: "memex",
   name: "Memex",
@@ -217,9 +218,6 @@ const memoryUnifiedPlugin = {
   kind: "memory" as const,
 
   register(api: OpenClawPluginApi) {
-    // Guard against double-registration (OpenClaw loads plugins twice in CLI mode)
-    if (_registered) return;
-    _registered = true;
 
     // Detect CLI mode: this plugin is loaded for ordinary `openclaw ...` commands too,
     // not just `openclaw cli ...` or `openclaw memex ...`.
@@ -373,6 +371,7 @@ const memoryUnifiedPlugin = {
     const retriever = createRetriever(store, embedder, retrievalConfig);
     const scopeManager = createScopeManager(config.scopes);
     const pluginVersion = getPluginVersion();
+    const track = initTelemetry(pluginVersion);
 
     // ========================================================================
     // Initialize document search (Document Search) — optional
@@ -622,6 +621,33 @@ const memoryUnifiedPlugin = {
       `memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
     );
 
+    // Config warnings
+    if (!isCli) {
+      const recallLimit = config.autoRecallLimit ?? 3;
+      if (recallLimit === 1 && !(config.reranker?.enabled)) {
+        api.logger.warn("memex: autoRecallLimit=1 without reranker — R@1=78%. Enable reranker for better precision.");
+      }
+      if (recallLimit > 5) {
+        api.logger.warn(`memex: autoRecallLimit=${recallLimit} — R@5=96% already. Higher values increase token usage with no accuracy gain.`);
+      }
+    }
+
+    // Track startup telemetry (fire-and-forget)
+    if (!isCli) {
+      (async () => {
+        let memoryCount = 0;
+        try { memoryCount = (await store.stats()).totalCount; } catch {}
+        track("plugin_registered", {
+          version: pluginVersion,
+          vectorDim,
+          documentsEnabled: unifiedRecall.hasDocumentSearch,
+          autoRecall: config.autoRecall !== false,
+          autoCapture: config.autoCapture === true,
+          memoryCount,
+        });
+      })().catch(() => {});
+    }
+
     // ========================================================================
     // Register Tools
     // ========================================================================
@@ -636,6 +662,7 @@ const memoryUnifiedPlugin = {
         agentId: undefined,
         unifiedRecall,
         unifiedRetriever,
+        track,
       },
       {
         enableManagementTools: config.enableManagementTools,
@@ -683,8 +710,15 @@ const memoryUnifiedPlugin = {
         }
 
         try {
+          const recallStart = Date.now();
           // Determine agent ID and accessible scopes
           const agentId = ctx?.agentId || "main";
+
+          // Skip recall for agents not in the whitelist (if configured)
+          const recallAgents = config.autoRecallAgents as string[] | undefined;
+          if (recallAgents && recallAgents.length > 0 && !recallAgents.includes(agentId)) {
+            return;
+          }
           // Spread to avoid mutating scope manager's internal array
           const accessibleScopes = [...scopeManager.getAccessibleScopes(agentId)];
 
@@ -712,7 +746,7 @@ const memoryUnifiedPlugin = {
               : undefined;
 
             const results = await unifiedRecall.recall(event.prompt, {
-              limit: 5,
+              limit: config.autoRecallLimit ?? 3,
               scopeFilter: accessibleScopes,
               collection: docCollection,
               recentlyRecalled,
@@ -738,7 +772,7 @@ const memoryUnifiedPlugin = {
           } else {
             const results = await retriever.retrieve({
               query: event.prompt,
-              limit: 3,
+              limit: config.autoRecallLimit ?? 3,
               scopeFilter: accessibleScopes,
               recentlyRecalled,
             });
@@ -768,10 +802,13 @@ const memoryUnifiedPlugin = {
             `memex: injecting ${resultCount} memories into context for agent ${agentId}`
           );
 
+          track("recall", { results: resultCount, latency_ms: Date.now() - recallStart, source: "auto" });
+
           return {
             prependContext: buildRecallContext(memoryContext),
           };
         } catch (err) {
+          track("error", { operation: "auto_recall", message: String(err) });
           api.logger.warn(`memex: recall failed: ${String(err)}`);
         }
       });
@@ -919,11 +956,13 @@ const memoryUnifiedPlugin = {
           }
 
           if (stored > 0) {
+            track("store", { chunked: false, chunks: stored, source: "auto", category: "mixed" });
             api.logger.info(
               `memex: auto-captured ${stored} memories for agent ${agentId} in scope ${defaultScope}`
             );
           }
         } catch (err) {
+          track("error", { operation: "auto_capture", message: String(err) });
           api.logger.warn(`memex: capture failed: ${String(err)}`);
         } })().catch(() => {}); // swallow unhandled rejection
       });
@@ -1229,6 +1268,8 @@ function parsePluginConfig(value: unknown): PluginConfig {
     dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : undefined,
     autoCapture: cfg.autoCapture === true,
     autoRecall: cfg.autoRecall !== false,
+    autoRecallAgents: Array.isArray(cfg.autoRecallAgents) ? cfg.autoRecallAgents as string[] : undefined,
+    autoRecallLimit: parsePositiveInt(cfg.autoRecallLimit),
     autoRecallMinLength: parsePositiveInt(cfg.autoRecallMinLength),
     autoRecallDocFilter: cfg.autoRecallDocFilter !== false,
     captureAssistant: cfg.captureAssistant !== false,
