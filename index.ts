@@ -4,7 +4,7 @@
  * with shared embedding/reranker and unified recall pipeline
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { homedir } from "node:os";
 import { join, dirname, basename, resolve } from "node:path";
 import { readFile, readdir, writeFile, mkdir } from "node:fs/promises";
