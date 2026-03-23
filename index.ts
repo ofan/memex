@@ -54,7 +54,10 @@ interface PluginConfig {
   autoRecallAgents?: string[];
   autoRecallLimit?: number;
   autoRecallMinLength?: number;
+  autoCapture?: boolean;
+  autoCaptureAgents?: string[];
   /** Set to 'off' to disable memory instruction injection */
+  /** @deprecated use autoCapture instead */
   memoryInstructions?: "off" | string;
   /** Automatically purge noise entries from store on startup (default: false) */
   autoFixNoise?: boolean;
@@ -625,6 +628,23 @@ const memoryUnifiedPlugin = {
       if (recallLimit > 5) {
         api.logger.warn(`memex: autoRecallLimit=${recallLimit} — R@5=96% already. Higher values increase token usage with no accuracy gain.`);
       }
+
+      // Validate agent lists
+      const knownAgents = agentList?.map(a => a.id).filter(Boolean) as string[] || [];
+      const validateAgentList = (list: string[] | undefined, name: string) => {
+        if (!list) return;
+        if (list.length === 0) {
+          api.logger.warn(`memex: ${name} is an empty array — no agents will be affected. Remove the setting or add agent IDs.`);
+        }
+        if (knownAgents.length > 0) {
+          const unknown = list.filter(a => !knownAgents.includes(a));
+          if (unknown.length > 0) {
+            api.logger.warn(`memex: ${name} contains unknown agent(s): ${unknown.join(", ")}. Known: ${knownAgents.join(", ")}`);
+          }
+        }
+      };
+      validateAgentList(config.autoRecallAgents as string[] | undefined, "autoRecallAgents");
+      validateAgentList(config.autoCaptureAgents as string[] | undefined, "autoCaptureAgents");
     }
 
     // Track startup telemetry (fire-and-forget)
@@ -808,9 +828,16 @@ const memoryUnifiedPlugin = {
       });
     }
 
-    // Memory instruction: inject into system prompt every turn
-    if (config.memoryInstructions !== "off") {
-      api.on("before_prompt_build", async () => {
+    // Auto-capture: inject memory instruction into system prompt
+    // Nudges the LLM to store facts via memory_store tool
+    // Supports both new `autoCapture` and legacy `memoryInstructions` config
+    if (config.autoCapture !== false && config.memoryInstructions !== "off") {
+      const captureAgents = config.autoCaptureAgents as string[] | undefined;
+      api.on("before_prompt_build", async (_event: any, ctx: any) => {
+        if (captureAgents && captureAgents.length > 0) {
+          const agentId = ctx?.agentId || "main";
+          if (!captureAgents.includes(agentId)) return;
+        }
         return {
           appendSystemContext: `<memory-instructions>\n${MEMORY_INSTRUCTION}\n</memory-instructions>`,
         };
@@ -1137,6 +1164,8 @@ function parsePluginConfig(value: unknown): PluginConfig {
     autoRecallLimit: parsePositiveInt(cfg.autoRecallLimit),
     autoRecallMinLength: parsePositiveInt(cfg.autoRecallMinLength),
     autoRecallDocFilter: cfg.autoRecallDocFilter !== false,
+    autoCapture: cfg.autoCapture !== false,
+    autoCaptureAgents: Array.isArray(cfg.autoCaptureAgents) ? cfg.autoCaptureAgents as string[] : undefined,
     autoFixNoise: cfg.autoFixNoise === true,
     retrieval: typeof cfg.retrieval === "object" && cfg.retrieval !== null ? cfg.retrieval as any : undefined,
     scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes as any : undefined,
