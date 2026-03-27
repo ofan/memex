@@ -1,6 +1,6 @@
 {
   "name": "@ofan/memex",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "description": "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database",
   "type": "module",
   "main": "index.ts",
@@ -29,18 +29,11 @@
     "openclaw-plugin",
     "memory",
     "sqlite",
-    "qmd",
     "vector-search",
     "bm25",
-    "hybrid-retrieval",
-    "rerank",
-    "unified-recall",
-    "document-search"
+    "hybrid-retrieval"
   ],
   "license": "MIT",
-  "optionalDependencies": {
-    "@lancedb/lancedb": "^0.26.2"
-  },
   "dependencies": {
     "@ofan/telemetry-relay-sdk": "^0.2.1",
     "@sinclair/typebox": "0.34.48",
@@ -50,6 +43,12 @@
     "picomatch": "^4.0.0",
     "sqlite-vec": "^0.1.7-alpha.2",
     "yaml": "^2.8.2"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.22"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": { "optional": true }
   },
   "openclaw": {
     "extensions": [
