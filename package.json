@@ -62,7 +62,7 @@
     "@types/better-sqlite3": "^7.6.0",
     "commander": "^14.0.0",
     "jiti": "^2.6.0",
-    "openclaw": "^2026.3.22",
+    "openclaw": "^2026.3.23",
     "typescript": "^5.9.3"
   }
 }
