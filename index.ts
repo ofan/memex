@@ -209,6 +209,8 @@ function getPluginVersion(): string {
 // Plugin Definition
 // ============================================================================
 
+let _telemetrySent = false;
+
 const memoryUnifiedPlugin = {
   id: "memex",
   name: "Memex",
@@ -647,8 +649,9 @@ const memoryUnifiedPlugin = {
       validateAgentList(config.autoCaptureAgents as string[] | undefined, "autoCaptureAgents");
     }
 
-    // Track startup telemetry (fire-and-forget)
-    if (!isCli) {
+    // Track startup telemetry once (not per-registration)
+    if (!isCli && !_telemetrySent) {
+      _telemetrySent = true;
       (async () => {
         let memoryCount = 0;
         try { memoryCount = (await store.stats()).totalCount; } catch {}
@@ -715,10 +718,11 @@ const memoryUnifiedPlugin = {
     const recentRecalls = new Map<string, string[][]>();
     const RECALL_HISTORY_TURNS = 5;
 
-    // Auto-recall: inject relevant memories before agent starts
+    // Auto-recall: inject relevant memories into prompt context
     // Default ON — LLM needs recalled context to make good memory decisions.
+    // Uses before_prompt_build (not legacy before_agent_start) per SDK recommendation.
     if (config.autoRecall !== false) {
-      api.on("before_agent_start", async (event, ctx) => {
+      api.on("before_prompt_build", async (event: any, ctx: any) => {
         if (!event.prompt || shouldSkipRetrieval(event.prompt, config.autoRecallMinLength)) {
           return;
         }
