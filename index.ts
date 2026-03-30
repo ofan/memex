@@ -36,6 +36,7 @@ import {
 } from "./src/search.js";
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-indexer.js";
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
+import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry } from "./src/telemetry.js";
 import { extractRecallQuery } from "./src/recall-query.js";
 import {
@@ -1173,6 +1174,10 @@ const memoryUnifiedPlugin = {
       }
       return [`<memory-instructions>\n${MEMORY_INSTRUCTION}\n</memory-instructions>`];
     });
+
+    if (typeof (api as any).registerMemoryFlushPlan === "function") {
+      (api as any).registerMemoryFlushPlan(buildMemoryFlushPlan);
+    }
 
     if (config.autoCapture !== false && config.memoryInstructions !== "off") {
       const captureAgents = config.autoCaptureAgents as string[] | undefined;
