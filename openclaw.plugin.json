@@ -2,7 +2,7 @@
   "id": "memex",
   "name": "Memex",
   "description": "Unified memory for OpenClaw: conversation memory + document search in a single SQLite database",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "kind": "memory",
   "configSchema": {
     "type": "object",
