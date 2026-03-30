@@ -1599,6 +1599,40 @@ describe("UnifiedRetriever — Task 5: Post-Merge Modifiers + Floor Guarantee", 
       assert.ok(results.length <= 3, `expected <= 3 results, got ${results.length}`);
     });
 
+    it("keeps the top conversation result even when many documents rank above it", async () => {
+      const { embedder } = createTrackingEmbedder();
+      const retriever = new UnifiedRetriever(store, null, embedder, {
+        minScore: 0.15,
+      });
+
+      const pool = [
+        ...Array.from({ length: 10 }, (_, i) => ({
+          id: `doc-${i}`,
+          text: `Document ${i}`,
+          rawScore: 0.95 - i * 0.01,
+          calibrated: 0.43 - i * 0.005,
+          score: 0.43 - i * 0.005,
+          source: "document" as const,
+          metadata: { type: "document", filepath: `qmd://main/doc-${i}.md` },
+        })),
+        {
+          id: "mem-private-repos",
+          text: "User prefers all new repos to be private by default.",
+          rawScore: 0.72,
+          calibrated: 0.39,
+          score: 0.39,
+          source: "conversation" as const,
+          metadata: { type: "conversation", category: "preference", scope: "global", importance: 0.9 },
+        },
+      ];
+
+      const results = (retriever as any).applySourceDiversity(pool, 10);
+      const ids = new Set(results.map((r: any) => r.id));
+
+      assert.equal(results.length, 10);
+      assert.ok(ids.has("mem-private-repos"), "top conversation result should survive the final limit");
+    });
+
     it("output has correct UnifiedResult shape", async () => {
       const { embedder } = createTrackingEmbedder();
 

@@ -18,6 +18,7 @@ async function registerPlugin() {
   const root = await mkdtemp(join(tmpdir(), "memex-plugin-health-"));
   const gatewayMethods = new Map<string, GatewayHandler>();
   let memoryPromptBuilder: ((params: { availableTools: Set<string> }) => string[]) | null = null;
+  let memoryFlushPlanResolver: ((params: { cfg?: Record<string, unknown>; nowMs?: number }) => Record<string, unknown> | null) | null = null;
   let memoryRuntime: {
     getMemorySearchManager: (params: Record<string, unknown>) => Promise<{ manager: Record<string, unknown> | null }>;
     resolveMemoryBackendConfig: (params: Record<string, unknown>) => { backend: string };
@@ -80,6 +81,11 @@ async function registerPlugin() {
     registerMemoryPromptSection(builder: (params: { availableTools: Set<string> }) => string[]) {
       memoryPromptBuilder = builder;
     },
+    registerMemoryFlushPlan(
+      resolver: (params: { cfg?: Record<string, unknown>; nowMs?: number }) => Record<string, unknown> | null,
+    ) {
+      memoryFlushPlanResolver = resolver;
+    },
     registerMemoryRuntime(runtime: typeof memoryRuntime) {
       memoryRuntime = runtime;
     },
@@ -87,7 +93,7 @@ async function registerPlugin() {
   };
 
   await plugin.register(api as any);
-  return { gatewayMethods, memoryPromptBuilder, memoryRuntime };
+  return { gatewayMethods, memoryPromptBuilder, memoryFlushPlanResolver, memoryRuntime };
 }
 
 async function callGatewayMethod(
@@ -125,6 +131,23 @@ describe("memex gateway health methods", () => {
     const section = memoryPromptBuilder!({ availableTools: new Set(["memory_store"]) });
     assert.ok(Array.isArray(section));
     assert.ok(section.length > 0);
+  });
+
+  it("registers a memory flush plan for OpenClaw compaction", async () => {
+    const { memoryFlushPlanResolver } = await registerPlugin();
+
+    assert.ok(memoryFlushPlanResolver);
+    const plan = memoryFlushPlanResolver!({
+      cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 12345 } } } },
+      nowMs: Date.UTC(2026, 2, 29, 12, 0, 0),
+    });
+
+    assert.ok(plan);
+    assert.equal(plan!.relativePath, "memory/2026-03-29.md");
+    assert.equal(plan!.reserveTokensFloor, 12345);
+    assert.match(String(plan!.prompt), /memory_store/);
+    assert.match(String(plan!.prompt), /NO_REPLY/);
+    assert.match(String(plan!.systemPrompt), /memory_store/);
   });
 
   it("registers a memory runtime for OpenClaw status integration", async () => {
