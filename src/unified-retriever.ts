@@ -524,20 +524,37 @@ export class UnifiedRetriever {
   private applySourceDiversity(pool: CalibratedResult[], limit: number): UnifiedResult[] {
     const topConv = pool.find(r => r.source === "conversation");
     const topDoc = pool.find(r => r.source === "document");
-    const protectedIds = new Set<string>();
-    if (topConv) protectedIds.add(topConv.id);
-    if (topDoc) protectedIds.add(topDoc.id);
+    const selected: CalibratedResult[] = [];
+    const selectedIds = new Set<string>();
 
-    return pool
-      .filter(r => r.score >= this.config.minScore || protectedIds.has(r.id))
-      .slice(0, limit)
+    const pushUnique = (result: CalibratedResult | undefined) => {
+      if (!result || selectedIds.has(result.id) || selected.length >= limit) return;
+      selected.push(result);
+      selectedIds.add(result.id);
+    };
+
+    // Diversity guarantee: reserve space for the best conversation and document hit
+    // before filling the remaining slots by score.
+    pushUnique(topConv);
+    pushUnique(topDoc);
+
+    for (const result of pool) {
+      if (selected.length >= limit) break;
+      if (selectedIds.has(result.id)) continue;
+      if (result.score < this.config.minScore) continue;
+      selected.push(result);
+      selectedIds.add(result.id);
+    }
+
+    return selected
+      .sort((a, b) => b.score - a.score)
       .map(r => ({
-        id: r.id,
-        text: r.text,
-        score: r.score,
-        rawScore: r.rawScore,
-        source: r.source,
-        metadata: r.metadata,
-      }));
+      id: r.id,
+      text: r.text,
+      score: r.score,
+      rawScore: r.rawScore,
+      source: r.source,
+      metadata: r.metadata,
+    }));
   }
 }
