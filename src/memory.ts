@@ -287,6 +287,15 @@ export class MemoryStore {
     return true; // FTS5 is always available with SQLite
   }
 
+  get hasVectorSupport(): boolean {
+    return this._sqliteVecAvailable;
+  }
+
+  get totalMemories(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) as c FROM memories`).get() as { c: number };
+    return row.c;
+  }
+
   async store(entry: Omit<MemoryEntry, "id" | "timestamp">): Promise<MemoryEntry> {
     const fullEntry: MemoryEntry = {
       ...entry,
