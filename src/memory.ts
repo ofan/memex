@@ -5,7 +5,7 @@
  * Shares the same database schema as QMD document search (SQLite consolidation).
  */
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { existsSync, accessSync, constants, mkdirSync, realpathSync, lstatSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { openDatabase, loadSqliteVec, type Database } from "./db.js";
@@ -208,6 +208,14 @@ export class MemoryStore {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp DESC)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)`);
 
+    // Dreaming schema: text_hash for dedup, recall tracking for deep sweep
+    this.migrateAddColumn("memories", "text_hash", "TEXT");
+    this.migrateAddColumn("memories", "recall_count", "INTEGER DEFAULT 0");
+    this.migrateAddColumn("memories", "last_recalled_at", "INTEGER");
+    try {
+      this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
+    } catch { /* index may already exist */ }
+
     // FTS5 for BM25 search
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -257,6 +265,14 @@ export class MemoryStore {
     }
   }
 
+  /** Add a column if it doesn't exist (idempotent migration). */
+  private migrateAddColumn(table: string, column: string, type: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some(c => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+
   private ensureVecTable(): void {
     if (!this._sqliteVecAvailable) return;
 
@@ -296,29 +312,65 @@ export class MemoryStore {
     return row.c;
   }
 
-  async store(entry: Omit<MemoryEntry, "id" | "timestamp">): Promise<MemoryEntry> {
+  async store(entry: Omit<MemoryEntry, "id" | "timestamp">): Promise<MemoryEntry | null> {
+    const text = entry.text?.trim();
+    // Guard: reject single-turn conversation fragments (raw dialogue dumps).
+    // Multi-turn windows from auto-capture contain multiple [user]/[assistant] lines — allow those.
+    if (!text) return null;
+    const isConversationFragment = /^\[(user|assistant)\]/i.test(text)
+      && (text.match(/^\[/gm) || []).length <= 2; // single-turn: at most 2 role tags
+    if (isConversationFragment) return null;
+
+    // Guard: reject exact text duplicates
+    const textHash = createHash("sha256").update(text).digest("hex");
+    const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+    if (existing) return null;
+
     const fullEntry: MemoryEntry = {
       ...entry,
+      text,
       id: randomUUID(),
       timestamp: Date.now(),
       metadata: entry.metadata || "{}",
     };
 
-    this.insertMemory(fullEntry);
+    this.insertMemory(fullEntry, textHash);
     return fullEntry;
   }
 
   async bulkStore(entries: Omit<MemoryEntry, "id" | "timestamp">[]): Promise<MemoryEntry[]> {
-    const fullEntries: MemoryEntry[] = entries.map((entry) => ({
+    // Filter: reject conversation fragments and dedup by text hash
+    const seenHashes = new Set<string>();
+    const filtered: Array<{ entry: Omit<MemoryEntry, "id" | "timestamp">; textHash: string }> = [];
+
+    for (const entry of entries) {
+      const text = entry.text?.trim();
+      if (!text) continue;
+      const isFragment = /^\[(user|assistant)\]/i.test(text)
+        && (text.match(/^\[/gm) || []).length <= 2;
+      if (isFragment) continue;
+      const textHash = createHash("sha256").update(text).digest("hex");
+      if (seenHashes.has(textHash)) continue;
+      // Check DB for existing hash
+      const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+      if (existing) continue;
+      seenHashes.add(textHash);
+      filtered.push({ entry: { ...entry, text }, textHash });
+    }
+
+    if (filtered.length === 0) return [];
+
+    const fullEntries: MemoryEntry[] = filtered.map(({ entry }) => ({
       ...entry,
       id: randomUUID(),
       timestamp: Date.now(),
       metadata: entry.metadata || "{}",
     }));
+    const hashes = filtered.map(f => f.textHash);
 
     const insertMem = this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this._sqliteVecAvailable
@@ -331,10 +383,11 @@ export class MemoryStore {
 
     const tx = (this.db as any).transaction(() => {
       const now = new Date().toISOString();
-      for (const entry of fullEntries) {
+      for (let i = 0; i < fullEntries.length; i++) {
+        const entry = fullEntries[i];
         insertMem.run(
           entry.id, entry.text, entry.category, entry.scope,
-          entry.importance, entry.timestamp, entry.metadata
+          entry.importance, entry.timestamp, entry.metadata, hashes[i]
         );
         if (insertVec) {
           insertVec.run(`mem_${entry.id}`, new Float32Array(entry.vector));
@@ -1006,13 +1059,14 @@ export class MemoryStore {
   // Private helpers
   // ========================================================================
 
-  private insertMemory(entry: MemoryEntry): void {
+  private insertMemory(entry: MemoryEntry, textHash?: string): void {
+    const hash = textHash || createHash("sha256").update(entry.text.trim()).digest("hex");
     this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id, entry.text, entry.category, entry.scope,
-      entry.importance, entry.timestamp, entry.metadata
+      entry.importance, entry.timestamp, entry.metadata, hash
     );
 
     // Insert vector
