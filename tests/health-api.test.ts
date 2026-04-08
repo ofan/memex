@@ -92,6 +92,8 @@ async function registerPlugin() {
     on() {},
   };
 
+  // Reset module-level registration guard (may be set by other test files)
+  (plugin as any)._resetRegistration();
   await plugin.register(api as any);
   return { gatewayMethods, memoryPromptBuilder, memoryFlushPlanResolver, memoryRuntime };
 }
