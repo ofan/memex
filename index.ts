@@ -38,6 +38,7 @@ import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-in
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry, Stopwatch } from "./src/telemetry.js";
+import { runDreamCycle } from "./src/dreaming.js";
 import { extractRecallQuery } from "./src/recall-query.js";
 import {
   aggregateHealthStatus,
@@ -1485,8 +1486,8 @@ const memoryUnifiedPlugin = {
           };
 
           const runDream = async () => {
+            api.logger.info("memex: starting dream cycle...");
             try {
-              const { runDreamCycle } = await import("./src/dreaming.js");
               const result = await runDreamCycle(getStore(), dreamConfig, track);
               const summary = [
                 result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved})` : null,
