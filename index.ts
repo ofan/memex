@@ -747,7 +747,7 @@ const memoryUnifiedPlugin = {
               const backlog = getEmbeddingBacklog(searchDb);
               if (backlog > 0) {
                 if (!silent) api.logger.info(`memex: embedding ${backlog} document hashes...`);
-                const embedResult = await embedDocuments(searchDb, searchDims);
+                const embedResult = await embedDocuments(searchDb, searchDims, embedder);
                 if (!silent) {
                   api.logger.info(
                     `memex: embedded ${embedResult.embedded} docs (${embedResult.chunks} chunks)${embedResult.errors.length > 0 ? `, ${embedResult.errors.length} errors` : ""}`
@@ -1557,7 +1557,7 @@ const memoryUnifiedPlugin = {
               const pending = getEmbeddingBacklog(db);
               if (pending > 0) {
                 api.logger.info(`memex: document recovery — ${pending} docs indexed but not embedded, embedding now...`);
-                const result = await embedDocuments(db, searchDims);
+                const result = await embedDocuments(db, searchDims, embedder);
                 api.logger.info(
                   `memex: document recovery — embedded ${result.embedded} docs (${result.chunks} chunks)` +
                   (result.errors.length > 0 ? `, ${result.errors.length} errors` : "")
