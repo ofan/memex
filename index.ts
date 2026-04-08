@@ -38,9 +38,23 @@ import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-in
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry, Stopwatch } from "./src/telemetry.js";
-import * as _dreamingMod from "./src/dreaming.js";
-const _dreaming = (_dreamingMod as any).default || _dreamingMod;
-const runDreamCycle: typeof import("./src/dreaming.js").runDreamCycle = _dreaming.runDreamCycle;
+// Dreaming module — lazy-loaded to handle CJS/ESM interop across bundlers
+let _runDreamCycle: ((store: any, config: any, track?: any) => Promise<any>) | null = null;
+function getDreamCycle() {
+  if (!_runDreamCycle) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require("./src/dreaming.js");
+      _runDreamCycle = mod.runDreamCycle || mod.default?.runDreamCycle;
+    } catch {
+      try {
+        const mod = require("./src/dreaming.ts");
+        _runDreamCycle = mod.runDreamCycle || mod.default?.runDreamCycle;
+      } catch { /* dreaming not available */ }
+    }
+  }
+  return _runDreamCycle;
+}
 import { extractRecallQuery } from "./src/recall-query.js";
 import {
   aggregateHealthStatus,
@@ -1490,7 +1504,12 @@ const memoryUnifiedPlugin = {
           const runDream = async () => {
             api.logger.info("memex: starting dream cycle...");
             try {
-              const result = await runDreamCycle(getStore(), dreamConfig, track);
+              const dreamFn = getDreamCycle();
+              if (!dreamFn) {
+                api.logger.warn("memex: dreaming module not available");
+                return;
+              }
+              const result = await dreamFn(getStore(), dreamConfig, track);
               const summary = [
                 result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved})` : null,
                 result.deep ? `deep(rescored=${result.deep.rescored}, decayed=${result.deep.decayed})` : null,
