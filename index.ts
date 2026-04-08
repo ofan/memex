@@ -1064,6 +1064,43 @@ const memoryUnifiedPlugin = {
     if (!_registered) {
     _registered = true;
 
+    // Dreaming: periodic memory consolidation (runs once, timer-based)
+    if (!isCli && config.dreaming?.enabled !== false) {
+      const dreamLogPath = join(dirname(unifiedDbFile), "memex.log");
+      const dreamIntervalMs = 24 * 60 * 60 * 1000;
+      const dreamCfg = {
+        enabled: true,
+        phases: {
+          light: config.dreaming?.phases?.light !== false,
+          deep: config.dreaming?.phases?.deep !== false,
+          reflection: config.dreaming?.phases?.reflection === true,
+        },
+        logPath: dreamLogPath,
+      };
+
+      const doDream = async () => {
+        try {
+          api.logger.info("memex: starting dream cycle...");
+          const dreamFn = getDreamCycle();
+          if (!dreamFn) {
+            api.logger.warn("memex: dreaming module not available");
+            return;
+          }
+          const result = await dreamFn(getStore(), dreamCfg, track);
+          const summary = [
+            result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved})` : null,
+            result.deep ? `deep(rescored=${result.deep.rescored}, decayed=${result.deep.decayed})` : null,
+          ].filter(Boolean).join(" ");
+          api.logger.info(`memex dream: ${summary} [${result.duration_ms}ms]`);
+        } catch (err) {
+          api.logger.warn(`memex dream failed: ${String(err)}`);
+        }
+      };
+
+      setTimeout(() => void doDream(), 5 * 60_000);
+      setInterval(() => void doDream(), dreamIntervalMs);
+    }
+
     // Cross-turn recall tracking: avoid returning the same memories every turn
     // Maps agentId → last N turns of recalled memory IDs
     const recentRecalls = new Map<string, string[][]>();
@@ -1494,43 +1531,8 @@ const memoryUnifiedPlugin = {
         setTimeout(() => void runBackup(), 60_000); // 1 min after start
         backupTimer = setInterval(() => void runBackup(), BACKUP_INTERVAL_MS);
 
-        // Dreaming: periodic memory consolidation
-        if (config.dreaming?.enabled !== false) {
-          const dreamLogPath = join(dirname(unifiedDbFile), "memex.log");
-          const dreamIntervalMs = 24 * 60 * 60 * 1000; // daily
-          const dreamConfig = {
-            enabled: true,
-            phases: {
-              light: config.dreaming?.phases?.light !== false,
-              deep: config.dreaming?.phases?.deep !== false,
-              reflection: config.dreaming?.phases?.reflection === true,
-            },
-            logPath: dreamLogPath,
-          };
-
-          const runDream = async () => {
-            api.logger.info("memex: starting dream cycle...");
-            try {
-              const dreamFn = getDreamCycle();
-              if (!dreamFn) {
-                api.logger.warn("memex: dreaming module not available");
-                return;
-              }
-              const result = await dreamFn(getStore(), dreamConfig, track);
-              const summary = [
-                result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved})` : null,
-                result.deep ? `deep(rescored=${result.deep.rescored}, decayed=${result.deep.decayed})` : null,
-              ].filter(Boolean).join(" ");
-              api.logger.info(`memex dream: ${summary} [${result.duration_ms}ms]`);
-            } catch (err) {
-              api.logger.warn(`memex dream failed: ${String(err)}`);
-            }
-          };
-
-          // First dream 5 min after startup (after backup + indexing settle)
-          setTimeout(() => void runDream(), 5 * 60_000);
-          setInterval(() => void runDream(), dreamIntervalMs);
-        }
+        // Dreaming timer moved to register() body (inside _registered guard)
+        // because service.start() is not reliably called by OpenClaw.
 
         // Auto-index sessions on startup (if configured)
         if (config.sessionIndexing?.enabled) {
