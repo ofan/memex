@@ -78,7 +78,21 @@
 
 ## Test Coverage
 
-581 tests, all passing. Key new test files:
+595 tests, all passing.
+
+## Live Deployment Results
+
+First dream cycle on production DB (2,137 entries):
+- **10 duplicates removed** (text-level dedup)
+- **3 noise entries removed** (greetings, fillers)
+- **21 conversation fragments removed** (single-turn `[user]`/`[assistant]`)
+- **Pool: 2,137 → 2,103** (34 entries cleaned)
+- **Duration: 108ms**
+- **Second run: 0 changes, 29ms** (idempotent)
+
+Note: discovered Node 25.8.1→25.9.0 upgrade wiped global npm modules, causing gateway crash loop (unrelated to memex). Fixed by reinstalling openclaw globally.
+
+Key new test files:
 - `tests/intake-guards.test.ts` — 19 tests (dedup, fragments, schema, recall tracking)
 - `tests/registration.test.ts` — 1 test (5x registration idempotency)
 - `tests/telemetry.test.ts` — 5 tests (Stopwatch)
