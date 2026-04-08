@@ -1470,6 +1470,39 @@ const memoryUnifiedPlugin = {
         setTimeout(() => void runBackup(), 60_000); // 1 min after start
         backupTimer = setInterval(() => void runBackup(), BACKUP_INTERVAL_MS);
 
+        // Dreaming: periodic memory consolidation
+        if (config.dreaming?.enabled !== false) {
+          const dreamLogPath = join(dirname(unifiedDbFile), "memex.log");
+          const dreamIntervalMs = 24 * 60 * 60 * 1000; // daily
+          const dreamConfig = {
+            enabled: true,
+            phases: {
+              light: config.dreaming?.phases?.light !== false,
+              deep: config.dreaming?.phases?.deep !== false,
+              reflection: config.dreaming?.phases?.reflection === true,
+            },
+            logPath: dreamLogPath,
+          };
+
+          const runDream = async () => {
+            try {
+              const { runDreamCycle } = await import("./src/dreaming.js");
+              const result = await runDreamCycle(getStore(), dreamConfig, track);
+              const summary = [
+                result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved})` : null,
+                result.deep ? `deep(rescored=${result.deep.rescored}, decayed=${result.deep.decayed})` : null,
+              ].filter(Boolean).join(" ");
+              api.logger.info(`memex dream: ${summary} [${result.duration_ms}ms]`);
+            } catch (err) {
+              api.logger.warn(`memex dream failed: ${String(err)}`);
+            }
+          };
+
+          // First dream 5 min after startup (after backup + indexing settle)
+          setTimeout(() => void runDream(), 5 * 60_000);
+          setInterval(() => void runDream(), dreamIntervalMs);
+        }
+
         // Auto-index sessions on startup (if configured)
         if (config.sessionIndexing?.enabled) {
           const runSessionIndex = async () => {
@@ -1688,6 +1721,14 @@ function parsePluginConfig(value: unknown): PluginConfig {
         minImportance: typeof (cfg.sessionIndexing as Record<string, unknown>).minImportance === "number"
           ? (cfg.sessionIndexing as Record<string, unknown>).minImportance as number : undefined,
         autoIndexOnce: (cfg.sessionIndexing as Record<string, unknown>).autoIndexOnce !== false,
+      }
+      : undefined,
+    dreaming: typeof cfg.dreaming === "object" && cfg.dreaming !== null
+      ? {
+        enabled: (cfg.dreaming as Record<string, unknown>).enabled !== false,
+        phases: typeof (cfg.dreaming as Record<string, unknown>).phases === "object"
+          ? (cfg.dreaming as Record<string, unknown>).phases as { light?: boolean; deep?: boolean; reflection?: boolean }
+          : undefined,
       }
       : undefined,
   };
