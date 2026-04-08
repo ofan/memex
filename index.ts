@@ -959,14 +959,11 @@ const memoryUnifiedPlugin = {
       async closeAllMemorySearchManagers() {},
     });
 
-    // Everything below runs once — api.on() is additive and OpenClaw
-    // calls register() multiple times during startup phases.
-    if (_registered) return;
-    _registered = true;
-
-    api.logger.info(
-      `memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
-    );
+    if (!_registered) {
+      api.logger.info(
+        `memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
+      );
+    }
 
     // Config warnings
     if (!isCli) {
@@ -1059,6 +1056,13 @@ const memoryUnifiedPlugin = {
     // ========================================================================
     // Lifecycle Hooks
     // ========================================================================
+
+    // ========================================================================
+    // Lifecycle Hooks (api.on() is additive — only register once)
+    // ========================================================================
+
+    if (!_registered) {
+    _registered = true;
 
     // Cross-turn recall tracking: avoid returning the same memories every turn
     // Maps agentId → last N turns of recalled memory IDs
@@ -1238,6 +1242,8 @@ const memoryUnifiedPlugin = {
 
     // Auto-capture removed — LLM-driven storage via memory_store tool is preferred.
     // Future: compaction-based extraction via session_before_compact hook.
+
+    } // end _registered guard for api.on() hooks
 
     api.registerGatewayMethod("memex.health", async ({ params, respond }) => {
       try {
@@ -1419,7 +1425,8 @@ const memoryUnifiedPlugin = {
     }
 
     // ========================================================================
-    // Service Registration
+    // Service Registration (must run on every register() call — OpenClaw
+    // may only start the service registered in the matching loading phase)
     // ========================================================================
 
     api.registerService({
