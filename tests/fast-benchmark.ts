@@ -1,10 +1,13 @@
 /**
- * Fast LongMemEval benchmark — uses pre-computed research cache.
- * No embedding API calls needed. Runs the actual retriever pipeline.
+ * Fast LongMemEval benchmark — conversation memory retrieval only.
+ *
+ * Uses pre-computed research cache (cached vectors from LongMemEval sessions).
+ * Does NOT exercise document search or the production UnifiedRetriever
+ * mixed-source path. For production-grade benchmarks, see #19.
  *
  * Tiers:
  *   TIER=fast     (~1s)   — pure math fusion simulation, no store
- *   TIER=pipeline  (~30s)  — real retriever pipeline with sqlite-vec + BM25
+ *   TIER=pipeline  (~30s)  — memory-only retriever with sqlite-vec + BM25 (cached vectors)
  *   TIER=e2e       (~2min) — pipeline + LLM reader for E2E accuracy
  *
  * Usage:
