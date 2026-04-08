@@ -6,6 +6,7 @@
 import type { MemoryStore, MemorySearchResult } from "./memory.js";
 import type { Embedder } from "./embedder.js";
 import { filterNoise } from "./noise-filter.js";
+import { Stopwatch } from "./telemetry.js";
 
 // ============================================================================
 // Types & Configuration
@@ -274,11 +275,16 @@ function cosineSimilarity(a: number[], b: number[]): number {
 // ============================================================================
 
 export class MemoryRetriever {
+  private _lastTimings: Record<string, number> = {};
+
   constructor(
     private store: MemoryStore,
     private embedder: Embedder,
     private config: RetrievalConfig = DEFAULT_RETRIEVAL_CONFIG
   ) {}
+
+  /** Timing breakdown from the most recent retrieve() call. */
+  get lastTimings(): Record<string, number> { return this._lastTimings; }
 
   async retrieve(context: RetrievalContext): Promise<RetrievalResult[]> {
     const { query, limit, scopeFilter, category, recentlyRecalled } = context;
@@ -298,10 +304,13 @@ export class MemoryRetriever {
     category?: string,
     recentlyRecalled?: Set<string>,
   ): Promise<RetrievalResult[]> {
+    const sw = new Stopwatch();
     const queryVector = await this.embedder.embedQuery(query);
-    const results = await this.store.vectorSearch(queryVector, limit, this.config.minScore, scopeFilter);
+    sw.lap("embed");
 
-    // Filter by category if specified
+    const results = await this.store.vectorSearch(queryVector, limit, this.config.minScore, scopeFilter);
+    sw.lap("search");
+
     const filtered = category
       ? results.filter(r => r.entry.category === category)
       : results;
@@ -321,13 +330,11 @@ export class MemoryRetriever {
     const denoised = this.config.filterNoise
       ? filterNoise(hardFiltered, r => r.entry.text)
       : hardFiltered;
-
-    // Recently-recalled penalty: demote memories seen in recent turns
     const diversified = this.applyRecentlyRecalledPenalty(denoised, recentlyRecalled);
-
-    // MMR deduplication: avoid top-k filled with near-identical memories
     const deduplicated = this.applyMMRDiversity(diversified);
+    sw.lap("score");
 
+    this._lastTimings = sw.timings;
     return deduplicated.slice(0, limit);
   }
 
@@ -338,61 +345,41 @@ export class MemoryRetriever {
     category?: string,
     recentlyRecalled?: Set<string>,
   ): Promise<RetrievalResult[]> {
+    const sw = new Stopwatch();
     const candidatePoolSize = Math.max(this.config.candidatePoolSize, limit * 2);
 
-    // Compute query embedding once, reuse for vector search + reranking
     const queryVector = await this.embedder.embedQuery(query);
+    sw.lap("embed");
 
-    // Run vector and BM25 searches in parallel
     const [vectorResults, bm25Results] = await Promise.all([
       this.runVectorSearch(queryVector, candidatePoolSize, scopeFilter, category),
       this.runBM25Search(query, candidatePoolSize, scopeFilter, category),
     ]);
+    sw.lap("search");
 
-    // Fuse results using RRF (async: validates BM25-only entries exist in store)
     const fusedResults = await this.fuseResults(vectorResults, bm25Results);
-    if (process.env.RETRIEVER_TRACE) console.warn(`[trace] fused: ${fusedResults.length}, top=${fusedResults[0]?.score.toFixed(4)}`);
+    sw.lap("fuse");
 
-    // Apply minimum score threshold
     const filtered = fusedResults.filter(r => r.score >= this.config.minScore);
-    if (process.env.RETRIEVER_TRACE) console.warn(`[trace] after minScore(${this.config.minScore}): ${filtered.length}, top=${filtered[0]?.score.toFixed(4)}`);
 
-    // Rerank if enabled
     const reranked = this.config.rerank !== "none"
       ? await this.rerankResults(query, queryVector, filtered.slice(0, limit * 2))
       : filtered;
-    if (process.env.RETRIEVER_TRACE) console.warn(`[trace] after rerank: ${reranked.length}, top=${reranked[0]?.score.toFixed(4)}`);
+    sw.lap("rerank");
 
-    // Apply temporal re-ranking (recency boost)
     const temporalReranked = this.applyRecencyBoost(reranked);
-
-    // Apply importance weighting
     const importanceWeighted = this.applyImportanceWeight(temporalReranked);
-    if (process.env.RETRIEVER_TRACE) console.warn(`[trace] after importance: ${importanceWeighted.length}, top=${importanceWeighted[0]?.score.toFixed(4)}`);
-
-    // Apply length normalization (penalize long entries dominating via keyword density)
     const lengthNormalized = this.applyLengthNormalization(importanceWeighted);
-    if (process.env.RETRIEVER_TRACE) console.warn(`[trace] after lengthNorm(anchor=${this.config.lengthNormAnchor}): ${lengthNormalized.length}, top=${lengthNormalized[0]?.score.toFixed(4)}`);
-
-    // Apply time decay (penalize stale entries)
     const timeDecayed = this.applyTimeDecay(lengthNormalized);
-
-    // Hard minimum score cutoff (post all scoring stages)
     const hardFiltered = this.applyAdaptiveMinScore(timeDecayed);
-    if (process.env.RETRIEVER_TRACE) console.warn(`[trace] after adaptiveMin: ${hardFiltered.length}, top=${hardFiltered[0]?.score.toFixed(4)}`);
-
-    // Filter noise
     const denoised = this.config.filterNoise
       ? filterNoise(hardFiltered, r => r.entry.text)
       : hardFiltered;
-
-    // Recently-recalled penalty: demote memories seen in recent turns
     const diversified = this.applyRecentlyRecalledPenalty(denoised, recentlyRecalled);
-
-    // MMR deduplication: avoid top-k filled with near-identical memories
     const deduplicated = this.applyMMRDiversity(diversified);
-    if (process.env.RETRIEVER_TRACE) console.warn(`[trace] after MMR: ${deduplicated.length}`);
+    sw.lap("score");
 
+    this._lastTimings = sw.timings;
     return deduplicated.slice(0, limit);
   }
 
