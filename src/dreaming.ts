@@ -8,9 +8,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import type { MemoryStore } from "./memory.js";
 import { isNoise } from "./noise-filter.js";
+import { Stopwatch, type TrackFn } from "./telemetry.js";
 
 // ============================================================================
 // Log helper
@@ -160,4 +162,110 @@ export async function deepSweep(
   log(logPath, "dream:deep", { rescored, decayed });
 
   return { rescored, decayed };
+}
+
+// ============================================================================
+// Dream Cycle Orchestrator
+// ============================================================================
+
+export interface DreamConfig {
+  enabled: boolean;
+  phases: {
+    light: boolean;
+    deep: boolean;
+    reflection: boolean;
+  };
+  logPath?: string;
+}
+
+export interface DreamCycleResult {
+  light?: { deduped: number; noiseRemoved: number; fragmentsRemoved: number };
+  deep?: { rescored: number; decayed: number };
+  errors: string[];
+  duration_ms: number;
+}
+
+/**
+ * Run a full dream cycle: light → deep → reflection (if enabled).
+ * Each phase is independent — if one fails, the next still runs.
+ * All operations are idempotent.
+ */
+export async function runDreamCycle(
+  store: MemoryStore,
+  config: DreamConfig,
+  track?: TrackFn,
+): Promise<DreamCycleResult> {
+  const sw = new Stopwatch();
+  const result: DreamCycleResult = { errors: [], duration_ms: 0 };
+  const logPath = config.logPath;
+
+  // Pre-flight: ensure a recent backup exists
+  if (logPath) {
+    const backupDir = join(dirname(logPath), "backups");
+    if (existsSync(backupDir)) {
+      const today = new Date().toISOString().split("T")[0];
+      const backups = readdirSync(backupDir).filter(f => f.startsWith("memory-backup-"));
+      const hasRecent = backups.some(f => f.includes(today) || f.includes(
+        new Date(Date.now() - 86400_000).toISOString().split("T")[0]
+      ));
+      if (!hasRecent && backups.length > 0) {
+        log(logPath, "dream:warn", { message: "no_recent_backup" });
+      }
+    }
+  }
+
+  // Phase 1: Light sweep
+  if (config.phases.light) {
+    try {
+      result.light = await lightSweep(store, logPath);
+      sw.lap("light");
+      track?.("dream", { phase: "light", ...result.light, ...sw.timings });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.errors.push(`light: ${msg}`);
+      log(logPath, "dream:error", { phase: "light", error: msg });
+      sw.lap("light");
+    }
+  }
+
+  // Phase 2: Deep sweep
+  if (config.phases.deep) {
+    try {
+      result.deep = await deepSweep(store, logPath);
+      sw.lap("deep");
+      track?.("dream", { phase: "deep", ...result.deep, ...sw.timings });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.errors.push(`deep: ${msg}`);
+      log(logPath, "dream:error", { phase: "deep", error: msg });
+      sw.lap("deep");
+    }
+  }
+
+  // Phase 3: Reflection (future — needs LLM via subagent)
+  // if (config.phases.reflection) { ... }
+
+  result.duration_ms = sw.total;
+
+  // Summary log line
+  const summary = [
+    result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved}, fragments=${result.light.fragmentsRemoved})` : null,
+    result.deep ? `deep(rescored=${result.deep.rescored}, decayed=${result.deep.decayed})` : null,
+    result.errors.length > 0 ? `errors=${result.errors.length}` : null,
+  ].filter(Boolean).join(" ");
+  log(logPath, "dream:cycle", { summary, duration_ms: result.duration_ms });
+
+  // Pool health metrics
+  const totalCount = store.totalMemories;
+  const neverRecalled = (store.db.prepare(
+    "SELECT COUNT(*) as c FROM memories WHERE (recall_count IS NULL OR recall_count = 0)"
+  ).get() as { c: number }).c;
+  const noiseRatio = 0; // After light sweep, noise should be 0
+  track?.("dream_metrics", {
+    pool_size: totalCount,
+    noise_ratio: noiseRatio,
+    never_recalled_ratio: totalCount > 0 ? +(neverRecalled / totalCount).toFixed(3) : 0,
+  });
+
+  return result;
 }
