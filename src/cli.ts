@@ -696,6 +696,85 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
         process.exit(1);
       }
     });
+
+  // ========================================================================
+  // Log viewer
+  // ========================================================================
+
+  memory
+    .command("log")
+    .description("View memex event log")
+    .option("--type <type>", "Filter by event type (dream, recall, store, error)")
+    .option("-n, --lines <n>", "Number of lines to show", "50")
+    .action(async (opts) => {
+      const { readFileSync, existsSync } = await import("node:fs");
+      const { dirname: dn, join: jn } = await import("node:path");
+      const logPath = jn(dn(context.store.db.name || ""), "memex.log");
+
+      if (!existsSync(logPath)) {
+        console.log("No log file yet. Dreaming hasn't run.");
+        return;
+      }
+
+      const lines = parseInt(opts.lines) || 50;
+      const content = readFileSync(logPath, "utf-8");
+      let allLines = content.split("\n").filter(Boolean);
+
+      if (opts.type) {
+        allLines = allLines.filter(l => l.includes(`[${opts.type}`));
+      }
+
+      const tail = allLines.slice(-lines);
+      for (const line of tail) {
+        console.log(line);
+      }
+    });
+
+  // ========================================================================
+  // Dream commands
+  // ========================================================================
+
+  memory
+    .command("dream")
+    .description("Run a dream cycle (memory consolidation)")
+    .option("--dry-run", "Preview what dreaming would do without making changes")
+    .action(async (opts) => {
+      const { runDreamCycle } = await import("./dreaming.js");
+      const { dirname: dn, join: jn } = await import("node:path");
+      const logPath = jn(dn(context.store.db.name || ""), "memex.log");
+
+      if (opts.dryRun) {
+        const db = context.store.db;
+        const total = (db.prepare("SELECT COUNT(*) as c FROM memories").get() as { c: number }).c;
+        const dupes = (db.prepare("SELECT COUNT(*) as c FROM (SELECT text, COUNT(*) as cnt FROM memories GROUP BY text HAVING cnt > 1)").get() as { c: number }).c;
+        const fragments = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE (text LIKE '[assistant]%' OR text LIKE '[user]%')").get() as { c: number }).c;
+        const neverRecalled = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE (recall_count IS NULL OR recall_count = 0) AND timestamp < ?").get(Date.now() - 30 * 86400_000) as { c: number }).c;
+
+        console.log(`Dry run — ${total} memories in pool:`);
+        console.log(`  Duplicate texts: ${dupes} (would dedup)`);
+        console.log(`  Conversation fragments: ${fragments} (would remove)`);
+        console.log(`  Old + never recalled (>30d): ${neverRecalled} (would decay)`);
+        return;
+      }
+
+      console.log("Running dream cycle...");
+      const result = await runDreamCycle(context.store, {
+        enabled: true,
+        phases: { light: true, deep: true, reflection: false },
+        logPath,
+      });
+
+      console.log(`Done in ${result.duration_ms}ms:`);
+      if (result.light) {
+        console.log(`  Light: deduped=${result.light.deduped}, noise=${result.light.noiseRemoved}, fragments=${result.light.fragmentsRemoved}`);
+      }
+      if (result.deep) {
+        console.log(`  Deep: rescored=${result.deep.rescored}, decayed=${result.deep.decayed}`);
+      }
+      if (result.errors.length > 0) {
+        console.log(`  Errors: ${result.errors.join("; ")}`);
+      }
+    });
 }
 
 // ============================================================================
