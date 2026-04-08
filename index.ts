@@ -1144,8 +1144,9 @@ const memoryUnifiedPlugin = {
             history.push(recalledIds);
             if (history.length > RECALL_HISTORY_TURNS) history.shift();
             recentRecalls.set(agentId, history);
-            // Also record recall frequency in retriever
+            // Record recall frequency in retriever (ephemeral) and DB (persistent)
             retriever.recordRecall(recalledIds);
+            try { store.recordRecalls(recalledIds); } catch { /* best effort */ }
           }
 
           api.logger.info?.(

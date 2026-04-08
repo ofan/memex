@@ -661,6 +661,18 @@ export class MemoryStore {
     return updated;
   }
 
+  /** Persist recall events to DB. Called after auto-recall injects memories. */
+  recordRecalls(ids: string[]): void {
+    if (ids.length === 0) return;
+    const now = Date.now();
+    const stmt = this.db.prepare(
+      `UPDATE memories SET recall_count = COALESCE(recall_count, 0) + 1, last_recalled_at = ? WHERE id = ?`
+    );
+    for (const id of ids) {
+      stmt.run(now, id);
+    }
+  }
+
   async delete(id: string, scopeFilter?: string[]): Promise<boolean> {
     // Support both full UUID and short prefix (8+ hex chars)
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
