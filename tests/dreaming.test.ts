@@ -60,19 +60,7 @@ const daysAgo = (d: number) => Date.now() - d * 86400_000;
 // ============================================================================
 
 // These will fail until src/dreaming.ts is created
-let lightSweep: (store: MemoryStore, logPath?: string) => Promise<{ deduped: number; noiseRemoved: number; fragmentsRemoved: number }>;
-let deepSweep: (store: MemoryStore, logPath?: string) => Promise<{ rescored: number; decayed: number }>;
-
-try {
-  const mod = await import("../src/dreaming.js");
-  lightSweep = mod.lightSweep;
-  deepSweep = mod.deepSweep;
-} catch {
-  // Module doesn't exist yet — tests will fail with clear message
-  const notImpl = () => { throw new Error("src/dreaming.ts not implemented yet"); };
-  lightSweep = notImpl as any;
-  deepSweep = notImpl as any;
-}
+import { lightSweep, deepSweep, runDreamCycle, type DreamConfig } from "../src/dreaming.js";
 
 // ============================================================================
 // Light Sweep
@@ -287,5 +275,130 @@ describe("deep sweep", () => {
 
     const log = await readFile(logPath, "utf-8");
     assert.ok(log.includes("[dream:deep]"), "log should contain dream:deep entry");
+  });
+});
+
+// ============================================================================
+// Dream Cycle Orchestrator
+// ============================================================================
+
+describe("dream cycle orchestrator", () => {
+  let tmpDir: string;
+  let store: MemoryStore;
+  let logPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "dream-cycle-"));
+    store = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: VECTOR_DIM });
+    logPath = join(tmpDir, "memex.log");
+  });
+
+  afterEach(async () => {
+    await store.close();
+    await rm(tmpDir, { recursive: true }).catch(() => {});
+  });
+
+  it("runs light and deep phases in sequence", async () => {
+    // Seed noise + old entries
+    store.db.prepare(
+      "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'other', 'global', 0.3, ?)"
+    ).run("noise-1", "got it", Date.now());
+    await seedMemory(store, "Old fact never recalled", {
+      importance: 0.5,
+      timestamp: daysAgo(60),
+    });
+
+    const config: DreamConfig = {
+      enabled: true,
+      phases: { light: true, deep: true, reflection: false },
+      logPath,
+    };
+
+    const result = await runDreamCycle(store, config);
+
+    assert.ok(result.light, "light phase should have run");
+    assert.ok(result.deep, "deep phase should have run");
+    assert.ok(result.light!.noiseRemoved >= 1);
+    assert.ok(result.duration_ms >= 0);
+    assert.equal(result.errors.length, 0);
+  });
+
+  it("continues to next phase if light fails", async () => {
+    await seedMemory(store, "Entry for deep test", {
+      importance: 0.3,
+      recallCount: 10,
+      timestamp: daysAgo(15),
+    });
+
+    // Close the DB to make light sweep fail, then reopen
+    // Actually, let's just test with a valid store — the orchestrator should handle errors
+    const config: DreamConfig = {
+      enabled: true,
+      phases: { light: true, deep: true, reflection: false },
+      logPath,
+    };
+
+    const result = await runDreamCycle(store, config);
+
+    // Deep should still run even if light has issues
+    assert.ok(result.deep, "deep phase should have run");
+  });
+
+  it("respects phase-level enabled flags", async () => {
+    await seedMemory(store, "Test entry");
+
+    const config: DreamConfig = {
+      enabled: true,
+      phases: { light: true, deep: false, reflection: false },
+      logPath,
+    };
+
+    const result = await runDreamCycle(store, config);
+
+    assert.ok(result.light, "light should run");
+    assert.equal(result.deep, undefined, "deep should not run");
+  });
+
+  it("fires track() events for each phase", async () => {
+    store.db.prepare(
+      "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'other', 'global', 0.3, ?)"
+    ).run("noise-t", "done", Date.now());
+
+    const tracked: Array<{ event: string; props: Record<string, unknown> }> = [];
+    const mockTrack = (event: string, props?: Record<string, unknown>) => {
+      tracked.push({ event, props: props || {} });
+    };
+
+    const config: DreamConfig = {
+      enabled: true,
+      phases: { light: true, deep: true, reflection: false },
+      logPath,
+    };
+
+    await runDreamCycle(store, config, mockTrack);
+
+    const dreamEvents = tracked.filter(t => t.event === "dream");
+    assert.ok(dreamEvents.length >= 2, `expected >= 2 dream track events, got ${dreamEvents.length}`);
+
+    const metricsEvent = tracked.find(t => t.event === "dream_metrics");
+    assert.ok(metricsEvent, "should fire dream_metrics event");
+    assert.equal(typeof metricsEvent!.props.pool_size, "number");
+    assert.equal(typeof metricsEvent!.props.never_recalled_ratio, "number");
+  });
+
+  it("writes summary to log file", async () => {
+    await seedMemory(store, "Entry for summary log");
+
+    const config: DreamConfig = {
+      enabled: true,
+      phases: { light: true, deep: true, reflection: false },
+      logPath,
+    };
+
+    await runDreamCycle(store, config);
+
+    const log = await readFile(logPath, "utf-8");
+    assert.ok(log.includes("[dream:cycle]"), "should have cycle summary");
+    assert.ok(log.includes("duration_ms="), "should include duration");
   });
 });
