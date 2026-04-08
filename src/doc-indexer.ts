@@ -31,6 +31,7 @@ import {
   getHashesNeedingEmbedding,
 } from "./search.js";
 import { withLLMSession } from "./llm.js";
+import type { Embedder } from "./embedder.js";
 
 // ============================================================================
 // Types
@@ -225,23 +226,34 @@ export async function indexAllPaths(
 
 /**
  * Embed documents that need vectors.
- * Uses the shared QMD LLM session for embedding.
+ *
+ * When an `Embedder` is provided (recommended), uses its embedPassage()
+ * which handles context-size errors with adaptive re-chunking and caching.
+ *
+ * Falls back to the legacy LLMSession path when no Embedder is passed.
  */
 export async function embedDocuments(
   db: Database,
-  dimensions: number
+  dimensions: number,
+  embedder?: Embedder,
 ): Promise<EmbedResult> {
   const result: EmbedResult = { embedded: 0, chunks: 0, errors: [] };
 
   const hashesToEmbed = getHashesForEmbedding(db);
   if (hashesToEmbed.length === 0) return result;
 
+  if (embedder) {
+    return embedDocumentsViaEmbedder(db, dimensions, embedder, hashesToEmbed, result);
+  }
+
+  // Legacy path: LLMSession (no context-error handling, no re-chunking)
   try {
     await withLLMSession(async (session) => {
       for (const item of hashesToEmbed) {
         try {
           const title = extractTitle(item.body, item.path);
           const chunks = chunkDocument(item.body);
+          let docChunks = 0;
 
           for (let seq = 0; seq < chunks.length; seq++) {
             const chunk = chunks[seq];
@@ -254,17 +266,74 @@ export async function embedDocuments(
               const vec = new Float32Array(embResult.embedding);
               insertEmbedding(db, item.hash, seq, chunk.pos, vec, embResult.model, new Date().toISOString());
               result.chunks++;
+              docChunks++;
             }
           }
 
-          result.embedded++;
+          if (docChunks > 0) result.embedded++;
         } catch (err) {
           result.errors.push(`${item.path}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-    }, { timeout: 30 * 60 * 1000 }); // 30 minute timeout for large collections
+    }, { timeout: 30 * 60 * 1000 });
   } catch (err) {
     result.errors.push(`Embedding session failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return result;
+}
+
+/**
+ * Embed via the Embedder class which handles context-size errors,
+ * adaptive re-chunking, and caching automatically.
+ */
+async function embedDocumentsViaEmbedder(
+  db: Database,
+  dimensions: number,
+  embedder: Embedder,
+  hashesToEmbed: { hash: string; body: string; path: string }[],
+  result: EmbedResult,
+): Promise<EmbedResult> {
+  const model = embedder.model;
+  const now = () => new Date().toISOString();
+
+  for (const item of hashesToEmbed) {
+    try {
+      const title = extractTitle(item.body, item.path);
+      const chunks = chunkDocument(item.body);
+      let docChunks = 0;
+
+      for (let seq = 0; seq < chunks.length; seq++) {
+        const chunk = chunks[seq];
+        if (!chunk) continue;
+
+        const textForEmbed = formatDocForEmbedding(chunk.text, title);
+        // embedPassage handles context-size errors internally:
+        // detects "context|exceed|length" errors, re-chunks via smartChunk(),
+        // embeds sub-chunks, and returns averaged embedding.
+        const embedding = await embedder.embedPassage(textForEmbed);
+
+        if (embedding.length === dimensions) {
+          insertEmbedding(db, item.hash, seq, chunk.pos, new Float32Array(embedding), model, now());
+          result.chunks++;
+          docChunks++;
+        }
+      }
+
+      if (docChunks > 0) result.embedded++;
+    } catch (err) {
+      // One error per document, not per chunk
+      result.errors.push(`${item.path}: ${err instanceof Error ? err.message : String(err)}`);
+      // Mark hash as failed so it's not retried every startup.
+      // Insert a sentinel content_vectors row with model="_error".
+      // getHashesForEmbedding() LEFT JOINs on this table, so the hash
+      // won't appear in the backlog again.
+      try {
+        db.prepare(
+          `INSERT OR IGNORE INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, 0, 0, '_error', ?)`
+        ).run(item.hash, now());
+      } catch { /* ignore — best effort */ }
+    }
   }
 
   return result;
