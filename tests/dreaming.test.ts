@@ -401,4 +401,49 @@ describe("dream cycle orchestrator", () => {
     assert.ok(log.includes("[dream:cycle]"), "should have cycle summary");
     assert.ok(log.includes("duration_ms="), "should include duration");
   });
+
+  it("reports pool health metrics via track()", async () => {
+    await seedMemory(store, "Entry A");
+    await seedMemory(store, "Entry B");
+
+    const tracked: Array<{ event: string; props: Record<string, unknown> }> = [];
+    const mockTrack = (event: string, props?: Record<string, unknown>) => {
+      tracked.push({ event, props: props || {} });
+    };
+
+    await runDreamCycle(store, {
+      enabled: true,
+      phases: { light: true, deep: true, reflection: false },
+      logPath,
+    }, mockTrack);
+
+    const metrics = tracked.find(t => t.event === "dream_metrics");
+    assert.ok(metrics, "should fire dream_metrics");
+    assert.equal(metrics!.props.pool_size, 2);
+    assert.equal(typeof metrics!.props.never_recalled_ratio, "number");
+    assert.ok(
+      (metrics!.props.never_recalled_ratio as number) >= 0 &&
+      (metrics!.props.never_recalled_ratio as number) <= 1,
+      "ratio should be between 0 and 1"
+    );
+  });
+
+  it("total cycle completes within 5 seconds for 500 entries", async () => {
+    // Seed 500 entries
+    for (let i = 0; i < 500; i++) {
+      store.db.prepare(
+        "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.3, ?)"
+      ).run(`perf-${i}`, `Performance test entry number ${i} about topic ${i % 20}`, daysAgo(i % 90));
+    }
+
+    const start = Date.now();
+    await runDreamCycle(store, {
+      enabled: true,
+      phases: { light: true, deep: true, reflection: false },
+      logPath,
+    });
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 5000, `Dream cycle took ${elapsed}ms for 500 entries — expected <5s`);
+  });
 });
