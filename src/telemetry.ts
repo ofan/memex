@@ -16,6 +16,41 @@ function getMachineId(): string {
   return createHash("sha256").update(hostname()).digest("hex").slice(0, 16);
 }
 
+/**
+ * Lightweight timing helper that collects named lap times.
+ * Create at operation start, call `.lap("embed")` after embedding, etc.,
+ * then spread `.timings` into a track() call.
+ */
+export class Stopwatch {
+  private _start = Date.now();
+  private _last = this._start;
+  private _laps: Record<string, number> = {};
+
+  /** Record a lap. Returns ms elapsed since previous lap (or construction). */
+  lap(name: string): number {
+    const now = Date.now();
+    const delta = now - this._last;
+    this._laps[name] = delta;
+    this._last = now;
+    return delta;
+  }
+
+  /** Total ms elapsed since construction. */
+  get total(): number {
+    return Date.now() - this._start;
+  }
+
+  /** All laps as `{name}_ms` properties, plus `total_ms`. */
+  get timings(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(this._laps)) {
+      out[`${k}_ms`] = v;
+    }
+    out.total_ms = Date.now() - this._start;
+    return out;
+  }
+}
+
 export function initTelemetry(version: string): TrackFn {
   if (process.env.MEMEX_TELEMETRY === "0" || process.env.MEMEX_DO_NOT_TRACK === "1") return noop;
 
