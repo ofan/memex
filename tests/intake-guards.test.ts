@@ -270,6 +270,27 @@ describe("intake guards", () => {
       const expected = createHash("sha256").update("Consistent hash test").digest("hex");
       assert.equal(row.text_hash, expected);
     });
+
+    it("backfills text_hash for entries with NULL hash on store init", async () => {
+      // Insert an entry without text_hash (simulating pre-upgrade data)
+      store.db.prepare(
+        "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.5, ?)"
+      ).run("backfill-1", "Entry without hash", Date.now());
+
+      const before = store.db.prepare("SELECT text_hash FROM memories WHERE id = 'backfill-1'")
+        .get() as { text_hash: string | null };
+      assert.equal(before.text_hash, null, "should start with NULL hash");
+
+      // Close and reopen — backfill runs on init
+      const dbPath = join(tmpDir, "test.sqlite");
+      await store.close();
+      store = new MemoryStore({ dbPath, vectorDim: VECTOR_DIM });
+
+      const after = store.db.prepare("SELECT text_hash FROM memories WHERE id = 'backfill-1'")
+        .get() as { text_hash: string | null };
+      assert.ok(after.text_hash, "hash should be backfilled after reopen");
+      assert.ok(after.text_hash!.length > 10, "hash should be a real SHA-256");
+    });
   });
 
   // ========================================================================
@@ -323,6 +344,19 @@ describe("intake guards", () => {
     it("handles recording recalls for nonexistent IDs gracefully", () => {
       store.recordRecalls(["nonexistent-id-1", "nonexistent-id-2"]);
       // Should not throw
+    });
+
+    it("defaults recall_count to 0 for new entries", async () => {
+      const entry = await store.store({
+        text: "Fresh entry no recalls",
+        vector: makeVector(1),
+        category: "fact",
+        scope: "global",
+        importance: 0.5,
+      });
+      const row = store.db.prepare("SELECT recall_count FROM memories WHERE id = ?")
+        .get(entry!.id) as { recall_count: number | null };
+      assert.equal(row.recall_count ?? 0, 0);
     });
 
     it("updates last_recalled_at to recent timestamp", async () => {
