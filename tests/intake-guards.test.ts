@@ -271,4 +271,77 @@ describe("intake guards", () => {
       assert.equal(row.text_hash, expected);
     });
   });
+
+  // ========================================================================
+  // Recall tracking
+  // ========================================================================
+
+  describe("recall tracking", () => {
+    it("increments recall_count when recordRecalls is called", async () => {
+      const entry = await store.store({
+        text: "Entry to recall",
+        vector: makeVector(1),
+        category: "fact",
+        scope: "global",
+        importance: 0.5,
+      });
+
+      store.recordRecalls([entry!.id]);
+      store.recordRecalls([entry!.id]);
+      store.recordRecalls([entry!.id]);
+
+      const row = store.db.prepare("SELECT recall_count, last_recalled_at FROM memories WHERE id = ?")
+        .get(entry!.id) as { recall_count: number; last_recalled_at: number };
+
+      assert.equal(row.recall_count, 3);
+      assert.ok(row.last_recalled_at > 0);
+    });
+
+    it("persists recall counts across store reopen", async () => {
+      const dbPath = join(tmpDir, "test.sqlite");
+      const entry = await store.store({
+        text: "Persistent recall test",
+        vector: makeVector(1),
+        category: "fact",
+        scope: "global",
+        importance: 0.5,
+      });
+
+      store.recordRecalls([entry!.id]);
+      store.recordRecalls([entry!.id]);
+
+      // Close and reopen
+      await store.close();
+      store = new MemoryStore({ dbPath, vectorDim: VECTOR_DIM });
+
+      const row = store.db.prepare("SELECT recall_count FROM memories WHERE id = ?")
+        .get(entry!.id) as { recall_count: number };
+
+      assert.equal(row.recall_count, 2, "recall count should survive restart");
+    });
+
+    it("handles recording recalls for nonexistent IDs gracefully", () => {
+      store.recordRecalls(["nonexistent-id-1", "nonexistent-id-2"]);
+      // Should not throw
+    });
+
+    it("updates last_recalled_at to recent timestamp", async () => {
+      const entry = await store.store({
+        text: "Timestamp test",
+        vector: makeVector(1),
+        category: "fact",
+        scope: "global",
+        importance: 0.5,
+      });
+
+      const before = Date.now();
+      store.recordRecalls([entry!.id]);
+
+      const row = store.db.prepare("SELECT last_recalled_at FROM memories WHERE id = ?")
+        .get(entry!.id) as { last_recalled_at: number };
+
+      assert.ok(row.last_recalled_at >= before - 100);
+      assert.ok(row.last_recalled_at <= Date.now() + 100);
+    });
+  });
 });
