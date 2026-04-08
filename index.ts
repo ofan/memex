@@ -38,7 +38,9 @@ import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-in
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry, Stopwatch } from "./src/telemetry.js";
-import { runDreamCycle } from "./src/dreaming.js";
+import * as _dreamingMod from "./src/dreaming.js";
+const _dreaming = (_dreamingMod as any).default || _dreamingMod;
+const runDreamCycle: typeof import("./src/dreaming.js").runDreamCycle = _dreaming.runDreamCycle;
 import { extractRecallQuery } from "./src/recall-query.js";
 import {
   aggregateHealthStatus,
