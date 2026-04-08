@@ -16,9 +16,9 @@
 
 ---
 
-## LongMemEval (ICLR 2025)
+## LongMemEval (ICLR 2025) — Conversation Memory Retrieval
 
-Cross-system memory retrieval benchmark. N=50, LongMemEval_s subset. Official LongMemEval prompts + GPT-4o-mini LLM-judge.
+Cross-system conversation-memory benchmark. Measures **memory-only retrieval quality** — does not cover document search or the production mixed-source path (UnifiedRetriever). N=50, LongMemEval_s subset. Official LongMemEval prompts + GPT-4o-mini LLM-judge.
 
 | Metric | Score | What it measures |
 |---|---|---|
@@ -101,17 +101,29 @@ Embedding API call dominates. Local compute (SQLite, fusion) is negligible.
 
 ---
 
+## Benchmark Tracks
+
+- `LongMemEval` measures **conversation-memory retrieval** quality across multi-session recall tasks. Does not exercise document search.
+- `BEIR` is the standard **document-retrieval** track for memex's document search path.
+- **Production mixed-source** (memories + documents via UnifiedRetriever) is not yet benchmarked — see #19.
+
 ## Reproduction
 
 ```bash
 # Unit tests (561+)
 node --import jiti/register --test tests/*.test.ts
 
-# LongMemEval fast benchmark (~1s)
+# LongMemEval fast benchmark (~1s, memory-only harness)
 TIER=fast node --import jiti/register tests/fast-benchmark.ts
 
-# LongMemEval E2E benchmark (~2min)
+# LongMemEval E2E benchmark (~2min, memory-only harness)
 TIER=e2e GEMINI_API_KEY=... node --import jiti/register tests/fast-benchmark.ts
+
+# BEIR document benchmark (fast FTS smoke)
+BEIR_MODE=fts BEIR_DATASETS=fiqa,scifact,nq node --import jiti/register tests/beir-benchmark.ts
+
+# BEIR document benchmark (production hybrid path)
+BEIR_MODE=hybrid EMBED_BASE_URL=... EMBED_MODEL=... node --import jiti/register tests/beir-benchmark.ts
 
 # Latency benchmark
 node --import jiti/register tests/benchmark.ts

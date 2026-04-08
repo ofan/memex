@@ -8,9 +8,9 @@ metadata:
 
 # Memex — Unified Memory for OpenClaw
 
-## LongMemEval (ICLR 2025)
+## LongMemEval (ICLR 2025) — Memory Retrieval
 
-| System | E2E Accuracy | Reader LLM |
+| System | Memory E2E Accuracy | Reader LLM |
 |---|---|---|
 | Hindsight/TEMPR | 91.4% | GPT-4o |
 | **Memex** | **90%** | GPT-4o |
