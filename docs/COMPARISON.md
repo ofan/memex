@@ -82,7 +82,9 @@ The section/bullet-level FTS is the primary quality driver — it finds facts in
 
 Quality floors enforced in CI: FTS R@5 ≥ 0.70, Hybrid R@5 ≥ 0.65.
 
-### LongMemEval (ICLR 2025) — cross-system benchmark
+### LongMemEval (ICLR 2025) — Conversation Memory Retrieval
+
+**Scope:** This benchmark measures **conversation-memory retrieval only** — it does not cover document search or the production mixed-source path.
 
 **Important:** The published numbers for Hindsight/Zep/mem0/MemGPT are **end-to-end accuracy** (retrieval + LLM answer generation). memex's numbers include both retrieval Recall@K and E2E accuracy (with an LLM reading step). Other systems' published numbers use GPT-4o with their own evaluation methodology.
 
