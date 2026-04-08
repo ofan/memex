@@ -212,9 +212,19 @@ export class MemoryStore {
     this.migrateAddColumn("memories", "text_hash", "TEXT");
     this.migrateAddColumn("memories", "recall_count", "INTEGER DEFAULT 0");
     this.migrateAddColumn("memories", "last_recalled_at", "INTEGER");
+    // Backfill text_hash for existing entries (idempotent — only touches NULLs)
+    const nullHashes = this.db.prepare("SELECT COUNT(*) as c FROM memories WHERE text_hash IS NULL").get() as { c: number };
+    if (nullHashes.c > 0) {
+      const rows = this.db.prepare("SELECT id, text FROM memories WHERE text_hash IS NULL").all() as { id: string; text: string }[];
+      const update = this.db.prepare("UPDATE memories SET text_hash = ? WHERE id = ?");
+      for (const row of rows) {
+        const hash = createHash("sha256").update(row.text.trim()).digest("hex");
+        update.run(hash, row.id);
+      }
+    }
     try {
       this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
-    } catch { /* index may already exist */ }
+    } catch { /* index may already exist or duplicates prevent creation */ }
 
     // FTS5 for BM25 search
     this.db.exec(`
