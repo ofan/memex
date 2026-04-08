@@ -13,7 +13,7 @@ import type { MemoryScopeManager } from "./scopes.js";
 import type { Embedder } from "./embedder.js";
 import type { UnifiedRecall, UnifiedResult, ResultSource } from "./unified-recall.js";
 import type { UnifiedRetriever, UnifiedResult as UnifiedRetrieverResult } from "./unified-retriever.js";
-import type { TrackFn } from "./telemetry.js";
+import { Stopwatch, type TrackFn } from "./telemetry.js";
 
 // ============================================================================
 // Types
@@ -96,7 +96,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
         };
 
         try {
-          const t0 = Date.now();
+          const sw = new Stopwatch();
           const safeLimit = clampInt(limit, 1, 20);
 
           // Determine accessible scopes
@@ -142,7 +142,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             const convCount = results.filter(r => r.source === "conversation").length;
             const docCount = results.filter(r => r.source === "document").length;
 
-            context.track?.("recall", { results: results.length, latency_ms: Date.now() - t0, source: "tool", mode: "unified-retriever" });
+            context.track?.("recall", { results: results.length, source: "tool", mode: "unified-retriever", ...sw.timings });
             return {
               content: [{ type: "text", text: `Found ${results.length} results (${convCount} memories, ${docCount} documents):\n\n${text}` }],
               details: {
@@ -193,7 +193,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             const convCount = results.filter(r => r.source === "conversation").length;
             const docCount = results.filter(r => r.source === "document").length;
 
-            context.track?.("recall", { results: results.length, latency_ms: Date.now() - t0, source: "tool", mode: "unified" });
+            context.track?.("recall", { results: results.length, source: "tool", mode: "unified", ...sw.timings });
             return {
               content: [{ type: "text", text: `Found ${results.length} results (${convCount} memories, ${docCount} documents):\n\n${text}` }],
               details: {
@@ -234,7 +234,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
             })
             .join("\n");
 
-          context.track?.("recall", { results: results.length, latency_ms: Date.now() - t0, source: "tool", mode: "fallback" });
+          context.track?.("recall", { results: results.length, source: "tool", mode: "fallback", ...context.retriever.lastTimings, ...sw.timings });
           return {
             content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
             details: {
@@ -284,6 +284,7 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
         };
 
         try {
+          const sw = new Stopwatch();
           // Determine target scope
           let targetScope = scope || context.scopeManager.getDefaultScope(context.agentId);
 
@@ -344,7 +345,7 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             });
           }
 
-          context.track?.("store", { chunked: chunks.length > 1, chunks: chunks.length, source: "tool", category });
+          context.track?.("store", { chunked: chunks.length > 1, chunks: chunks.length, source: "tool", category, ...sw.timings });
           return {
             content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" in scope '${targetScope}'` }],
             details: {
@@ -387,6 +388,7 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
         };
 
         try {
+          const sw = new Stopwatch();
           // Determine accessible scopes
           let scopeFilter = context.scopeManager.getAccessibleScopes(context.agentId);
           if (scope) {
@@ -403,13 +405,13 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
           if (memoryId) {
             const deleted = await context.store.delete(memoryId, scopeFilter);
             if (deleted) {
-              context.track?.("forget", { found: true });
+              context.track?.("forget", { found: true, ...sw.timings });
               return {
                 content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
                 details: { action: "deleted", id: memoryId },
               };
             } else {
-              context.track?.("forget", { found: false });
+              context.track?.("forget", { found: false, ...sw.timings });
               return {
                 content: [{ type: "text", text: `Memory ${memoryId} not found or access denied.` }],
                 details: { error: "not_found", id: memoryId },
@@ -425,7 +427,7 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
             });
 
             if (results.length === 0) {
-              context.track?.("forget", { found: false });
+              context.track?.("forget", { found: false, ...sw.timings });
               return {
                 content: [{ type: "text", text: "No matching memories found." }],
                 details: { found: 0, query },
@@ -435,7 +437,7 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
             if (results.length === 1 && results[0].score > 0.9) {
               const deleted = await context.store.delete(results[0].entry.id, scopeFilter);
               if (deleted) {
-                context.track?.("forget", { found: true });
+                context.track?.("forget", { found: true, ...sw.timings });
                 return {
                   content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
                   details: { action: "deleted", id: results[0].entry.id },

@@ -37,7 +37,7 @@ import {
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-indexer.js";
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
-import { initTelemetry } from "./src/telemetry.js";
+import { initTelemetry, Stopwatch } from "./src/telemetry.js";
 import { extractRecallQuery } from "./src/recall-query.js";
 import {
   aggregateHealthStatus,
@@ -225,6 +225,7 @@ function getPluginVersion(): string {
 // ============================================================================
 
 let _telemetrySent = false;
+let _registered = false;
 
 const memoryUnifiedPlugin = {
   id: "memex",
@@ -941,6 +942,11 @@ const memoryUnifiedPlugin = {
       async closeAllMemorySearchManagers() {},
     });
 
+    // Everything below runs once — api.on() is additive and OpenClaw
+    // calls register() multiple times during startup phases.
+    if (_registered) return;
+    _registered = true;
+
     api.logger.info(
       `memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
     );
@@ -1053,7 +1059,7 @@ const memoryUnifiedPlugin = {
         }
 
         try {
-          const recallStart = Date.now();
+          const sw = new Stopwatch();
           // Determine agent ID and accessible scopes
           const agentId = ctx?.agentId || "main";
 
@@ -1146,7 +1152,7 @@ const memoryUnifiedPlugin = {
             `memex: injecting ${resultCount} memories into context for agent ${agentId}`
           );
 
-          track("recall", { results: resultCount, latency_ms: Date.now() - recallStart, source: "auto" });
+          track("recall", { results: resultCount, source: "auto", ...retriever.lastTimings, ...sw.timings });
 
           return {
             prependContext: buildRecallContext(memoryContext),
@@ -1414,16 +1420,20 @@ const memoryUnifiedPlugin = {
         refreshEmbeddingMismatchWarning();
 
         const runStartupChecks = async () => {
+          const startupSw = new Stopwatch();
           try {
             // Test components (bounded time)
             const embedTest = await runWithTimeout(embedder.test(), 8_000, "embedder.test()");
+            startupSw.lap("embed_probe");
             const retrievalTest = await runWithTimeout(retriever.test(), 8_000, "retriever.test()");
+            startupSw.lap("retrieval_probe");
             lastStartupCheck = {
               at: Date.now(),
               embedding: embedTest,
               retrieval: retrievalTest,
             };
 
+            track("startup", startupSw.timings);
             api.logger.info(
               `memex: initialized successfully ` +
               `(embedding: ${embedTest.success ? "OK" : "FAIL"}, ` +
@@ -1682,7 +1692,13 @@ function parsePluginConfig(value: unknown): PluginConfig {
   };
 }
 
-const pluginExport = Object.assign(memoryUnifiedPlugin, { detectCategory });
+/** @internal Reset module-level registration guard (test use only). */
+function _resetRegistration() {
+  _registered = false;
+  _telemetrySent = false;
+}
+
+const pluginExport = Object.assign(memoryUnifiedPlugin, { detectCategory, _resetRegistration });
 
 export default pluginExport;
 
