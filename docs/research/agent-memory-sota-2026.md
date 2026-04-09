@@ -577,11 +577,70 @@ Sources:
 
 ---
 
+---
+
+## Iteration 13: Multi-Agent Memory — Shared vs Private
+
+**Key papers:** Multi-Agent Memory as Computer Architecture (AAAI 2026), Collaborative Memory (Accenture 2025), Memory in LLM-based MAS Survey
+
+### Directly Relevant to Memex
+
+Memex already faces this: main and virgil share `global` scope. What happens when virgil stores "user prefers casual tone" and main stores "user prefers formal reports"? Both are true in different contexts — but retrieval doesn't know which context is active.
+
+### Research Solutions
+
+| Approach | How | Memex applicability |
+|---|---|---|
+| **Access control graphs** | Per-agent read/write permissions | ✅ Already have (scope system) |
+| **Cache coherence protocol** | Agents invalidate shared cache on write | Not needed at memex's scale |
+| **Arbiter reconciliation** | On conflict, compress old + new into summary | Maps to dreaming correction chains |
+| **"Team Mind" shared workspace** | Shared memory as persistent joint context | Global scope IS the team mind |
+
+### What Memex Should Adopt
+
+**1. Agent provenance on all memories (LOW effort, HIGH value)**
+Already partially done — `metadata.source: "agent"` or `"session-import"`. But we should also store `metadata.agentId: "virgil"` on every memory. At retrieval, the agent can see WHO stored it. Useful for: "what does virgil think about X?" vs "what does main know about X?"
+
+**2. Context-aware recall (FUTURE)**
+When virgil recalls, boost memories stored by virgil (same-agent affinity). When main recalls, boost main-stored memories. Doesn't restrict access — just adjusts ranking. Simple: `agentId == currentAgent ? score *= 1.1 : score`.
+
+**3. Conflict detection across agents (FUTURE)**
+When two agents store contradictory facts about the same entity, flag it in dreaming. The arbiter (reflection phase) produces a reconciled learning.
+
+**ROI: Agent provenance is LOW effort, HIGH value. Context-aware recall is MEDIUM. Conflict detection is the dream reflection phase we already designed.**
+
+Sources:
+- [Multi-Agent Memory as Computer Architecture (arXiv:2603.10062)](https://arxiv.org/html/2603.10062v1)
+- [Collaborative Memory (arXiv:2505.18279)](https://arxiv.org/html/2505.18279v1)
+
+---
+
+## Consolidated Roadmap (from all 13 iterations)
+
+### Ship Next (v0.5.13)
+1. **Entity extraction via `compromise`** — 3rd search signal (Iter 3, HIGH ROI)
+2. **Temporal query detection** — regex → date range filter (Iter 9, HIGH ROI)
+3. **Agent provenance** — store `agentId` in metadata (Iter 13, LOW effort)
+4. **Eviction threshold** — delete entries with importance ≤ 0.05 (Iter 7, one-liner)
+
+### Next Quarter
+5. **MCP server** — memex as universal memory layer (Iter 8, HIGH adoption)
+6. **Contradiction detection** at store time (Iter 5, needs entity extraction first)
+7. **Procedure category** — "how to" memories (Iter 6, just a category value)
+8. **Multi-hop eval questions** — better benchmark (Iter 10)
+
+### Future / Research
+9. **Reflection phase** — dedicated LLM or client tool (Iter 1, 4, 6, 12)
+10. **Uncertainty-gated retrieval** — two-stage recall (Iter 12)
+11. **Hierarchical memory levels** — themes → semantics → episodes (Iter 12)
+12. **Memory versioning** — track changes over time (Iter 1, 5)
+13. **Memory links** — lightweight entity graph in SQLite (Iter 4, 11)
+14. **Context-aware recall** — agent affinity boost (Iter 13)
+
 ### Research Backlog
-- Memory for multi-agent systems (shared memory, conflict resolution)
-- MemOS — memory as operating system
-- Production memory ops (monitoring, alerting)
-- Cognitive architecture integration
+- MemOS — memory as operating system abstraction
+- Cognitive architecture patterns (ACT-R, Soar) for memory activation
+- Production memory ops — monitoring, alerting, quality gates at scale
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
