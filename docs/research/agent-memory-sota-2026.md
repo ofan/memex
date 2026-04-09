@@ -531,12 +531,57 @@ Sources:
 
 ---
 
+---
+
+## Iteration 12: xMemory — Semantic Hierarchy + Uncertainty-Gated Retrieval
+
+**Paper:** [Beyond RAG for Agent Memory (arXiv:2602.02007)](https://arxiv.org/abs/2602.02007)
+
+### Key Insight
+
+> "Semantic similarity is a candidate-generation signal; uncertainty is a decision signal. Similarity tells you what is nearby. Uncertainty tells you what is actually worth paying for in the prompt budget."
+
+Standard top-k retrieval returns redundant context from agent memory (highly correlated conversation spans). xMemory builds a 4-level hierarchy: **messages → episodes → semantics → themes**. Retrieval starts at themes, drills down only if the LLM's uncertainty is high.
+
+### Result: 29% Token Reduction + Better Accuracy
+
+On LoCoMo: BLEU-1 from 28.5 → 34.5, F1 from 40.5 → 44.0, tokens per query from 9K → 4.7K.
+
+### What Memex Should Adopt
+
+**1. Hierarchical memory levels (FUTURE — needs dreaming reflection)**
+
+Memex stores flat entries. xMemory's hierarchy (raw → episode → semantic → theme) is essentially what dreaming reflection would produce:
+- Raw memories → cluster related entries (light sweep dedup)
+- Clusters → extract semantic facts (reflection phase)
+- Facts → group into themes (higher-order reflection)
+
+This validates the dreaming architecture — it's building toward the same hierarchy.
+
+**2. Uncertainty-gated expansion (HIGH ROI, MEDIUM effort)**
+
+Instead of always returning top-3, return top-3 abstracts (high-level). If the LLM's response indicates uncertainty, drill down to raw memories for specifics. This requires feedback from the LLM — not feasible in auto-recall (one-shot injection) but could work in tool-based recall.
+
+Implementation: `memory_recall` tool returns summaries first. If the LLM calls recall again with the same query, return raw entries. Two-stage retrieval.
+
+**3. Write-time hierarchy building (FUTURE)**
+
+xMemory does episode detection + summarization at write time (expensive). Memex could do it in dreaming (cheaper, batch). Trade-off: latency vs cost.
+
+**ROI: The uncertainty-gating concept is HIGH value. The hierarchy is what dreaming naturally builds toward.**
+
+Sources:
+- [xMemory paper](https://arxiv.org/html/2602.02007)
+- [VentureBeat: xMemory](https://venturebeat.com/orchestration/how-xmemory-cuts-token-costs-and-context-bloat-in-ai-agents)
+- [GitHub: xMemory](https://github.com/HU-xiaobai/xMemory)
+
+---
+
 ### Research Backlog
-- xMemory semantic hierarchy
-- Memory for multi-agent systems
+- Memory for multi-agent systems (shared memory, conflict resolution)
 - MemOS — memory as operating system
-- Cognitive architecture patterns (ACT-R)
-- Production memory ops (monitoring, alerting, quality gates)
+- Production memory ops (monitoring, alerting)
+- Cognitive architecture integration
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
