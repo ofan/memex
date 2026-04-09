@@ -1064,42 +1064,43 @@ const memoryUnifiedPlugin = {
     if (!_registered) {
     _registered = true;
 
-    // Dreaming: periodic memory consolidation (runs once, timer-based)
-    if (!isCli && config.dreaming?.enabled !== false) {
-      const dreamLogPath = join(dirname(unifiedDbFile), "memex.log");
-      const dreamIntervalMs = 24 * 60 * 60 * 1000;
-      const dreamCfg = {
-        enabled: true,
-        phases: {
-          light: config.dreaming?.phases?.light !== false,
-          deep: config.dreaming?.phases?.deep !== false,
-          reflection: config.dreaming?.phases?.reflection === true,
-        },
-        logPath: dreamLogPath,
-      };
-
-      const doDream = async () => {
-        try {
-          api.logger.info("memex: starting dream cycle...");
-          const dreamFn = getDreamCycle();
-          if (!dreamFn) {
-            api.logger.warn("memex: dreaming module not available");
-            return;
-          }
-          const result = await dreamFn(getStore(), dreamCfg, track);
-          const summary = [
-            result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved})` : null,
-            result.deep ? `deep(rescored=${result.deep.rescored}, decayed=${result.deep.decayed})` : null,
-          ].filter(Boolean).join(" ");
-          api.logger.info(`memex dream: ${summary} [${result.duration_ms}ms]`);
-        } catch (err) {
-          api.logger.warn(`memex dream failed: ${String(err)}`);
+    // /dream command — memory consolidation, triggered by user or cron
+    const dreamLogPath = join(dirname(unifiedDbFile), "memex.log");
+    api.registerCommand({
+      name: "dream",
+      description: "Run memory consolidation (dedup, noise removal, re-scoring). Args: light, deep, or blank for full cycle. Use --dry-run to preview.",
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        const args = (ctx.args || "").trim().toLowerCase();
+        const dryRun = args.includes("--dry-run");
+        const dreamFn = getDreamCycle();
+        if (!dreamFn) {
+          return { text: "Dreaming module not available." };
         }
-      };
 
-      setTimeout(() => void doDream(), 5 * 60_000);
-      setInterval(() => void doDream(), dreamIntervalMs);
-    }
+        if (dryRun) {
+          const db = getStore().db;
+          const total = (db.prepare("SELECT COUNT(*) as c FROM memories").get() as any).c;
+          const dupes = (db.prepare("SELECT COUNT(*) as c FROM (SELECT text, COUNT(*) as cnt FROM memories GROUP BY text HAVING cnt > 1)").get() as any).c;
+          const fragments = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE (text LIKE '[assistant]%' OR text LIKE '[user]%')").get() as any).c;
+          return { text: `Dry run — ${total} memories:\n  Duplicates: ${dupes}\n  Fragments: ${fragments}` };
+        }
+
+        const phases = {
+          light: !args || args.includes("light"),
+          deep: !args || args.includes("deep"),
+          reflection: args.includes("reflect"),
+        };
+
+        const result = await dreamFn(getStore(), { enabled: true, phases, logPath: dreamLogPath }, track);
+        const parts = [
+          result.light ? `Light: deduped=${result.light.deduped}, noise=${result.light.noiseRemoved}, fragments=${result.light.fragmentsRemoved}` : null,
+          result.deep ? `Deep: rescored=${result.deep.rescored}, decayed=${result.deep.decayed}` : null,
+        ].filter(Boolean);
+
+        return { text: `Dream cycle done (${result.duration_ms}ms):\n  ${parts.join("\n  ")}` };
+      },
+    });
 
     // Cross-turn recall tracking: avoid returning the same memories every turn
     // Maps agentId → last N turns of recalled memory IDs
