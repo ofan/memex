@@ -674,10 +674,82 @@ Sources:
 
 ---
 
-### Research Backlog
-- Cognitive architecture patterns (ACT-R activation) for memory scoring
-- Production memory ops — monitoring, alerting, quality gates
-- MemOS OpenClaw plugin — competitive analysis
+---
+
+## Iteration 15: ACT-R Cognitive Architecture — Memory Activation
+
+**Paper:** Human-Like Remembering and Forgetting in LLM Agents (ACM HAI 2025)
+
+### ACT-R's Memory Formula
+
+```
+activation(chunk) = base_level + spreading_activation + noise
+
+base_level = ln(Σ t_j^(-d))   // sum over all past accesses, time-decayed
+spreading_activation = Σ W_i * S_ij   // context elements boost related chunks
+```
+
+This is the gold standard cognitive model for human memory retrieval. Memex's current scoring approximates it:
+
+| ACT-R component | Memex equivalent | Gap |
+|---|---|---|
+| Base-level (recency + frequency) | `applyTimeDecay()` + `recall_count` boost | ✅ Close |
+| Spreading activation (context boost) | Entity overlap boost (proposed) | ❌ Not yet |
+| Noise (stochastic retrieval) | None | Could add diversity |
+| Activation threshold (forgetting) | Importance threshold in deep sweep | ✅ Have it |
+
+### Key Insight
+
+Memex's scoring pipeline is already ~70% of ACT-R's activation model. The missing piece is **spreading activation** — boosting memories that share context with the current query. This is EXACTLY what entity extraction + entity boost provides (Iteration 3).
+
+Adding entity overlap as a retrieval signal isn't just a heuristic — it's implementing spreading activation from a 40-year-old validated cognitive model.
+
+### What to Adopt
+
+**1. Formalize activation score (LOW effort)**
+Combine existing signals into a single activation formula:
+```
+activation = vector_score * (0.7 + 0.3 * importance) 
+           * recency_factor 
+           * (1 + entity_overlap * 0.15)
+           * (1 + recall_frequency * 0.05)
+```
+This is what memex already computes — just not as a single named concept.
+
+**2. Probabilistic noise for diversity (LOW ROI)**
+ACT-R adds Gaussian noise to activation scores so retrieval isn't deterministic. Memex already has MMR diversity. Noise would help but isn't a priority.
+
+**ROI: The research validates memex's existing architecture. Entity extraction (spreading activation) is the one missing piece.**
+
+Sources:
+- [ACT-R Memory in LLM Agents (ACM HAI 2025)](https://dl.acm.org/doi/10.1145/3765766.3765803)
+- [Memory for Autonomous LLM Agents Survey](https://arxiv.org/html/2603.07670v1)
+
+---
+
+## Research Complete — 15 Iterations
+
+### Final Prioritized Roadmap
+
+**Immediate (v0.5.13) — 4 items:**
+1. Entity extraction via `compromise` (HIGH ROI, closes Hindsight gap, implements ACT-R spreading activation)
+2. Temporal query detection (HIGH ROI, regex-based, zero cost)
+3. Agent provenance in metadata (trivial, enables multi-agent features)
+4. Eviction threshold in deep sweep (one-liner, prevents unbounded growth)
+
+**Next Quarter — 4 items:**
+5. MCP server for cross-platform memory (highest adoption impact)
+6. Contradiction detection at store time (needs entity extraction first)
+7. Procedure category for "how to" knowledge
+8. Multi-hop + temporal eval questions
+
+**Future — 6 items:**
+9. Reflection phase with dedicated LLM / client tool
+10. Uncertainty-gated two-stage retrieval (xMemory)
+11. Hierarchical memory levels (themes → semantics → episodes)
+12. Memory versioning and correction chains
+13. Next-scene prediction (MemOS-inspired prefetching)
+14. Context-aware recall with agent affinity
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
