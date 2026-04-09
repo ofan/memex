@@ -2,7 +2,25 @@
 
 Unified memory plugin for [OpenClaw](https://github.com/nicobailon/openclaw) — conversation memory + document search in a single SQLite database.
 
-## LongMemEval Benchmark (ICLR 2025)
+## Why Memex
+
+Agents do not learn only from conversations.
+
+They pick up durable facts from user interaction, but they also depend on workspace documents, notes, READMEs, configs, and research files to answer correctly over time. Most systems split these into separate products or separate retrieval paths: "memory" for remembered conversation facts, and "search" for documents.
+
+Memex treats both as long-term agent knowledge.
+
+It gives the agent one recall surface for both remembered interaction facts and retrieved workspace knowledge, while still preserving the distinction internally:
+- conversation memory is scoped, editable, and can be corrected or forgotten
+- documents stay tied to their source files and are reindexed from source of truth
+
+That separation matters operationally, but from the agent's point of view both are part of the context it should be able to recall when needed.
+
+## Benchmarks
+
+### LongMemEval Benchmark (ICLR 2025)
+
+This benchmark measures **conversation-memory quality**, not the full mixed-source memex path.
 
 **90% end-to-end accuracy** — #2 overall, within 1.4pp of the best system.
 
@@ -21,6 +39,18 @@ Tested on LongMemEval_s (N=50) using official prompts and GPT-4o-mini LLM-judge.
 - **R@3 (90%)** — correct session in top 3. Reflects production behavior (LLM sees top 3).
 - **R@5 (96%)** — correct session in top 5. Matches auto-recall window. Only 2 queries miss.
 - **E2E (90%)** — can the system actually answer the question? This is what users experience. E2E can exceed R@1 because the LLM reads multiple retrieved sessions and may find the answer even when the "official" correct session isn't ranked first.
+
+LongMemEval is the right benchmark for "does memex remember conversation history well over time?" It is **not** the canonical benchmark for mixed memory + document retrieval quality. That benchmark track is being separated out so the project does not overclaim an overall quality number from a memory-only benchmark.
+
+## Technical Overview
+
+Memex unifies memory and document search for agents, but it does not flatten them into the same thing.
+
+- **Conversation memory** stores durable facts learned from interaction: preferences, decisions, conventions, corrections
+- **Document search** retrieves facts from workspace source material: docs, notes, configs, code-adjacent markdown
+- **Unified retrieval** lets the agent query both in one pass, with source-aware ranking and attribution
+
+This is why memex is a `memory` plugin instead of a plain search plugin: the goal is not just retrieval quality, but long-term agent recall across both remembered interaction state and external source material.
 
 ## Features
 
