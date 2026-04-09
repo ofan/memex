@@ -196,11 +196,157 @@ Sources:
 9. **Graph traversal** (if entity tags aren't enough) — lightweight entity graph in SQLite
 10. **Cross-platform memory** — HTTP API for Claude Code / MCP hosts
 
-### Next Research Iterations
-- A-Mem: adaptive memory management (automatic lifecycle)
-- Memory compression at scale (100K+ entries)
-- Procedural memory / skill learning (Letta's new feature)
-- The "forgetting" problem — when should memories be deleted vs decayed?
+---
+
+## Iteration 4: A-Mem — Zettelkasten-Inspired Agentic Memory
+
+**Paper:** [A-MEM: Agentic Memory for LLM Agents (NeurIPS 2025)](https://arxiv.org/abs/2502.12110)
+
+### Core Idea
+
+A-Mem uses the **Zettelkasten method** — each memory is a "note" with structured attributes (context, keywords, tags, links to related notes). When a new memory arrives, it can **trigger updates to existing memories**, creating an evolving knowledge network.
+
+Key difference from memex: memories aren't static after storage. They evolve as new information arrives.
+
+### What Memex Should Adopt
+
+**1. Memory evolution on store (MEDIUM ROI)**
+When storing a new memory, check for related existing memories (already done via vector similarity dedup). But instead of just rejecting duplicates — UPDATE the existing memory with new context. Example: "Gemma 4 deployed on mbp-1" + later "Gemma 4 crashed after 5 messages" → merge into "Gemma 4 deployed on mbp-1 but proved unstable in multi-turn (crashed after 5 messages)."
+
+This is what the dreaming reflection phase would do — but A-Mem does it at store-time, immediately. Trade-off: requires LLM call at store time (expensive) vs dreaming does it in batch (cheaper).
+
+**2. Structured note attributes (LOW ROI)**
+A-Mem stores keywords + tags + context per memory. Memex already has category + scope + importance. Adding explicit keywords is essentially what entity extraction (Iteration 3) would provide.
+
+**3. Link-based retrieval (MEDIUM ROI)**
+A-Mem links related memories bidirectionally. At retrieval, follow links to find connected knowledge. This is a lightweight alternative to a full graph DB — just store `metadata.related: ["id1", "id2"]` and follow one hop.
+
+### Also Found: AgeMem (2026) — RL-Trained Memory Policy
+
+[AgeMem](https://arxiv.org/html/2601.01885v1) trains the agent via reinforcement learning to decide WHEN to store/retrieve/update/discard. Instead of heuristics (importance > 0.3 → store), the agent learns the optimal policy. Interesting research direction but impractical for memex (requires RL training infrastructure).
+
+### Key Quote from March 2026 Survey
+
+> "The gap between 'has memory' and 'does not have memory' is often larger than the gap between different LLM backbones. Investing in memory architecture can yield returns that rival or exceed model scaling."
+
+**ROI: MEDIUM.** Memory evolution at store-time is powerful but needs careful design. Link-based retrieval is a cheap add-on to entity extraction.
+
+---
+
+---
+
+## Iteration 5: Forgetting — When Should Memories Die?
+
+**Key papers:** ACT-R-inspired forgetting (ACM HAI 2025), Novel Forgetting Techniques (arXiv April 2026), MemoryBank forgetting curve
+
+### Three Forgetting Strategies
+
+| Strategy | How | When | Memex Status |
+|---|---|---|---|
+| **Temporal decay** | Exponential: `activation *= e^(-λt)` | Every retrieval | ✅ Have it (applyTimeDecay in retriever) |
+| **Usage-based eviction** | Never recalled after N days → evict | Dreaming deep sweep | ✅ Have it (recall_count based decay) |
+| **Staleness detection** | High-relevance memory becomes wrong | Open problem | ❌ Don't have it |
+
+### The Hard Problem: Staleness
+
+From Mem0's 2026 production learnings: a memory about "user works at Company X" is highly retrieved until the user changes jobs. Then it becomes **confidently wrong** — worse than no memory at all. Detecting this requires either:
+- User correction (manual — current memex approach via `memory_forget`)
+- Contradiction detection (new memory contradicts old → flag for review)
+- Confidence decay on factual claims (facts older than N months get lower confidence)
+
+### What Memex Should Adopt
+
+**Contradiction detection at store time (HIGH ROI)**
+When storing a new memory, check if it contradicts existing high-importance entries about the same entities. Example: "Ryan now uses Gemma 4" contradicts "Ryan uses Qwen3.5 on mbp-1". Flag the old one for review or auto-demote.
+
+This pairs with entity extraction (Iteration 3): extract entities from both old and new, find overlapping entities, check if claims conflict.
+
+**Implementation:** At `store()`, after entity extraction, query existing memories with matching entities. If cosine similarity is high (same topic) but text is contradictory (detected via simple heuristics — date changes, "switched to", "no longer"), demote the old entry's importance.
+
+**ROI: HIGH.** Prevents confidently-wrong recalls. Cheap if entity extraction is already in place.
+
+---
+
+---
+
+## Iteration 6: Procedural Memory / Skill Learning
+
+**Key papers:** MACLA (AAMAS 2026), PRAXIS (Dec 2025), Mem^p (Aug 2025)
+
+### What Is Procedural Memory?
+
+Semantic memory = "what is X" (facts). Procedural memory = "how to do X" (skills). Current memex only stores semantic memory. Procedural memory stores reusable action sequences that improve task success rate AND efficiency (fewer steps).
+
+### MACLA: The Most Relevant Approach
+
+Compresses 2,851 task trajectories into 187 reusable procedures (15:1 compression). Frozen LLM + external procedural memory. No retraining needed. Reaches 90.3% on ALFWorld unseen tasks.
+
+**Key insight for memex:** Separate learning from reasoning. The LLM stays frozen, all improvement happens in the external memory system. This is exactly memex's architecture — the plugin improves recall quality without changing the LLM.
+
+### What Memex Should Adopt
+
+**New category: `category: "procedure"` (MEDIUM ROI, FUTURE)**
+
+Store "how to" knowledge:
+- "To deploy a model to mbp-1: 1) check current model with llama-swap status, 2) unload current, 3) upload GGUF, 4) update config, 5) verify with test prompt"
+- "To create a new GitHub repo: use `gh repo create --private` (user preference)"
+
+These are different from facts because they're actionable sequences. The agent can retrieve a procedure and follow it.
+
+**Implementation:** No code change needed — just a new category value. The LLM stores procedures via `memory_store` with `category: "procedure"`. Retrieval works the same (vector + BM25). The prompt instruction (auto-capture) would need to mention "store procedures and workflows, not just facts."
+
+**Skill compression via dreaming (FUTURE)**
+
+During reflection, the LLM could analyze multiple related experiences and compress them into a single procedure. Example: 3 separate memories about deploying different models → 1 procedure "how to deploy a model."
+
+**ROI: MEDIUM for category, HIGH for skill compression via dreaming.**
+
+---
+
+---
+
+## Iteration 7: Memory Compression at Scale
+
+**Key sources:** Memory survey (arXiv:2603.07670), KVzip, SUPO, MemoryArena
+
+### The Scaling Problem
+
+Memex has 2,103 entries. At 10K+ entries, vector search slows. At 100K+, it's unusable without compression. Current dreaming (light+deep) removes noise but doesn't compress — it just deletes or demotes.
+
+### Compression Strategies (ranked by practicality)
+
+**1. Hierarchical summarization (HIGH ROI)**
+Group memories by topic/entity, summarize each group into a single entry. MACLA achieves 15:1 compression (2,851 → 187). This is what our reflection phase is designed to do — but we haven't built it yet.
+
+**2. Importance-based eviction (ALREADY HAVE)**
+Deep sweep decays old unused entries. At some threshold (importance ≤ 0.05), actually delete. Currently we decay but never delete.
+
+**3. Rolling summaries (MEDIUM ROI)**
+Periodically compress the oldest N entries into a summary. Like git squash for memories. Loses granularity but keeps the signal.
+
+### What Memex Should Do
+
+**Add an eviction threshold to deep sweep (LOW EFFORT)**
+Entries with `importance ≤ 0.05` after deep sweep → delete. Currently they persist forever at 0.1. This is safe — they're already invisible to retrieval (importance weighting suppresses them).
+
+**Hierarchical summarization via reflection (FUTURE — step 8)**
+Already in the plan. The research validates it — MACLA shows 15:1 is achievable.
+
+### Key Finding: MemoryArena
+
+Models scoring near-perfectly on recall benchmarks "plummet to 40-60% in MemoryArena." This exposes a gap between passive recall and active decision-relevant memory use. Implication for memex: LongMemEval (recall quality) might not predict real-world value. Need task-based evaluation too.
+
+**ROI: LOW for new work (deep sweep eviction is a one-liner), HIGH for future reflection.**
+
+---
+
+### Research Backlog
+- Cross-platform memory APIs / MCP
+- Temporal reasoning in queries
+- Memory eval benchmarks beyond LongMemEval
+- Graph memory in SQLite
+- xMemory semantic hierarchy
+- Memory for multi-agent systems
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
