@@ -447,13 +447,51 @@ Sources:
 
 ---
 
+---
+
+## Iteration 10: Memory Evaluation Benchmarks
+
+**Key benchmarks:** LOCOMO, MemoryArena, MemoryBench, AMA-Bench
+
+### Current Memex Evaluation
+
+Memex uses **LongMemEval** (ICLR 2025) — 50 multi-session conversation recall questions. Score: 90% E2E. This measures one thing: can you retrieve the right memory and extract an answer?
+
+### What LongMemEval Misses
+
+**MemoryArena (2026) finding:** "Agents with near-saturated performance on existing long-context memory benchmarks like LoCoMo perform poorly in the agentic setting." Translation: good recall ≠ good task performance.
+
+**MemoryBench (2025) finding:** Prior benchmarks "focus on retrieval of pre-fetched semantic and episodic memory but do not support evaluation of procedural memory built from test-time user feedback."
+
+### What Memex Should Measure
+
+| Benchmark | What it measures | Should memex adopt? |
+|---|---|---|
+| **LongMemEval** | Recall accuracy | ✅ Already have |
+| **LOCOMO** | Multi-hop + temporal reasoning | YES — add multi-hop questions |
+| **MemoryArena** | Does memory improve task outcomes? | FUTURE — needs task environment |
+| **MemoryBench** | Continual learning from feedback | FUTURE — needs feedback simulation |
+
+### Practical Next Step
+
+**Add temporal + multi-hop questions to our eval set (MEDIUM ROI)**
+Current LongMemEval test set has 50 questions, all single-hop recall. Add:
+- 10 temporal questions ("What did I change last week?")
+- 10 multi-hop questions ("Which model replaced the one that crashed?")
+- Measure before/after entity extraction and temporal filtering
+
+This would be a more honest evaluation than pure recall accuracy.
+
+**ROI: MEDIUM.** Doesn't improve the product directly, but tells us where to invest.
+
+---
+
 ### Research Backlog
-- Memory eval benchmarks beyond LongMemEval
 - Graph memory in SQLite
 - xMemory semantic hierarchy
 - Memory for multi-agent systems
 - MemOS — memory as operating system
-- Cognitive architecture integration (ACT-R, Soar)
+- Cognitive architecture patterns (ACT-R)
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
