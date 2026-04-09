@@ -340,13 +340,120 @@ Models scoring near-perfectly on recall benchmarks "plummet to 40-60% in MemoryA
 
 ---
 
+---
+
+## Iteration 8: Cross-Platform Memory via MCP
+
+### MCP as the Universal Interface
+
+MCP (Model Context Protocol) is the de facto standard for connecting LLMs to tools. Every major platform supports it: Claude Code, OpenAI, Google, Zed, Cursor. If memex exposes an MCP server, it works everywhere.
+
+### What Memex as MCP Server Looks Like
+
+```
+Tools:
+  memory_recall   — search memories (vector + BM25 + entity)
+  memory_store    — store a new memory
+  memory_forget   — delete a memory
+  memory_dream    — run consolidation cycle
+  memory_stats    — pool health metrics
+
+Resources:
+  memex://memories/{id}     — individual memory
+  memex://stats             — pool statistics
+  memex://dream-log         — recent dream cycle results
+```
+
+Memex already registers these as OpenClaw plugin tools. Wrapping them as an MCP server is straightforward — the tool schemas are the same.
+
+### Implementation Path
+
+**Option A: MCP server binary (MEDIUM effort)**
+Standalone Node process serving MCP over stdio or HTTP. Any MCP host connects. SQLite DB is shared via file path.
+
+**Option B: MCP via OpenClaw (LOW effort)**
+OpenClaw already supports MCP (`api.registerMcpServer` or `.mcp.json`). Memex tools are already registered. Just need to expose them on the MCP transport.
+
+**Option C: HTTP API (MEDIUM effort)**
+REST endpoints over the existing `registerHttpRoute`. Not MCP-native but universally accessible.
+
+### Recommendation
+
+**Start with Option B** — OpenClaw already has MCP plumbing. Then extract to **Option A** for standalone use (Claude Code, Cursor, etc.).
+
+**ROI: HIGH for adoption, MEDIUM effort.** This is the key to "memory across all agent tools."
+
+### Key Insight
+
+> "MCP is doing for AI integration what REST did for web services."
+
+Memex as an MCP server turns it from "an OpenClaw plugin" into "a universal memory layer." Any MCP-capable agent gets persistent memory by adding one line to `.mcp.json`.
+
+Sources:
+- [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
+- [MCP Roadmap 2026 (The New Stack)](https://thenewstack.io/model-context-protocol-roadmap-2026/)
+- [Memory in AI: MCP & A2A (Orca Security)](https://orca.security/resources/blog/bringing-memory-to-ai-mcp-a2a-agent-context-protocols/)
+
+---
+
+---
+
+## Iteration 9: Temporal Reasoning in Queries
+
+**Key sources:** Temporal IR/QA survey (arXiv:2505.20243), TimeR4 (EMNLP 2024), MRAG, Hindsight temporal filtering
+
+### The Problem for Memex
+
+User asks: "What did I decide about deployments last week?" Memex does vector + BM25 search on "decide deployments last week" — the temporal phrase "last week" is noise to both signals. It matches on "decide" and "deployments" but ignores the time constraint.
+
+### How to Fix It (3 levels)
+
+**Level 1: Temporal expression detection + timestamp filtering (LOW effort, HIGH ROI)**
+- At query time, detect temporal phrases: "last week", "yesterday", "in March", "2 days ago"
+- Convert to absolute date range
+- Add `WHERE timestamp BETWEEN ? AND ?` before vector search
+- Implementation: regex patterns for common expressions, `Date` arithmetic
+- Already have timestamps on every memory
+
+**Level 2: Recency-weighted scoring (ALREADY HAVE)**
+- `applyTimeDecay()` in retriever already penalizes old entries
+- But this is a global decay, not query-specific ("last week" means "boost entries FROM last week, not just recent ones")
+
+**Level 3: Temporal rewriting (FUTURE)**
+- TimeR4 approach: rewrite "what happened last week with X" → "what happened between April 1-7 with X"
+- Requires an LLM rewrite step before retrieval
+- Too expensive for auto-recall, maybe for tool calls
+
+### Recommendation
+
+**Level 1 is the sweet spot.** Regex-based temporal detection at query time, convert to date range, filter before vector search. Handles 80% of temporal queries with zero LLM cost.
+
+Implementation sketch:
+```typescript
+const TEMPORAL_PATTERNS = [
+  { re: /\byesterday\b/i, fn: () => [daysAgo(1), daysAgo(0)] },
+  { re: /\blast week\b/i, fn: () => [daysAgo(7), daysAgo(0)] },
+  { re: /\blast month\b/i, fn: () => [daysAgo(30), daysAgo(0)] },
+  { re: /\bin (january|february|...)\b/i, fn: (m) => monthRange(m) },
+];
+```
+
+**ROI: HIGH. One of the easiest wins for recall quality on temporal queries.**
+
+Sources:
+- [Temporal IR/QA Survey (arXiv:2505.20243)](https://arxiv.org/html/2505.20243v2)
+- [TimeR4 (EMNLP 2024)](https://aclanthology.org/2024.emnlp-main.394.pdf)
+- [MRAG: Modular Retrieval for Time-Sensitive QA](https://aclanthology.org/2025.findings-emnlp.167.pdf)
+
+---
+
 ### Research Backlog
-- Cross-platform memory APIs / MCP
-- Temporal reasoning in queries
 - Memory eval benchmarks beyond LongMemEval
 - Graph memory in SQLite
 - xMemory semantic hierarchy
 - Memory for multi-agent systems
+- MemOS — memory as operating system
+- Cognitive architecture integration (ACT-R, Soar)
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
