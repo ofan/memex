@@ -637,10 +637,47 @@ Sources:
 13. **Memory links** — lightweight entity graph in SQLite (Iter 4, 11)
 14. **Context-aware recall** — agent affinity boost (Iter 13)
 
+---
+
+## Iteration 14: MemOS — Memory as Operating System
+
+**Papers:** MemOS (arXiv:2505.22101), MemoryOS (EMNLP 2025 Oral)
+
+### Core Concept
+
+MemOS treats memory as a first-class OS resource — like how an OS manages RAM/disk, MemOS manages parametric memory (weights), activation memory (context), and plaintext memory (external stores). The key abstraction is **MemCube** — a unified container for all memory types with lifecycle management.
+
+### Results
+
+159% improvement in temporal reasoning over OpenAI's global memory on LoCoMo. 38.97% overall accuracy gain. 60.95% token reduction. Also has an **OpenClaw plugin** (launched March 2026).
+
+### What Matters for Memex
+
+**1. Next-Scene Prediction (HIGH interest, FUTURE)**
+MemOS proactively preloads memory fragments it predicts will be needed, during inference. Like CPU prefetching. Memex could do this: during auto-recall, predict what the NEXT question will be and pre-embed it. Saves ~80ms on the next turn.
+
+**2. Memory lifecycle management (ALREADY HAVE partly)**
+MemOS formalizes: create → activate → archive → migrate → delete. Memex has create (store) → archive (importance decay) → delete (dreaming eviction). Missing: activate (boost on use) and migrate (cross-agent).
+
+**3. MemStore for inter-agent memory sharing (FUTURE)**
+MemOS supports upload/download of memory between agents. This is the cross-platform story — memex as MCP server is a simpler version of this.
+
+**4. The OpenClaw plugin is a competitor**
+MemOS has an OpenClaw plugin. Direct competitor to memex. Worth investigating what it does differently.
+
+**ROI: Next-scene prediction is a novel idea worth prototyping. The MemOS OpenClaw plugin is a competitive threat worth monitoring.**
+
+Sources:
+- [MemOS paper](https://arxiv.org/html/2505.22101v1)
+- [MemOS GitHub](https://github.com/MemTensor/MemOS)
+- [MemoryOS (EMNLP 2025)](https://github.com/BAI-LAB/MemoryOS)
+
+---
+
 ### Research Backlog
-- MemOS — memory as operating system abstraction
-- Cognitive architecture patterns (ACT-R, Soar) for memory activation
-- Production memory ops — monitoring, alerting, quality gates at scale
+- Cognitive architecture patterns (ACT-R activation) for memory scoring
+- Production memory ops — monitoring, alerting, quality gates
+- MemOS OpenClaw plugin — competitive analysis
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
