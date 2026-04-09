@@ -486,12 +486,57 @@ This would be a more honest evaluation than pure recall accuracy.
 
 ---
 
+---
+
+## Iteration 11: Graph Memory in SQLite
+
+### Do We Even Need a Graph?
+
+Memex has ~2K entries. Graph traversal shines at scale (10K+ entities with dense relationships). At memex's scale, entity tags + vector search likely outperform graph traversal for recall quality. Hindsight uses graph traversal but also has 3 other search signals.
+
+### Cheapest Graph Implementation for SQLite
+
+**DIY adjacency table (5 lines of SQL):**
+```sql
+CREATE TABLE memory_links (
+  source_id TEXT REFERENCES memories(id),
+  target_id TEXT REFERENCES memories(id),
+  relation TEXT,  -- "supersedes", "related", "contradicts"
+  PRIMARY KEY (source_id, target_id)
+);
+```
+
+At retrieval: after vector+BM25 returns top candidates, follow links one hop to find connected memories. No graph DB, no extension, pure SQL.
+
+### When to Add It
+
+**Not now.** Entity extraction (Iteration 3) gives 80% of the benefit. If that's not enough:
+1. Add `memory_links` table
+2. On store: link new memory to related entries (by entity overlap)
+3. On retrieval: expand top-3 results by following links
+
+### What the Research Says
+
+- SQLite handles graph queries fine up to ~100K nodes via recursive CTEs
+- Beyond that, need a real graph engine (FalkorDBLite, Neo4j)
+- LiteGraph has MCP server support — interesting for cross-platform
+- Most agent memory systems at memex's scale don't need graph
+
+**ROI: LOW for now. Entity tags first. Graph later if needed.**
+
+Sources:
+- [Lightweight GraphRAG with SQLite](https://dev.to/stephenc222/how-to-build-lightweight-graphrag-with-sqlite-53le)
+- [SQLite + Graph Hybrid Models](https://www.sqliteforum.com/p/sqlite-and-graph-hybrids)
+- [LiteGraph](https://github.com/jchristn/LiteGraph)
+
+---
+
 ### Research Backlog
-- Graph memory in SQLite
 - xMemory semantic hierarchy
 - Memory for multi-agent systems
 - MemOS — memory as operating system
 - Cognitive architecture patterns (ACT-R)
+- Production memory ops (monitoring, alerting, quality gates)
 
 Sources:
 - [Atlan: Best AI Agent Memory Frameworks 2026](https://atlan.com/know/best-ai-agent-memory-frameworks-2026/)
