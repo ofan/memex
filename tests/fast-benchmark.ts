@@ -13,13 +13,13 @@
  * Usage:
  *   node --import jiti/register tests/fast-benchmark.ts
  *   TIER=pipeline node --import jiti/register tests/fast-benchmark.ts
- *   TIER=e2e LLM_MODEL=gemini-2.5-flash node --import jiti/register tests/fast-benchmark.ts
+ *   TIER=e2e node --import jiti/register tests/fast-benchmark.ts
  *
  * Environment:
  *   TIER             — "fast" (default), "pipeline", or "e2e"
- *   LLM_MODEL        — for e2e tier (default: gemini-2.5-flash)
- *   LLM_BASE_URL     — LLM endpoint
- *   LLM_API_KEY      — defaults to GEMINI_API_KEY
+ *   LLM_MODEL        — for e2e tier (default: gpt-4o)
+ *   LLM_BASE_URL     — LLM endpoint (default: OpenAI)
+ *   LLM_API_KEY      — defaults to OPENAI_API_KEY
  *   FUSION           — "zscore" (default), "weighted", "veconly"
  *   VEC_WEIGHT       — vector weight (default: 0.8)
  *   BM25_WEIGHT      — BM25 weight (default: 0.2)
@@ -52,9 +52,9 @@ const RERANK = process.env.RERANK === "1";
 const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "http://100.122.104.26:8090/v1/rerank";
 const RERANK_MODEL = process.env.RERANK_MODEL || "bge-reranker-v2-m3-Q8_0";
 const RERANK_API_KEY = process.env.RERANK_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
-const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai";
-const LLM_MODEL = process.env.LLM_MODEL || "gemini-2.5-flash";
-const LLM_API_KEY = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || "";
+const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
+const LLM_MODEL = process.env.LLM_MODEL || "gpt-4o";
+const LLM_API_KEY = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "";
 const RESPONSES_DIR = join(__dirname, "fixtures", "longmemeval-cache");
 
 // ============================================================================
@@ -435,7 +435,7 @@ async function runPipeline(cache: ResearchCache): Promise<ExampleResult[]> {
 
 async function addE2E(results: ExampleResult[]): Promise<void> {
   if (!LLM_API_KEY) {
-    console.log("No LLM_API_KEY — skipping E2E. Set GEMINI_API_KEY or LLM_API_KEY.");
+    console.log("No LLM_API_KEY — skipping E2E. Set OPENAI_API_KEY or LLM_API_KEY.");
     return;
   }
 
