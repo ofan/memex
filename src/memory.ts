@@ -233,6 +233,7 @@ export class MemoryStore {
 
     // Entity graph (memory links)
     ensureGraphSchema(this.db);
+    this.backfillLinks();
 
     // FTS5 for BM25 search
     this.db.exec(`
@@ -1113,6 +1114,26 @@ export class MemoryStore {
         try { meta = JSON.parse(row.metadata || "{}"); } catch {}
         meta.entities = extractEntities(row.text);
         update.run(JSON.stringify(meta), row.id);
+      }
+    } catch { /* best effort */ }
+  }
+
+  /** Backfill graph links for existing memories (only if no links exist yet). */
+  private backfillLinks(): void {
+    try {
+      const linkCount = (this.db.prepare("SELECT COUNT(*) as c FROM memory_links").get() as any).c;
+      if (linkCount > 0) return; // already have links
+
+      const rows = this.db.prepare(
+        "SELECT id, metadata FROM memories WHERE metadata LIKE '%\"entities\"%'"
+      ).all() as { id: string; metadata: string }[];
+
+      for (const row of rows) {
+        let entities: string[] = [];
+        try { entities = JSON.parse(row.metadata).entities || []; } catch { continue; }
+        if (entities.length >= 2) {
+          createLinks(this.db, row.id, entities);
+        }
       }
     } catch { /* best effort */ }
   }
