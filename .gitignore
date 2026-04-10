@@ -9,3 +9,4 @@ tests/fixtures/longmemeval-cache/batch-*.json*
 tests/fixtures/longmemeval-cache/fast-responses-*.json
 tests/fixtures/longmemeval-cache/chunk-scores-*.json
 tests/fixtures/longmemeval-cache/chunk-checkpoint.json
+.worktrees/
