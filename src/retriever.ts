@@ -7,6 +7,7 @@ import type { MemoryStore, MemorySearchResult } from "./memory.js";
 import type { Embedder } from "./embedder.js";
 import { filterNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
+import { detectTemporalRange } from "./temporal.js";
 
 // ============================================================================
 // Types & Configuration
