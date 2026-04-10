@@ -7,9 +7,9 @@ AGENTS.md
 - **NEVER** commit secrets (API keys, tokens, passwords) to this repo
 - **NEVER** reference the dev environment's infrastructure (hostnames, IPs, lab domains, machine names) in committed code or docs
 - **NEVER** store OpenClaw user data, config, or database contents in this repo
-- Use env vars or `~/bin/secrets get <item> <FIELD>` for credentials at runtime
-- Tests may use the live DB for local evaluation but results must not be committed with PII or infra details
-- Examples in docs should use generic placeholders ("user deployed Model X on server-1"), not real names/systems
+- Use environment variables for credentials at runtime
+- Tests may use a local DB for evaluation but results must not be committed with PII or infra details
+- Examples in docs should use generic placeholders, not real hostnames, IPs, or domain names
 
 ### Development
 
