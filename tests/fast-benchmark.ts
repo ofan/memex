@@ -49,11 +49,11 @@ const POOL_VEC = parseInt(process.env.POOL_VEC || "30");
 const POOL_BM25 = parseInt(process.env.POOL_BM25 || "20");
 const USE_CHUNKS = process.env.CHUNKS !== "0"; // default: use chunks if available
 const RERANK = process.env.RERANK === "1";
-const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "http://REDACTED_IP:8090/v1/rerank";
-const RERANK_MODEL = process.env.RERANK_MODEL || "bge-reranker-v2-m3-Q8_0";
-const RERANK_API_KEY = process.env.RERANK_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
-const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
-const LLM_MODEL = process.env.LLM_MODEL || "gpt-4o";
+const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "";
+const RERANK_MODEL = process.env.RERANK_MODEL || "";
+const RERANK_API_KEY = process.env.RERANK_API_KEY || "";
+const LLM_BASE_URL = process.env.LLM_BASE_URL || "";
+const LLM_MODEL = process.env.LLM_MODEL || "";
 const LLM_API_KEY = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "";
 const RESPONSES_DIR = join(__dirname, "fixtures", "longmemeval-cache");
 

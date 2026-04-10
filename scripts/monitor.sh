@@ -35,7 +35,12 @@ else
 fi
 
 # Embedding server
-EMBED_MS=$(curl -s -o /dev/null -w "%{time_total}" http://REDACTED_IP:8090/v1/models 2>/dev/null)
+EMBED_URL="${EMBED_BASE_URL:-}"
+if [ -n "$EMBED_URL" ]; then
+  EMBED_MS=$(curl -s -o /dev/null -w "%{time_total}" "$EMBED_URL/models" 2>/dev/null)
+else
+  EMBED_MS="n/a"
+fi
 echo "embed_server=${EMBED_MS}s" >> "$REPORT"
 
 echo "" >> "$REPORT"

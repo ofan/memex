@@ -6,7 +6,7 @@
  *
  * Usage:
  *   EVAL_DB=~/.openclaw/memory/memex/memex.sqlite \
- *   EMBED_BASE_URL=http://REDACTED_IP:8090/v1 \
+ *   EMBED_BASE_URL=${EMBED_BASE_URL} \
  *   EMBED_API_KEY=... \
  *   node --import jiti/register tests/domain-eval.ts
  */
@@ -14,11 +14,11 @@ import { MemoryStore } from "../src/memory.js";
 import { createRetriever } from "../src/retriever.js";
 import { createEmbedder } from "../src/embedder.js";
 
-const DB_PATH = process.env.EVAL_DB || `${process.env.HOME}/.openclaw/memory/memex/memex.sqlite`;
-const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "http://REDACTED_IP:8090/v1";
-const EMBED_API_KEY = process.env.EMBED_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
-const EMBED_MODEL = process.env.EMBED_MODEL || "Qwen3-Embedding-4B-Q8_0";
-const VECTOR_DIM = parseInt(process.env.VECTOR_DIM || "2560");
+const DB_PATH = process.env.EVAL_DB || "";
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "";
+const EMBED_API_KEY = process.env.EMBED_API_KEY || "";
+const EMBED_MODEL = process.env.EMBED_MODEL || "";
+const VECTOR_DIM = parseInt(process.env.VECTOR_DIM || "0");
 
 // ============================================================================
 // Eval queries — entity-rich, with expected memory content
@@ -68,8 +68,8 @@ const EVAL_QUERIES: EvalQuery[] = [
     type: "system",
   },
   {
-    id: "mac-mini-1-config",
-    query: "What's the rule for modifying mac-mini-1 config?",
+    id: "server-config",
+    query: "What's the rule for modifying server config?",
     expected: ["approval", "embedding"],
     type: "system",
   },
