@@ -94,6 +94,37 @@ When implementation reveals unknowns:
 4. Update plan with findings
 5. Resume or pivot
 
+## Research Rigor: Diagnose Before Scoping
+
+**Before scoping any project that aims to improve an eval metric, trace the proposed mechanism through each currently-failing case.** SOTA citations are not evidence the technique fixes *our* failures.
+
+### Required before a quality project is scoped
+
+1. **Diagnostic spike on current failures** (30–60 min, not a full milestone).
+   For each failing eval case, walk the pipeline step by step and classify the failure:
+   - **Recall** — correct memory not in candidate pool
+   - **Scoring** — correct memory in pool but outranked
+   - **Ingestion** — correct memory doesn't exist in the DB
+   These are three different projects. Picking the wrong one wastes a cycle.
+2. **Per-failure mechanism trace.** For each failing case, describe concretely how the proposed technique changes the outcome: *"query X would now retrieve memory Y because step Z does W."* If you can't say that for each failure, research isn't done.
+3. **Kill criterion.** If the spike shows the mechanism can only fix 0/N failures, do not start the project. Research further or pivot.
+
+### Why this exists
+
+Two memex arcs — entity boost (weight=0 optimal) and entity graph (3,406 links, zero domain-eval change) — both shipped with zero improvement. Both were justified by "SOTA system X does this" without tracing the mechanism through our actual failing cases. User flagged: *"this is a sign of lacking research."*
+
+The SOTA citations were true. They just didn't apply to the specific failure modes in our DB. Generic survey ≠ applicable fix.
+
+### Consequence for milestone sequencing
+
+Prepend **Diagnose** before **Design** for quality projects:
+
+```
+Diagnose → Design → Build → Evaluate → Release
+```
+
+**Diagnose** is lightweight (30–60 min), produces a one-line classification per failure, and gates the rest. No design doc until diagnosis is in hand.
+
 ## Worktree Convention
 
 ```
