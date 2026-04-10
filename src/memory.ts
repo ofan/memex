@@ -12,6 +12,7 @@ import { openDatabase, loadSqliteVec, type Database } from "./db.js";
 import { buildFTS5Query } from "./search.js";
 import { chunkDocument, type ChunkerConfig } from "./chunker.js";
 import { extractEntities } from "./entities.js";
+import { ensureGraphSchema, createLinks, deleteLinks } from "./graph.js";
 
 // ============================================================================
 // Types
@@ -230,6 +231,9 @@ export class MemoryStore {
     // Entity backfill for entries missing entities in metadata
     this.backfillEntities();
 
+    // Entity graph (memory links)
+    ensureGraphSchema(this.db);
+
     // FTS5 for BM25 search
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -355,6 +359,12 @@ export class MemoryStore {
     };
 
     this.insertMemory(fullEntry, textHash);
+
+    // Create entity graph links
+    if (entities.length >= 2) {
+      try { createLinks(this.db, fullEntry.id, entities); } catch { /* best effort */ }
+    }
+
     return fullEntry;
   }
 
@@ -739,6 +749,9 @@ export class MemoryStore {
       this.db.prepare(`DELETE FROM vectors_vec WHERE hash_seq = ?`).run(`mem_${resolvedId}`);
       this.db.prepare(`DELETE FROM vectors_vec WHERE hash_seq LIKE ?`).run(`mem_${resolvedId}_c%`);
     }
+
+    // Delete entity graph links
+    try { deleteLinks(this.db, resolvedId); } catch { /* best effort */ }
 
     return true;
   }
