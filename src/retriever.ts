@@ -8,6 +8,7 @@ import type { Embedder } from "./embedder.js";
 import { filterNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
 import { detectTemporalRange } from "./temporal.js";
+import { extractEntities, entityOverlap } from "./entities.js";
 
 // ============================================================================
 // Types & Configuration
@@ -361,7 +362,11 @@ export class MemoryRetriever {
     const fusedResults = await this.fuseResults(vectorResults, bm25Results);
     sw.lap("fuse");
 
-    const filtered = fusedResults.filter(r => r.score >= this.config.minScore);
+    // Entity boost: 3rd retrieval signal (ACT-R spreading activation)
+    const queryEntities = extractEntities(query);
+    const entityBoosted = this.applyEntityBoost(fusedResults, queryEntities);
+
+    const filtered = entityBoosted.filter(r => r.score >= this.config.minScore);
 
     const reranked = this.config.rerank !== "none"
       ? await this.rerankResults(query, queryVector, filtered.slice(0, limit * 2))
@@ -767,6 +772,27 @@ export class MemoryRetriever {
    * (e.g. 3 similar "SVG style" memories) while keeping them available
    * if the pool is small.
    */
+  /**
+   * Entity boost: memories sharing entities with the query get a score boost.
+   * Implements ACT-R spreading activation as a 3rd retrieval signal.
+   */
+  private applyEntityBoost(results: RetrievalResult[], queryEntities: string[]): RetrievalResult[] {
+    if (queryEntities.length === 0) return results;
+    const ENTITY_BOOST_WEIGHT = 0.15;
+    const boosted = results.map(r => {
+      let memEntities: string[] = [];
+      try {
+        const meta = JSON.parse(r.entry.metadata || "{}");
+        memEntities = meta.entities || [];
+      } catch {}
+      const overlap = entityOverlap(queryEntities, memEntities);
+      if (overlap === 0) return r;
+      const boost = 1 + (overlap / queryEntities.length) * ENTITY_BOOST_WEIGHT;
+      return { ...r, score: r.score * boost };
+    });
+    return boosted.sort((a, b) => b.score - a.score);
+  }
+
   private applyMMRDiversity(results: RetrievalResult[], similarityThreshold = 0.85): RetrievalResult[] {
     if (results.length <= 1) return results;
 
