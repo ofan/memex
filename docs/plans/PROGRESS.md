@@ -1,37 +1,39 @@
 # Progress
 
-## Last Updated: 2026-04-09 22:10
+## Last Updated: 2026-04-09 22:30
 
 ## Active Projects
-- No active projects
+- **Entity Graph** — scoped, design doc written, not started
+  - Design: `docs/design/entity-graph.md`
+  - Goal: domain eval from 80% → ≥93%
+  - Open questions for user: auto-recall latency budget? link cap?
 
 ## Recently Completed
-- Entity boost wired into retriever — 2026-04-09 (3rd signal active, 638 tests)
-- Temporal Queries — merged to master 2026-04-09 (4 ACs, 24 tests)
-- Entity Extraction — merged to master 2026-04-09 (7 ACs, 19 tests)
-- LongMemEval re-benchmarked with GPT-4o — R@1: 78%, R@3: 90%, E2E: 92%
-- Dreaming v1 (light + deep sweep + /dream command) — merged 2026-04-08
-- v0.5.12 released (registration fix, doc indexer, telemetry)
-- 15-iteration SOTA research — findings in `docs/research/agent-memory-sota-2026.md`
+- Entity boost tuning: disabled (weight=0), domain eval 73% → 80%
+- Domain eval created: 15 entity-rich queries against live DB (80% baseline)
+- Entity Extraction — merged (entities stored in metadata, backfill on startup)
+- Temporal Queries — merged (regex date detection, timestamp filtering)
+- LongMemEval rebenchmarked with GPT-4o: R@1 78%, R@3 90%, E2E 92%
+- Dreaming v1 merged (light + deep sweep + /dream command)
+- v0.5.12 released
 
-## Blocked
-- Reflection: Entity Extraction done, can start now
+## Key Insight This Session
+Entity boost as score multiplier DOESN'T WORK (BM25 already handles it).
+What Hindsight actually does differently is **graph traversal** — following
+entity relationships, not counting keyword overlap. Pivoting to entity
+graph with adjacency table + one-hop expansion.
+
+See `docs/plans/LEARNINGS.md` for full session retrospective.
 
 ## Decisions Made
-- 2026-04-09: LongMemEval doesn't measure entity boost (casual conversation, few entities)
-- 2026-04-09: Entity boost weight = 0.15 (ACT-R formula), benchmark shows no change on LongMemEval
-- 2026-04-09: GPT-4o is default E2E benchmark LLM (was Gemini Flash)
-- 2026-04-09: OpenAI key stored in 1Password dev-claude item
-- 2026-04-09: R@1 target ≥85%, R@3 target ≥95% — may need domain-specific eval
-- 2026-04-09: Entity extraction via `compromise` (250KB, rule-based)
-- 2026-04-08: /dream as slash command, not internal timer
-
-## Open Questions
-- R@1 85% / R@3 95% targets may not be achievable on LongMemEval — benchmark uses casual conversation. Need production-like eval with technical/domain content.
-- Entity boost weight 0.15 — is this optimal? Hard to tune without a benchmark that has entity-rich data.
-- Should we build a domain-specific eval set from the live 2,103 memories?
+- 2026-04-09: Entity boost weight=0 (disabled). BM25 is sufficient for keyword entities
+- 2026-04-09: Pivot to entity graph (adjacency table, one-hop expansion)
+- 2026-04-09: Domain eval is primary metric (not LongMemEval)
+- 2026-04-09: GPT-4o default for E2E benchmark
+- 2026-04-09: OpenAI key in 1Password `dev-claude` item
 
 ## Next Session Should
-1. Deploy entity boost + temporal queries to OpenClaw
-2. Decide: build domain-specific eval, start MCP Server, or start Reflection
-3. Push to GitHub
+1. Review entity graph design doc — answer open questions
+2. Create worktree, write ACs, implement entity graph
+3. Run domain eval — target 93%+
+4. If successful, deploy + push
