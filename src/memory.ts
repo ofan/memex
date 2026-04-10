@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { openDatabase, loadSqliteVec, type Database } from "./db.js";
 import { buildFTS5Query } from "./search.js";
 import { chunkDocument, type ChunkerConfig } from "./chunker.js";
+import { extractEntities } from "./entities.js";
 
 // ============================================================================
 // Types
@@ -226,6 +227,9 @@ export class MemoryStore {
       this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
     } catch { /* index may already exist or duplicates prevent creation */ }
 
+    // Entity backfill for entries missing entities in metadata
+    this.backfillEntities();
+
     // FTS5 for BM25 search
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -336,12 +340,18 @@ export class MemoryStore {
     const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
     if (existing) return null;
 
+    // Extract entities and merge into metadata
+    const entities = extractEntities(text);
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(entry.metadata || "{}"); } catch {}
+    meta.entities = entities;
+
     const fullEntry: MemoryEntry = {
       ...entry,
       text,
       id: randomUUID(),
       timestamp: Date.now(),
-      metadata: entry.metadata || "{}",
+      metadata: JSON.stringify(meta),
     };
 
     this.insertMemory(fullEntry, textHash);
@@ -1075,6 +1085,23 @@ export class MemoryStore {
       `SELECT COUNT(*) as cnt FROM vectors_vec WHERE hash_seq LIKE ?`
     ).get(`mem_${memoryId}_c%`) as { cnt: number };
     return primary.cnt + chunks.cnt;
+  }
+
+  /** Backfill entities for entries that don't have them in metadata. */
+  private backfillEntities(): void {
+    try {
+      const rows = this.db.prepare(
+        "SELECT id, text, metadata FROM memories WHERE metadata NOT LIKE '%\"entities\"%'"
+      ).all() as { id: string; text: string; metadata: string | null }[];
+      if (rows.length === 0) return;
+      const update = this.db.prepare("UPDATE memories SET metadata = ? WHERE id = ?");
+      for (const row of rows) {
+        let meta: Record<string, unknown> = {};
+        try { meta = JSON.parse(row.metadata || "{}"); } catch {}
+        meta.entities = extractEntities(row.text);
+        update.run(JSON.stringify(meta), row.id);
+      }
+    } catch { /* best effort */ }
   }
 
   // ========================================================================
