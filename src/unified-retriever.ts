@@ -356,8 +356,12 @@ export class UnifiedRetriever {
    */
   private shouldRerank(pool: CalibratedResult[]): boolean {
     if (pool.length <= 1) return false;
-    const top = pool[0].score;
-    const second = pool[1].score;
+    // Use rawScore (unweighted [0,1] sigmoid-fused source score) for threshold
+    // and gap checks. The `score` field is multiplied by conversationWeight
+    // (0.55) or documentWeight (0.45), so its max value is ~0.55 — which makes
+    // a confidenceThreshold of 0.88 unreachable and the check dead code.
+    const top = pool[0].rawScore;
+    const second = pool[1].rawScore;
     if (top > this.config.confidenceThreshold) return false;
     if (top - second > this.config.confidenceGap) return false;
     return true;

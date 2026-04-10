@@ -1107,6 +1107,20 @@ const memoryUnifiedPlugin = {
     const recentRecalls = new Map<string, string[][]>();
     const RECALL_HISTORY_TURNS = 5;
 
+    // In-turn recall cache: a single agent turn fires before_prompt_build
+    // multiple times — initially, then again after each tool result. The
+    // recallQuery (last user message) doesn't change within a turn, so we
+    // cache the computed context by (sessionKey, agentId, query) and reuse
+    // it on subsequent rebuilds. Prevents redundant rerank calls per turn.
+    interface RecallCacheEntry {
+      query: string;
+      context: string;
+      recalledIds: string[];
+      expireAt: number;
+    }
+    const recallCache = new Map<string, RecallCacheEntry>();
+    const RECALL_CACHE_TTL_MS = 60_000;
+
     // Auto-recall: inject relevant memories into prompt context
     // Default ON — LLM needs recalled context to make good memory decisions.
     // Uses before_prompt_build (not legacy before_agent_start) per SDK recommendation.
@@ -1126,6 +1140,20 @@ const memoryUnifiedPlugin = {
           const recallAgents = config.autoRecallAgents as string[] | undefined;
           if (recallAgents && recallAgents.length > 0 && !recallAgents.includes(agentId)) {
             return;
+          }
+
+          // In-turn dedup: if the same recallQuery was processed recently for
+          // this session+agent, reuse the computed context without re-running
+          // retrieval. This avoids redundant rerank calls during tool-use loops.
+          const sessionKeyForCache = ctx?.sessionKey || ctx?.sessionId || "default";
+          const cacheKey = `${agentId}:${sessionKeyForCache}`;
+          const now = Date.now();
+          const cachedEntry = recallCache.get(cacheKey);
+          if (cachedEntry && cachedEntry.query === recallQuery && cachedEntry.expireAt > now) {
+            track("recall", { results: cachedEntry.recalledIds.length, source: "auto_cached", ...sw.timings });
+            return {
+              prependContext: buildRecallContext(cachedEntry.context),
+            };
           }
           // Spread to avoid mutating scope manager's internal array
           const accessibleScopes = [...scopeManager.getAccessibleScopes(agentId)];
@@ -1213,6 +1241,23 @@ const memoryUnifiedPlugin = {
           );
 
           track("recall", { results: resultCount, source: "auto", ...retriever.lastTimings, ...sw.timings });
+
+          // Cache result so subsequent prompt rebuilds in the same turn reuse it.
+          recallCache.set(cacheKey, {
+            query: recallQuery,
+            context: memoryContext,
+            recalledIds,
+            expireAt: now + RECALL_CACHE_TTL_MS,
+          });
+
+          // Opportunistic GC: drop entries older than 2× TTL so the map doesn't
+          // grow unbounded across long-lived sessions.
+          if (recallCache.size > 32) {
+            const cutoff = now - RECALL_CACHE_TTL_MS;
+            for (const [k, v] of recallCache) {
+              if (v.expireAt < cutoff) recallCache.delete(k);
+            }
+          }
 
           return {
             prependContext: buildRecallContext(memoryContext),

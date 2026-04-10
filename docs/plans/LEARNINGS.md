@@ -17,6 +17,26 @@
 - Stored entities enable: contradiction detection, agent provenance, future graph links
 - The work wasn't wasted — it's infrastructure for the next feature
 
+### shouldRerank confidence gate was dead code
+
+The `UnifiedRetriever.shouldRerank` gate compared `pool[0].score` against a `confidenceThreshold` of 0.88. But pool scores are multiplied by `conversationWeight` (0.55) or `documentWeight` (0.45) in `mergeAndCalibrate`, so the maximum possible pool score is 0.55 — making the threshold unreachable.
+
+**Symptom:** every retrieve() call paid the full ~1s rerank cost, even when the top candidate was already obviously the right answer. Caused ~1s of extra latency per call × however many retrieves per agent turn.
+
+**Fix:** compare `pool[0].rawScore` (the unweighted [0,1] sigmoid-fused source score) instead of `score`. With the fix, the gate fires for high-confidence queries and skips rerank entirely. Measured effect in the latency probe: several queries dropped from ~1s minimum per iteration to ~50ms minimum (pure cache path, no rerank call).
+
+**Lesson:** thresholds baked into config defaults should be validated against the actual value range they compare against. A threshold of 0.88 over a [0, 0.55] value space is a silent bug — no errors, no test failures, just "this skip optimization never fires and no one notices for months." Added a regression test that verifies the gate fires when rawScore exceeds a reachable threshold.
+
+### Auto-recall fires once per prompt rebuild, not once per user turn
+
+The `before_prompt_build` hook runs every time OpenClaw rebuilds the LLM prompt — that's the initial build AND every rebuild after a tool result comes back. If an agent uses N tool calls, auto-recall runs N+1 times for the same user message.
+
+**Symptom:** a single `openclaw agent main` turn produced ~10 /v1/rerank calls on the inference host. With ~1s per rerank call, that's ~10s of rerank work per turn.
+
+**Fix:** per-session in-turn cache keyed by (agentId, sessionKey). On cache hit, return the previously-computed recall context without re-running retrieve(). Invalidates automatically when recallQuery changes (new user message) or after 60s TTL. The cache is a plain Map with opportunistic GC when it grows beyond 32 entries.
+
+**Lesson:** hook semantics matter. A hook called "before_prompt_build" sounds idempotent-per-user-message, but it's actually per-LLM-invocation. Anything expensive inside such a hook needs per-turn memoization. Flagged this in the memory auto-memory as "Hooks" — future sessions should treat hook multiplication as a default concern.
+
 ### Reranker model matters more than reranker-on/off
 
 Measured in 2026-04-10 against memex production DB (2105 memories) and cached LongMemEval fixture (N=50):
