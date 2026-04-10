@@ -155,15 +155,24 @@ async function main() {
     dimensions: VECTOR_DIM,
   });
 
+  const rerankEnabled = process.env.RERANK === "1";
+  const poolSize = parseInt(process.env.POOL_SIZE || "30");  // tuning knob
   const retriever = createRetriever(store, embedder, {
     mode: "hybrid",
     fusionMethod: "zscore",
     vectorWeight: 0.8,
     bm25Weight: 0.2,
-    rerank: "none",
+    rerank: rerankEnabled ? "cross-encoder" : "none",
+    rerankApiKey: process.env.MEMEX_RERANK_API_KEY,
+    rerankEndpoint: process.env.MEMEX_RERANK_ENDPOINT,
+    rerankModel: process.env.MEMEX_RERANK_MODEL,
+    rerankProvider: "jina",
     minScore: 0.05,
-    candidatePoolSize: 30,
+    candidatePoolSize: poolSize,
   });
+  console.log(`Reranker: ${rerankEnabled ? "ENABLED (" + (process.env.MEMEX_RERANK_MODEL || "(missing MEMEX_RERANK_MODEL)") + ")" : "disabled"}  Pool: ${poolSize}\n`);
+  // rerank toggle via RERANK=1 env var is intentional — lets us diff pipelines without forking the script.
+  // Default remains disabled, matching production memex config.
 
   let hits = 0;
   let total = 0;

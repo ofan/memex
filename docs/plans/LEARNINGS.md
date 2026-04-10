@@ -17,6 +17,30 @@
 - Stored entities enable: contradiction detection, agent provenance, future graph links
 - The work wasn't wasted — it's infrastructure for the next feature
 
+### Reranker model matters more than reranker-on/off
+
+Measured in 2026-04-10 against memex production DB (2105 memories) and cached LongMemEval fixture (N=50):
+
+| | Domain eval | LongMemEval R@1 | LongMemEval R@3 | LongMemEval E2E (GPT-4o) |
+|---|---|---|---|---|
+| **No rerank (baseline)** | 12/15 (80%) | 78% | 90% | 90% |
+| **bge-reranker-v2-m3** | 12/15 (neutral swap) | 76% (−2pp) | 90% | ~90% |
+| **Qwen3-Reranker-0.6B** | 11/15 (−1) | **82% (+4pp)** | 90% | **94% (+4pp)** |
+
+- **bge was a loss in every dimension** on memex's workloads. The historical design finding from `011-reranker-modes-and-fallback.md` ("reranking long session texts did not help and could hurt E2E") was workload-correct but model-specific.
+- **Qwen3-Reranker was a decisive win on LongMemEval** (+2 queries R@1, +2 queries E2E) and a small loss on domain eval (−1). The larger benchmark win (N=50 vs N=15) and clearer mechanism drove ship.
+- **Mechanism:** Qwen3-Reranker has 32K context (vs bge's 8K) — bge was truncating memex's chunked conversation sessions before scoring them. Qwen3-Reranker also emits sigmoid-calibrated [0,1] scores instead of bge's unbounded logits, which makes memex's "rerank skip on high confidence" code path actually meaningful.
+- **Lesson:** "Enable reranking" and "disable reranking" are not the real decision. The real decision is "which reranker." Don't extrapolate a finding across reranker families.
+- **Process lesson:** The fix came from a separate Claude doing a full mechanistic research trail (`docs/research/embed-rerank-upgrade-brief.md` Conclusion section) — walking each rejected candidate through our actual failure modes, not just citing MTEB scores. This is the `Research Rigor: Diagnose Before Scoping` rule in action — and it worked this time.
+- **Latency follow-up:** memex made **10 /v1/rerank calls** during a single `openclaw agent main` turn in live verification. That's suspicious — the batch API takes N documents per call, so it should be 1-ish per retrieval. Possibly per-source duplication or the agent making multiple tool calls. Flagged for next-session investigation.
+
+### Entity graph also did nothing on domain eval
+- **Expected:** Graph expansion would pull missing correct memories into the candidate set (fix recall), and the 0.7× discount would still let them win where appropriate
+- **Actual:** 3,406 links created across 2,105 memories, domain eval stayed 12/15. Same 3 misses
+- **Why (hypothesis, unverified):** Either the correct memories weren't reachable via graph from the top hits, or they were reachable but still ranked below a wrong winner. We don't know which, because we never diagnosed the misses before scoping the project
+- **Lesson:** Same root cause as entity boost — research cited that "Hindsight does graph traversal," but no one traced the mechanism through our actual failing queries. User called it out: *"this is a sign of lacking research."* The SOTA citation was true; it just didn't apply to our failure modes
+- **Process change:** Added a **Diagnose** step before **Design** in `01-methodology.md`. No quality project gets scoped until the current failures are classified (recall vs scoring vs ingestion)
+
 ### Dreaming works but the timer didn't
 - The `/dream` command works perfectly via CLI
 - The `setTimeout` timer in `register()` never fired because `service.start()` wasn't called by OpenClaw
