@@ -1,0 +1,48 @@
+#!/bin/bash
+# Pre-commit hook: block secrets and infra references
+#
+# Install: git config core.hooksPath .githooks
+
+PATTERNS=(
+  'sk-proj-'
+  'sk-SiusJ'
+  'rl_7Hz'
+  'ops_eyJ'
+  '100\.122\.104'
+  '\.lab\.tf'
+  'mlab42'
+  'mac-mini-[12][^0-9]'
+  'mbp-1[^0-9]'
+)
+
+# Files exempt from checking
+SKIP_FILES="\.githooks/pre-commit"
+
+ERRORS=0
+
+# Get list of staged files (added, copied, modified, renamed)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
+
+for file in $STAGED_FILES; do
+  # Skip exempt files
+  if echo "$file" | grep -qE "$SKIP_FILES"; then
+    continue
+  fi
+
+  for pattern in "${PATTERNS[@]}"; do
+    MATCHES=$(git diff --cached -U0 -- "$file" | grep "^\+" | grep -v "^+++" | grep -iE "$pattern")
+    if [ -n "$MATCHES" ]; then
+      echo "BLOCKED in $file: pattern '$pattern'"
+      echo "$MATCHES" | head -3
+      echo ""
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+done
+
+if [ $ERRORS -gt 0 ]; then
+  echo "Commit blocked: $ERRORS sensitive pattern(s) detected."
+  echo "Use env vars instead of hardcoded values."
+  echo "To bypass (emergency): git commit --no-verify"
+  exit 1
+fi
