@@ -778,7 +778,10 @@ export class MemoryRetriever {
    */
   private applyEntityBoost(results: RetrievalResult[], queryEntities: string[]): RetrievalResult[] {
     if (queryEntities.length === 0) return results;
-    const ENTITY_BOOST_WEIGHT = 0.15;
+    // Entity boost weight. Set to 0 to disable (BM25 already captures keyword entities).
+    // Tuning on domain eval: 0.0 = 12/15, 0.15 = 11/15, 0.50 = 11/15, 0.75 = 10/15.
+    // Keeping at 0 for now — entity boost hurts intra-cluster ranking.
+    const ENTITY_BOOST_WEIGHT = parseFloat(process.env.ENTITY_BOOST_WEIGHT || "0");
     const boosted = results.map(r => {
       let memEntities: string[] = [];
       try {
