@@ -9,6 +9,7 @@ import { filterNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
 import { detectTemporalRange } from "./temporal.js";
 import { extractEntities, entityOverlap } from "./entities.js";
+import { expandOneHop, LINK_SCORE_DISCOUNT_FACTOR } from "./graph.js";
 
 // ============================================================================
 // Types & Configuration
@@ -360,9 +361,32 @@ export class MemoryRetriever {
     sw.lap("search");
 
     const fusedResults = await this.fuseResults(vectorResults, bm25Results);
+
+    // Graph expansion: one-hop through entity links
+    const fusedIds = fusedResults.map(r => r.entry.id);
+    try {
+      const linkedIds = expandOneHop(this.store.db, fusedIds);
+      if (linkedIds.length > 0) {
+        const bestScore = fusedResults[0]?.score || 0;
+        // Fetch linked memories and add with discounted score
+        for (const linkedId of linkedIds.slice(0, 5)) {
+          if (fusedResults.some(r => r.entry.id === linkedId)) continue;
+          const row = this.store.db.prepare(
+            "SELECT id, text, category, scope, importance, timestamp, metadata FROM memories WHERE id = ?"
+          ).get(linkedId) as any;
+          if (row) {
+            fusedResults.push({
+              entry: { ...row, vector: [] },
+              score: bestScore * LINK_SCORE_DISCOUNT_FACTOR,
+              sources: { graph: true },
+            } as any);
+          }
+        }
+      }
+    } catch { /* graph not available — skip */ }
     sw.lap("fuse");
 
-    // Entity boost: 3rd retrieval signal (ACT-R spreading activation)
+    // Entity boost (disabled by default — BM25 handles keyword entities)
     const queryEntities = extractEntities(query);
     const entityBoosted = this.applyEntityBoost(fusedResults, queryEntities);
 
