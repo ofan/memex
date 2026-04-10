@@ -10,6 +10,13 @@
   - Design: `docs/design/model-bakeoff.md` (todo)
 
 ## Recently Completed
+- **Latency and correctness fixes on auto-recall path** (2026-04-10)
+  - `shouldRerank` gate fix: was dead code (compared weighted `score` max 0.55 vs threshold 0.88). Now uses `rawScore`. Gate fires for high-confidence queries, skipping ~1s rerank work.
+  - `before_prompt_build` auto-recall cache: single agent turn no longer produces N retrieves. Per-session dedup by recallQuery with 60s TTL.
+  - Regression test added for threshold-skip path.
+  - Quality unchanged on all benchmarks (domain 11/15, LongMemEval R@1 82%, R@3 90%).
+  - Full test suite: 646/646 pass.
+  - Latency probe committed at `tests/latency-probe.ts` for future A/B runs.
 - **Reranker upgrade: bge-reranker-v2-m3 → Qwen3-Reranker-0.6B-Q8_0** (2026-04-10)
   - LongMemEval: R@1 78→82% (+2 queries), R@3 90% (0), **E2E 90→94% (+2 queries)** with GPT-4o reader
   - Domain eval: 12/15→11/15 (−1 query; Qwen3 picks defensible-but-wrong alternatives on abstract queries)

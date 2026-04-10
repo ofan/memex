@@ -1109,6 +1109,66 @@ describe("UnifiedRetriever — Task 4: Confidence-Gated Reranking", () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    it("skips rerank when top rawScore exceeds confidenceThreshold", async () => {
+      // Regression test for bug where `shouldRerank` compared weighted `score`
+      // (max 0.55) against `confidenceThreshold` 0.88 — unreachable dead code.
+      // After the fix, the gate uses `rawScore` which is the [0,1] fused value.
+      const { embedder } = createTrackingEmbedder();
+      let fetchCalled = false;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (...args: Parameters<typeof fetch>) => {
+        const url = typeof args[0] === "string" ? args[0] : (args[0] as Request).url;
+        if (url.includes("localhost:19999")) {
+          fetchCalled = true;
+          return new Response(JSON.stringify({
+            results: [
+              { index: 0, relevance_score: 0.9 },
+              { index: 1, relevance_score: 0.8 },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return originalFetch(...args);
+      };
+
+      try {
+        // Seed two memories with extremely different vector scores so the
+        // top candidate's sigmoid-fused rawScore exceeds threshold 0.65.
+        // (Max rawScore for 2 items with 1-stddev z-score ≈ sigmoid(1) ≈ 0.731)
+        // Also set confidenceGap very high so the gap check can't skip.
+        await store.store({
+          text: "Dark mode is the correct theme preference",
+          vector: makeVector(42),  // matches query vector
+          category: "preference",
+          scope: "global",
+          importance: 0.9,
+        });
+        await store.store({
+          text: "Something entirely unrelated about weather",
+          vector: makeVector(123),  // far from query vector
+          category: "fact",
+          scope: "global",
+          importance: 0.5,
+        });
+
+        const retriever = new UnifiedRetriever(store, null, embedder, {
+          minScore: 0.0,
+          confidenceThreshold: 0.65,  // below the ~0.73 max rawScore achievable with 2 items
+          confidenceGap: 0.99,  // disable gap-based skip
+          reranker: {
+            endpoint: "http://localhost:19999/rerank",
+            apiKey: "test-key",
+            model: "test-model",
+            provider: "jina",
+          },
+        });
+
+        await retriever.retrieve("what is my theme preference");
+        assert.equal(fetchCalled, false, "rerank should be skipped when top rawScore exceeds threshold");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 
   describe("rerank with mock", () => {
