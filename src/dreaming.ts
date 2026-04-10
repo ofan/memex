@@ -159,7 +159,11 @@ export async function deepSweep(
     }
   }
 
-  log(logPath, "dream:deep", { rescored, decayed });
+  // Eviction: delete entries that decayed below usefulness
+  const evicted = db.prepare("DELETE FROM memories WHERE importance <= 0.05").run();
+  const evictedCount = (evicted as any).changes || 0;
+
+  log(logPath, "dream:deep", { rescored, decayed, evicted: evictedCount });
 
   return { rescored, decayed };
 }
