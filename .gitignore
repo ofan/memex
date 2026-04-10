@@ -10,3 +10,8 @@ tests/fixtures/longmemeval-cache/fast-responses-*.json
 tests/fixtures/longmemeval-cache/chunk-scores-*.json
 tests/fixtures/longmemeval-cache/chunk-checkpoint.json
 .worktrees/
+monitor-report.log
+memex.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
