@@ -52,6 +52,58 @@ export interface BakeoffOptions {
   decisiveWinQueries?: number;
 }
 
+/**
+ * Pre-flight: probe the candidate reranker endpoint with a trivial request
+ * to catch unreachable/misconfigured endpoints before running the full
+ * benchmark suite (which would silently fall back to cosine and waste time).
+ *
+ * Exported for testing.
+ */
+export async function probeRerankerEndpoint(
+  endpoint: string,
+  apiKey: string,
+  model: string,
+  timeoutMs: number = 10_000,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          query: "probe",
+          documents: ["ping", "pong"],
+        }),
+        signal: controller.signal,
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        return { ok: false, reason: `HTTP ${resp.status}: ${body.slice(0, 200)}` };
+      }
+      const data = await resp.json() as Record<string, unknown>;
+      // Accept jina shape (results[]) or voyage shape (data[]).
+      const hasResults = Array.isArray(data.results) && (data.results as unknown[]).length > 0;
+      const hasData = Array.isArray(data.data) && (data.data as unknown[]).length > 0;
+      if (!hasResults && !hasData) {
+        return { ok: false, reason: "response missing expected results[] or data[] field" };
+      }
+      return { ok: true };
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err: unknown) {
+    const name = (err as { name?: string })?.name;
+    if (name === "AbortError") return { ok: false, reason: `timeout after ${timeoutMs}ms` };
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function runBakeoff(mode: BakeoffMode, options: BakeoffOptions = {}): Promise<{ verdict: string; baseline: BenchmarkResult; candidate: BenchmarkResult }> {
   if (mode.kind === "embedder") {
     // v1.5: the harness supports embedder mode as long as the candidate
@@ -73,9 +125,22 @@ export async function runBakeoff(mode: BakeoffMode, options: BakeoffOptions = {}
   }
 
   // ---------------------------------------------------------------------------
+  // Pre-flight: probe the candidate endpoint before running benchmarks
+  // ---------------------------------------------------------------------------
+  console.log(`\n=== Pre-flight: probing ${mode.endpoint} ===\n`);
+  const probeKey = process.env.RERANK_API_KEY || process.env.MEMEX_RERANK_API_KEY || process.env.EMBED_API_KEY || "";
+  const probe = await probeRerankerEndpoint(mode.endpoint, probeKey, mode.model);
+  if (!probe.ok) {
+    console.error(`ERROR: candidate rerank endpoint probe failed: ${probe.reason}`);
+    console.error("Fix the endpoint (or auth/model name) before running the benchmark.");
+    throw new Error(`rerank endpoint probe failed: ${probe.reason}`);
+  }
+  console.log(`  ✓ endpoint responded with a valid rerank response\n`);
+
+  // ---------------------------------------------------------------------------
   // Stage 1: cheap fast benchmarks (reranker mode)
   // ---------------------------------------------------------------------------
-  console.log(`\n=== Stage 1: cheap benchmarks (no LLM cost) ===\n`);
+  console.log(`=== Stage 1: cheap benchmarks (no LLM cost) ===\n`);
 
   console.log("running domain-eval baseline...");
   const baselineDomain = await runDomainEval({ rerank: false });
