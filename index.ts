@@ -57,6 +57,7 @@ function getDreamCycle() {
 }
 import { extractRecallQuery } from "./src/recall-query.js";
 import { InTurnRecallCache } from "./src/recall-cache.js";
+import { probeReranker } from "./src/rerank-probe.js";
 import {
   aggregateHealthStatus,
   buildAuditPrompt,
@@ -579,6 +580,24 @@ const memoryUnifiedPlugin = {
         });
       }
 
+      // Reranker configuration check — always reports whether it's set up,
+      // independently of the probe. Per docs/plans/011-reranker-modes-and-fallback.md,
+      // "reranker configured but unavailable" should be `warn`, not `fail` —
+      // retrieval still works via the fusion-only path.
+      const rerankerEnabled = config.reranker?.enabled !== false && !!config.reranker?.endpoint;
+      checks.push({
+        name: "reranker_configured",
+        status: "ok",
+        detail: rerankerEnabled
+          ? `${config.reranker?.model || "unknown"} @ ${config.reranker?.endpoint}`
+          : "disabled",
+        meta: {
+          enabled: rerankerEnabled,
+          model: config.reranker?.model,
+          provider: config.reranker?.provider,
+        },
+      });
+
       if (opts?.probe) {
         const embeddingProbe = await runWithTimeout(embedder.test(), 8_000, "memex.health embedder.test()");
         checks.push({
@@ -597,6 +616,28 @@ const memoryUnifiedPlugin = {
             ? `${retrievalProbe.mode}, FTS ${retrievalProbe.hasFtsSupport ? "enabled" : "disabled"}`
             : (retrievalProbe.error ?? "retrieval probe failed"),
         });
+
+        // Reranker liveness probe — only runs when --probe is requested
+        // because it costs one /v1/rerank HTTP call. Failure is `warn`, not
+        // `fail`, because retrieval still works without the reranker.
+        if (rerankerEnabled && config.reranker?.endpoint && config.reranker?.model) {
+          const rerankerProbe = await runWithTimeout(
+            probeReranker(
+              config.reranker.endpoint,
+              config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "",
+              config.reranker.model,
+            ),
+            8_000,
+            "memex.health rerank.probe"
+          );
+          checks.push({
+            name: "rerank_probe",
+            status: rerankerProbe.ok ? "ok" : "warn",
+            detail: rerankerProbe.ok
+              ? "endpoint responded with a valid rerank response"
+              : `endpoint unavailable: ${rerankerProbe.reason} (retrieval falls back to fusion only)`,
+          });
+        }
       }
 
       const logs = opts?.logLines
