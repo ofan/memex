@@ -136,6 +136,16 @@ interface PluginConfig {
      * the reranker is overconfident on semantically-similar-but-wrong matches.
      */
     blendWeight?: number;
+    /**
+     * How to interpret the reranker's output score for blending.
+     * - "raw" (default): use the raw relevance_score
+     * - "rank": normalize to 1 - (rank-1)/N so top-1 always gets 1.0.
+     *   Recommended for saturating rerankers like Qwen3-Reranker where
+     *   the raw scores cluster near 1.0 and get dissolved by blend math.
+     *   On memex's domain eval + TIER=pipeline fast-benchmark, rank mode
+     *   recovered +1 / +7 queries over raw mode.
+     */
+    scoreMode?: "raw" | "rank";
   };
   /** Document search (document) config */
   documents?: {
@@ -423,6 +433,9 @@ const memoryUnifiedPlugin = {
       }
       if (retrievalConfig.rerankBlendWeight === undefined && typeof config.reranker.blendWeight === "number") {
         retrievalConfig.rerankBlendWeight = config.reranker.blendWeight;
+      }
+      if (retrievalConfig.rerankScoreMode === undefined && (config.reranker.scoreMode === "raw" || config.reranker.scoreMode === "rank")) {
+        retrievalConfig.rerankScoreMode = config.reranker.scoreMode;
       }
     }
     const retriever = createRetriever(store, embedder, retrievalConfig);
@@ -910,6 +923,9 @@ const memoryUnifiedPlugin = {
     };
     if (typeof config.reranker?.blendWeight === "number") {
       unifiedRetrieverConfig.rerankBlendWeight = config.reranker.blendWeight;
+    }
+    if (config.reranker?.scoreMode === "raw" || config.reranker?.scoreMode === "rank") {
+      unifiedRetrieverConfig.rerankScoreMode = config.reranker.scoreMode;
     }
     const unifiedRetriever = new UnifiedRetriever(
       store,

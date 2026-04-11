@@ -48,6 +48,18 @@ export interface UnifiedRetrieverConfig {
    * Default: 0.7 (keeping the existing behavior).
    */
   rerankBlendWeight: number;
+  /**
+   * Score mode for the cross-encoder rerank output:
+   * - "raw": use the raw relevance_score as returned by the reranker
+   * - "rank": replace raw scores with rank-normalized values (top-1 = 1.0,
+   *   top-k = 1 - (k-1)/N). Useful when the reranker saturates (all top
+   *   scores near 1.0) and raw-score differentials get dissolved by blend
+   *   math with the fusion score. On Qwen3-Reranker + memex's domain-eval
+   *   + TIER=pipeline fast-benchmark, rank mode recovered +1 query and
+   *   +7/+13 queries respectively over raw mode.
+   * Default: "raw" (backward compat).
+   */
+  rerankScoreMode: "raw" | "rank";
 }
 
 export interface UnifiedResult {
@@ -99,6 +111,7 @@ export const DEFAULT_CONFIG: UnifiedRetrieverConfig = {
   confidenceThreshold: 0.88,
   confidenceGap: 0.15,
   rerankBlendWeight: 0.7,
+  rerankScoreMode: "raw",
 };
 
 // =============================================================================
@@ -445,11 +458,27 @@ export class UnifiedRetriever {
       // Default: 0.7 reranker + 0.3 calibrated (see DEFAULT_CONFIG).
       const blendWeight = this.config.rerankBlendWeight;
       const fusionWeight = 1 - blendWeight;
+
+      // For rank-mode, convert raw rerank scores into rank-normalized values
+      // (top-1 = 1.0, top-k = 1 - (k-1)/N). See RetrievalConfig.rerankScoreMode
+      // in retriever.ts for the motivation — identical approach here.
+      const rerankScoreByIndex = new Map<number, number>();
+      if (this.config.rerankScoreMode === "rank") {
+        const sorted = [...parsed].sort((a, b) => b.score - a.score);
+        const n = sorted.length || 1;
+        sorted.forEach((item, rank) => {
+          rerankScoreByIndex.set(item.index, 1 - rank / n);
+        });
+      }
+
       const reranked = parsed
         .filter(item => item.index >= 0 && item.index < candidates.length)
         .map(item => {
           const original = candidates[item.index];
-          const blended = blendWeight * item.score + fusionWeight * original.score;
+          const rerankScore = this.config.rerankScoreMode === "rank"
+            ? (rerankScoreByIndex.get(item.index) ?? 0)
+            : item.score;
+          const blended = blendWeight * rerankScore + fusionWeight * original.score;
           return { ...original, score: blended };
         });
 
