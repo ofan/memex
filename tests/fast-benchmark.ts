@@ -392,6 +392,9 @@ async function runPipeline(cache: ResearchCache): Promise<ExampleResult[]> {
         rerankModel: RERANK_MODEL,
         rerankApiKey: RERANK_API_KEY,
         rerankProvider: "jina",
+        rerankBlendWeight: process.env.MEMEX_RERANK_BLEND_WEIGHT
+          ? parseFloat(process.env.MEMEX_RERANK_BLEND_WEIGHT)
+          : undefined,
         candidatePoolSize: Math.max(POOL_VEC, POOL_BM25),
         minScore: 0.05,
         hardMinScore: 0.10,

@@ -47,6 +47,24 @@ export interface RetrievalConfig {
    *  - "pinecone": Api-Key header, {text}[] documents, data[].score */
   rerankProvider?: "jina" | "siliconflow" | "voyage" | "pinecone";
   /**
+   * Weight given to the cross-encoder rerank score when blending with the
+   * original fused score. Final score is:
+   *     blended = clamp01(rerankScore * rerankBlendWeight + originalScore * (1 - rerankBlendWeight))
+   *
+   * Higher (closer to 1) = reranker dominates — good for aggressively demoting
+   * reranker-zero candidates but can overrule strong fusion winners when the
+   * reranker picks a "defensible but wrong" semantic match.
+   *
+   * Lower (closer to 0) = fusion score is load-bearing and the reranker only
+   * nudges rankings. Protects fusion winners when the reranker is overconfident
+   * on short queries but lets obviously irrelevant rerank-zero candidates stick
+   * around.
+   *
+   * Default: 0.8. Tunable via the `MEMEX_RERANK_BLEND_WEIGHT` env var at
+   * benchmark/tuning time.
+   */
+  rerankBlendWeight?: number;
+  /**
    * Length normalization: penalize long entries that dominate via sheer keyword
    * density. Formula: score *= 1 / (1 + log2(charLen / anchor)).
    * anchor = reference length (default: 500 chars). Entries shorter than anchor
@@ -610,14 +628,18 @@ export class MemoryRetriever {
           // Build a Set of returned indices to identify unreturned candidates
           const returnedIndices = new Set(parsed.map(r => r.index));
 
+          // Configurable rerank/fusion blend (see RetrievalConfig.rerankBlendWeight).
+          // Default: 0.8 reranker + 0.2 original fused score. Lower values
+          // protect fusion winners from overconfident reranker calls.
+          const blendWeight = this.config.rerankBlendWeight ?? 0.8;
+          const fusionWeight = 1 - blendWeight;
+
           const reranked = parsed
             .filter(item => item.index >= 0 && item.index < results.length)
             .map(item => {
               const original = results[item.index];
-              // Blend: 80% cross-encoder score + 20% original fused score
-              // High reranker weight ensures irrelevant results (reranker=0) are demoted
               const blendedScore = clamp01(
-                item.score * 0.8 + original.score * 0.2,
+                item.score * blendWeight + original.score * fusionWeight,
               );
               return {
                 ...original,
