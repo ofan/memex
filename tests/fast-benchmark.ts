@@ -375,12 +375,18 @@ async function runPipeline(cache: ResearchCache): Promise<ExampleResult[]> {
       // Set the query vector for this example
       currentQueryVector = ex.query_vector;
 
+      // RERANK env var also wires through to TIER=pipeline (previously dead).
+      // Required when RERANK=1: RERANK_ENDPOINT, RERANK_MODEL, RERANK_API_KEY.
       const retriever = createRetriever(store, dummyEmbedder, {
         mode: "hybrid",
         fusionMethod: FUSION === "veconly" ? "weighted" : (FUSION as any),
         vectorWeight: FUSION === "veconly" ? 1.0 : VEC_WEIGHT,
         bm25Weight: FUSION === "veconly" ? 0.0 : BM25_WEIGHT,
-        rerank: "none",
+        rerank: RERANK ? "cross-encoder" : "none",
+        rerankEndpoint: RERANK_ENDPOINT,
+        rerankModel: RERANK_MODEL,
+        rerankApiKey: RERANK_API_KEY,
+        rerankProvider: "jina",
         candidatePoolSize: Math.max(POOL_VEC, POOL_BM25),
         minScore: 0.05,
         hardMinScore: 0.10,

@@ -336,6 +336,37 @@ export class Embedder {
     return payload;
   }
 
+  /**
+   * Retry transient upstream failures (502/503/504) with exponential backoff.
+   *
+   * Some local llama.cpp builds occasionally crash and restart on heavy
+   * embedding load (see PROGRESS notes on `--embeddings --parallel N>1` and
+   * the residual crash even with `--parallel 1`). The crash itself is fast —
+   * llama-swap restarts the underlying llama-server in 2-5s. A simple retry
+   * means transient infrastructure crashes never propagate to memex callers
+   * as failed retrievals.
+   */
+  private async withTransientRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+    const MAX_ATTEMPTS = 4;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        return await fn();
+      } catch (err: unknown) {
+        lastError = err;
+        const status = (err as { status?: number })?.status;
+        const isTransient = typeof status === "number" && TRANSIENT_STATUSES.has(status);
+        const isLast = attempt === MAX_ATTEMPTS - 1;
+        if (!isTransient || isLast) throw err;
+        // Backoff: 1s, 2s, 4s
+        const backoffMs = 1000 * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+      }
+    }
+    throw lastError;
+  }
+
   private async embedSingle(text: string, task?: string): Promise<number[]> {
     if (!text || text.trim().length === 0) {
       throw new Error("Cannot embed empty text");
@@ -346,7 +377,9 @@ export class Embedder {
     if (cached) return cached;
 
     try {
-      const response = await this.client.embeddings.create(this.buildPayload(text, task) as any);
+      const response = await this.withTransientRetry("embedSingle", () =>
+        this.client.embeddings.create(this.buildPayload(text, task) as any)
+      );
       const embedding = response.data[0]?.embedding as number[] | undefined;
       if (!embedding) {
         throw new Error("No embedding returned from provider");
@@ -436,8 +469,8 @@ export class Embedder {
     }
 
     try {
-      const response = await this.client.embeddings.create(
-        this.buildPayload(validTexts, task) as any
+      const response = await this.withTransientRetry("embedMany", () =>
+        this.client.embeddings.create(this.buildPayload(validTexts, task) as any)
       );
 
       // Create result array with proper length
