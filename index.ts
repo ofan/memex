@@ -128,6 +128,14 @@ interface PluginConfig {
     apiKey?: string;
     model?: string;
     provider?: string;
+    /**
+     * Blend weight for the cross-encoder rerank score vs the source-calibrated
+     * fused score. Higher = reranker dominates. Lower = fusion has more say.
+     * Default: 0.7 for the unified retriever path, 0.8 for the legacy path.
+     * Tuning this down (e.g. to 0.5 or 0.6) protects fusion winners when
+     * the reranker is overconfident on semantically-similar-but-wrong matches.
+     */
+    blendWeight?: number;
   };
   /** Document search (document) config */
   documents?: {
@@ -412,6 +420,9 @@ const memoryUnifiedPlugin = {
       }
       if (!retrievalConfig.rerankProvider && config.reranker.provider) {
         retrievalConfig.rerankProvider = config.reranker.provider as any;
+      }
+      if (retrievalConfig.rerankBlendWeight === undefined && typeof config.reranker.blendWeight === "number") {
+        retrievalConfig.rerankBlendWeight = config.reranker.blendWeight;
       }
     }
     const retriever = createRetriever(store, embedder, retrievalConfig);
@@ -888,19 +899,23 @@ const memoryUnifiedPlugin = {
     };
 
     // Create unified retriever (replaces dual-pipeline)
+    const unifiedRetrieverConfig: Partial<import("./src/unified-retriever.js").UnifiedRetrieverConfig> = {
+      reranker: (config.reranker?.enabled !== false && config.reranker?.endpoint) ? {
+        endpoint: config.reranker.endpoint,
+        apiKey: config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "unused",
+        model: config.reranker.model || "Qwen3-Reranker-0.6B-Q8_0",
+        provider: config.reranker.provider || "jina",
+      } : null,
+      queryExpansion: false,
+    };
+    if (typeof config.reranker?.blendWeight === "number") {
+      unifiedRetrieverConfig.rerankBlendWeight = config.reranker.blendWeight;
+    }
     const unifiedRetriever = new UnifiedRetriever(
       store,
       documentSearchFn,
       embedder,
-      {
-        reranker: (config.reranker?.enabled !== false && config.reranker?.endpoint) ? {
-          endpoint: config.reranker.endpoint,
-          apiKey: config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "unused",
-          model: config.reranker.model || "bge-reranker-v2-m3-Q8_0",
-          provider: config.reranker.provider || "jina",
-        } : null,
-        queryExpansion: false,
-      }
+      unifiedRetrieverConfig,
     );
 
     api.registerMemoryRuntime({
