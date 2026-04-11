@@ -52,20 +52,23 @@ import { fileURLToPath } from "node:url";
 const DATA_FILE =
   process.env.LONGMEMEVAL_DATA ||
   "/home/ubuntu/projects/LongMemEval/data/longmemeval_s_cleaned.json";
-const SAMPLE_SIZE = parseInt(process.env.LONGMEMEVAL_SAMPLE || "50");
+const SAMPLE_SIZE = parseInt(process.env.LONGMEMEVAL_SAMPLE || "50");  // tuning knob
 const K = 10;
 const USE_VECTORS = process.env.LONGMEMEVAL_VECTORS !== "false"; // default: true
-const EMBED_BASE_URL = process.env.EMBED_BASE_URL || process.env.EMBED_BASE_URL || "http://localhost:8090/v1";
-const EMBED_MODEL = process.env.EMBED_MODEL || "Qwen3-Embedding-4B-Q8_0";
-const EMBED_API_KEY = process.env.LLAMA_SWAP_API_KEY || "";
+// No defaults for non-tuning-knob env (URLs, API keys, model names — config, not knobs).
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "";
+const EMBED_MODEL = process.env.EMBED_MODEL || "";
+const EMBED_API_KEY = process.env.EMBED_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
 const VECTOR_DIM = USE_VECTORS ? 2560 : 4;
-const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai";
-const LLM_MODEL = process.env.LLM_MODEL || "gemini-2.5-flash";
+const LLM_BASE_URL = process.env.LLM_BASE_URL || "";
+const LLM_MODEL = process.env.LLM_MODEL || "";
 const LLM_API_KEY = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || "";
 
-const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || process.env.EMBED_BASE_URL || "http://localhost:8090/v1/rerank";
-const RERANK_MODEL = process.env.RERANK_MODEL || "bge-reranker-v2-m3-Q8_0";
-const RERANK_API_KEY = process.env.RERANK_API_KEY || EMBED_API_KEY || "unused";
+const RERANK = process.env.RERANK === "1";
+const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "";
+const RERANK_MODEL = process.env.RERANK_MODEL || "";
+const RERANK_API_KEY = process.env.RERANK_API_KEY || EMBED_API_KEY || "";
+const RERANK_PROVIDER = (process.env.RERANK_PROVIDER || "jina") as "jina" | "siliconflow" | "voyage" | "pinecone";  // tuning knob
 const LLM_DELAY_MS = parseInt(process.env.LLM_DELAY_MS || "0"); // delay between LLM calls to avoid rate limits
 const PHASE = (process.env.LONGMEMEVAL_PHASE || "both") as "retrieve" | "read" | "both" | "batch-submit" | "batch-collect";
 
@@ -240,10 +243,23 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
     const texts = example.haystack_sessions.map(s => sessionToText(s));
 
     // Embed sessions if vectors enabled (truncate to ~2000 chars for embedding context)
+    //
+    // Chunked into small mini-batches: large single-batch embed calls (50+ texts
+    // → multi-MB JSON responses) reproducibly crash the host's llama-server even
+    // with --parallel 1, after one or two big batches succeed (likely a memory
+    // pressure / Metal buffer issue specific to large outputs). Splitting into
+    // batches of EMBED_CHUNK keeps each request small enough to avoid the crash.
+    // Performance hit is small because the embedder client reuses the HTTP keep-alive.
     let vectors: number[][] | null = null;
     if (USE_VECTORS) {
       const truncated = texts.map(t => t.slice(0, 2000));
-      vectors = await embedder.embedBatchPassage(truncated);
+      const EMBED_CHUNK = 8;
+      vectors = [];
+      for (let i = 0; i < truncated.length; i += EMBED_CHUNK) {
+        const slice = truncated.slice(i, i + EMBED_CHUNK);
+        const out = await embedder.embedBatchPassage(slice);
+        vectors.push(...out);
+      }
     }
 
     // Index all haystack sessions as memories
@@ -265,7 +281,15 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
       fusionMethod: "zscore",   // z-score normalized fusion — prevents BM25 noise from displacing vector hits
       vectorWeight: 0.8,        // z-score optimal: 0.8 vec + 0.2 bm25
       bm25Weight: 0.2,
-      rerank: "none",           // reranker hurts on long sessions (truncated context too short)
+      // Reranker support: opt-in via RERANK=1 env var. Default off because the
+      // historical bge-reranker-v2-m3 hurt R@1 on long-session content (8K
+      // context truncated mid-session). Qwen3-Reranker-0.6B has 32K context
+      // and is a clear win on memex's workload (verified 2026-04-10).
+      rerank: RERANK ? "cross-encoder" : "none",
+      rerankEndpoint: RERANK_ENDPOINT,
+      rerankModel: RERANK_MODEL,
+      rerankApiKey: RERANK_API_KEY,
+      rerankProvider: RERANK_PROVIDER,
       candidatePoolSize: K * 3,
       minScore: 0.05,        // low initial filter — let reranker decide
       hardMinScore: 0.10,    // low adaptive floor for benchmark

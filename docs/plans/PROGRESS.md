@@ -10,6 +10,7 @@
   - Design: `docs/design/model-bakeoff.md` (todo)
 
 ## Recently Completed
+- **Autonomous loop, 2026-04-10 evening** — see `docs/plans/2026-04-10-loop-report.md` for the canonical session record. Highlights: shouldRerank gate bug fix; in-turn recall cache (refactored to `src/recall-cache.ts` with 11 unit tests); embed-lane crash root cause + `--parallel 1` fix in homeinfra; transient retry in embedder (`withTransientRetry`) handles residual crashes for free; runPipeline rerank gap fixed; longmemeval-benchmark `RERANK=1` support; `docs/design/model-bakeoff.md` v1 spec.
 - **Embedding lane crash fix** (2026-04-10) — `Qwen3-Embedding-4B-Q8_0` was crashing reproducibly (~28% rate) under memex auto-recall load due to upstream llama.cpp bugs (#15849, #6722, #5655) when `--embeddings` is combined with `--parallel N>1`. Fix: drop the embedding lane to `--parallel 1`. Verified: 7 crashes/probe → 0 crashes/probe; mean latency 2588ms → 1030ms; max 22421ms → 3834ms. Reranker lane unchanged (different code path, no crashes). Committed in homeinfra `4730f38`.
 - **Latency and correctness fixes on auto-recall path** (2026-04-10)
   - `shouldRerank` gate fix: was dead code (compared weighted `score` max 0.55 vs threshold 0.88). Now uses `rawScore`. Gate fires for high-confidence queries, skipping ~1s rerank work.
