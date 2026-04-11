@@ -237,6 +237,29 @@ After the initial bakeoff + reranker-retry batch committed at `525cd46`, `dc5c5b
 
 **Test count progression:** 657 → 673 (bakeoff+retry) → 681 (chunked dedup) → **711** (all green). The growth is all from new unit tests for code added this loop, not existing-test expansion.
 
+### Item 18 — Clean blend-weight A/B — tuning doesn't fix domain eval
+
+After adding `rerankBlendWeight` as a config option, I killed Phase 1 to free the inference host and ran a clean 5-way A/B on `tests/domain-eval.ts`:
+
+| Config | Hits | Misses |
+|---|---|---|
+| **Baseline (no rerank)** | **12/15** | ryan-response-style, virgil-qwen, ryan-cabbie-behavior |
+| rerank + blend=0.8 | 11/15 | mbp1-model, gemma4-stability, virgil-qwen, ryan-cabbie-behavior |
+| rerank + blend=0.6 | 11/15 | same 4 |
+| rerank + blend=0.5 | 11/15 | same 4 |
+| rerank + blend=0.4 | 11/15 | same 4 |
+
+**Tuning the blend weight does not recover any of the failing queries.** Even at weight=0.4 (where the fusion score contributes 60% of the final), the same 4 misses remain. This means the rerank scores on the failing queries are so extreme (correct memory near 0.0, wrong memory near 1.0) that no reasonable weight can preserve the fusion signal.
+
+Quick math for `gemma4-stability`:
+- Assume rerank scores: wrong=0.99, correct=0.01; fusion scores: wrong=0.7, correct=0.7
+- At weight=0.4: wrong = 0.4×0.99 + 0.6×0.7 = 0.816; correct = 0.4×0.01 + 0.6×0.7 = 0.424 → wrong still wins by ~0.4
+- At weight=0.0: wrong = 0.7, correct = 0.7 → tie; fusion alone doesn't distinguish
+
+So the blend lever can't fix these queries. **The fix is either upstream (query rewriting, instruction-aware rerank via llama.cpp PR #20009, a different reranker) or downstream (query-specific top-K expansion, reader-based reranking).** The `rerankBlendWeight` config hook remains valuable for future candidates where the reranker calibration is different, but it's not a knob for today's problem.
+
+**Net position unchanged:** reranker costs −1 domain eval query but wins +4pp on LongMemEval R@1 and +4pp on E2E. Bakeoff verdict stays at PASS. The clean A/B didn't change the decision; it just closed off "blend tuning" as a mitigation path.
+
 ## Running log
 
 - **2026-04-10 21:35** — created this report doc, started Phase 1 (first attempt, default batching → died on example 2 with abort trap)
