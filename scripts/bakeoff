@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# bakeoff — quick go/no-go for a candidate reranker or embedder model.
+#
+# See docs/design/model-bakeoff.md for the full spec.
+#
+# Usage:
+#   ./scripts/bakeoff reranker <endpoint-url> <model-name> [--provider jina]
+#   ./scripts/bakeoff reranker <endpoint-url> <model-name> --skip-e2e
+#   ./scripts/bakeoff embedder <endpoint-url> <model-name> <vector-dim>   # not yet
+#
+# Required env (no defaults — fail fast if missing):
+#   MEMEX_LLAMA_SWAP_API_KEY  (from 1Password — for the embed/rerank endpoint)
+#   MEMEX_BENCHMARK_OPENAI_API_KEY  (from 1Password — for GPT-4o e2e judging)
+#   MEMEX_DB                  (path to live memex sqlite, read-only)
+#   EMBED_MODEL               (current embedding model — used as the constant in reranker swaps)
+#   EMBED_BASE_URL            (base URL of the inference host — read from openclaw config or set explicitly)
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Validate required env up front (no silent fallbacks)
+require_env() {
+  local var="$1"
+  if [ -z "${!var:-}" ]; then
+    echo "ERROR: required env var $var is unset" >&2
+    echo "       see scripts/bakeoff header for the full list" >&2
+    exit 2
+  fi
+}
+
+require_env MEMEX_LLAMA_SWAP_API_KEY
+require_env MEMEX_BENCHMARK_OPENAI_API_KEY
+require_env MEMEX_DB
+require_env EMBED_MODEL
+require_env EMBED_BASE_URL
+
+# Argument parsing
+if [ $# -lt 1 ]; then
+  echo "ERROR: missing mode (reranker|embedder)" >&2
+  exit 2
+fi
+MODE="$1"
+shift
+
+case "$MODE" in
+  reranker)
+    if [ $# -lt 2 ]; then
+      echo "ERROR: bakeoff reranker <endpoint> <model> [flags]" >&2
+      exit 2
+    fi
+    ENDPOINT="$1"
+    MODEL="$2"
+    shift 2
+    PROVIDER="jina"
+    SKIP_E2E="false"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --provider) PROVIDER="$2"; shift 2 ;;
+        --skip-e2e) SKIP_E2E="true"; shift ;;
+        *) echo "ERROR: unknown flag $1" >&2; exit 2 ;;
+      esac
+    done
+    ;;
+  embedder)
+    echo "ERROR: embedder mode not yet implemented in v1" >&2
+    exit 2
+    ;;
+  *)
+    echo "ERROR: unknown mode $MODE (expected reranker|embedder)" >&2
+    exit 2
+    ;;
+esac
+
+# Set up env that the benchmarks expect (mapping 1P → benchmark vars)
+export EVAL_DB="$MEMEX_DB"
+export EMBED_API_KEY="$MEMEX_LLAMA_SWAP_API_KEY"
+export VECTOR_DIM="${VECTOR_DIM:-2560}"  # only set if not already set
+export LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com/v1}"
+export LLM_MODEL="${LLM_MODEL:-gpt-4o}"
+export LLM_API_KEY="$MEMEX_BENCHMARK_OPENAI_API_KEY"
+export OPENAI_API_KEY="$MEMEX_BENCHMARK_OPENAI_API_KEY"
+export RERANK_API_KEY="$MEMEX_LLAMA_SWAP_API_KEY"
+export MEMEX_RERANK_API_KEY="$MEMEX_LLAMA_SWAP_API_KEY"
+
+# Pass args to the TS entry point via env (avoids shell-escaping fragility)
+export BAKEOFF_MODE="$MODE"
+export BAKEOFF_ENDPOINT="$ENDPOINT"
+export BAKEOFF_MODEL="$MODEL"
+export BAKEOFF_PROVIDER="$PROVIDER"
+export BAKEOFF_SKIP_E2E="$SKIP_E2E"
+
+exec node --import jiti/register "$REPO_ROOT/tests/bakeoff/main.ts"
