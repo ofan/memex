@@ -6,13 +6,28 @@ Notable user-facing and infrastructure changes. Format based on [Keep a Changelo
 
 ### Added
 
-- **`tests/bakeoff/`** — reusable harness for evaluating a candidate reranker or embedder against the current stack. Two-stage gate (cheap domain-eval + fast-benchmark → expensive GPT-4o e2e only if stage 1 wasn't a hard fail). Unit-tested decision logic at `tests/bakeoff/criteria.ts` (16 tests) and stdout parsers at `tests/bakeoff/runner-parser.test.ts` (14 tests). CLI at `scripts/bakeoff` with structured `--help`, required-env fail-fast, and reranker + embedder modes.
+- **`tests/bakeoff/`** — reusable harness for evaluating a candidate reranker or embedder against the current stack. Two-stage gate (cheap domain-eval + fast-benchmark → expensive GPT-4o e2e only if stage 1 wasn't a hard fail). Unit-tested decision logic at `tests/bakeoff/criteria.ts` (16 tests), stdout parsers at `tests/bakeoff/runner-parser.test.ts` (14 tests), and endpoint probe at `tests/bakeoff/probe.test.ts` (9 tests). CLI at `scripts/bakeoff` with structured `--help`, required-env fail-fast, reranker mode, and v1.5 embedder mode (user pre-builds the candidate cache, bakeoff swaps paths via `FAST_BENCH_CACHE_PATH` / `FAST_BENCH_CHUNK_SCORES_PATH` env vars).
+- **Bakeoff pre-flight probe** — before running stage 1, bakeoff hits the candidate rerank endpoint with a trivial 2-doc request to catch unreachable/misconfigured endpoints. Previously a bad endpoint would silently produce a "PASS" verdict because every benchmark ran with the rerank silently disabled. Shared probe logic now in `src/rerank-probe.ts`.
+- **`src/rerank-probe.ts`** — shared `probeReranker(endpoint, apiKey, model, timeoutMs)` used by both `memex.health` (production liveness check) and `scripts/bakeoff reranker` (pre-flight gate). Accepts jina (`results[]`) and voyage (`data[]`) response shapes.
+- **`rerank_probe` and `reranker_configured` health checks** in the memex plugin's health snapshot. `reranker_configured` always runs and reports status=ok with the model+endpoint if configured, "disabled" otherwise. `rerank_probe` runs when `--probe` is requested and hits `/v1/rerank` with a trivial request; status=warn on failure (NOT fail) because retrieval still works via the fusion-only path. Aligns with `docs/plans/011-reranker-modes-and-fallback.md`'s design for reranker health.
+- **`rerankBlendWeight` config option** on both retriever paths:
+  - `RetrievalConfig.rerankBlendWeight` for `MemoryRetriever` (default: 0.8, preserves legacy behavior)
+  - `UnifiedRetrieverConfig.rerankBlendWeight` for `UnifiedRetriever` (default: 0.7, preserves legacy behavior)
+  - Exposed through openclaw.json as `plugins.memex.config.reranker.blendWeight` so users can tune without editing source
+  - Also exposed via `MEMEX_RERANK_BLEND_WEIGHT` env var in `tests/domain-eval.ts` and `tests/fast-benchmark.ts` for benchmark-time A/B
+  - Blend formula: `blended = weight * rerank_score + (1 - weight) * calibrated_fusion_score`
+  - Lower values protect fusion winners when the reranker is overconfident on semantically-similar-but-wrong matches
+  - Unit tests: 4 in `tests/retriever-rerank-blend-weight.test.ts` for `MemoryRetriever` + 2 in `tests/unified-retriever.test.ts`'s new `describe("rerankBlendWeight")` block for `UnifiedRetriever`
+- **Mixed-source rerank tests** — 2 new cases in `tests/unified-retriever.test.ts`:
+  - "applies rerank across BOTH memory and document candidates" — verifies the rerank endpoint sees both sources in a single request
+  - "preserves source diversity after rerank pushes one source to bottom" — verifies top-1-per-source protection holds even when the reranker favors one source overwhelmingly
 - **`src/transient-retry.ts`** — shared helper that wraps upstream API calls in 4-attempt exponential backoff (1s/2s/4s) on 502/503/504/AbortError/TimeoutError. Wired into both the embedder client (`embedSingle`, `embedMany`) and the reranker call sites (`unified-retriever.ts`, `retriever.ts`), so transient inference-server crashes never propagate to memex callers as failed recalls. 12 unit tests.
 - **`src/recall-cache.ts`** — `InTurnRecallCache` class for deduping `before_prompt_build` auto-recall within a single agent turn. Prevents N redundant retrieve() calls when the same user message triggers N prompt rebuilds (one per tool result). 11 unit tests including the multi-rebuild production scenario.
 - **Domain eval** at `tests/domain-eval.ts` — 15 entity-rich queries against the live memex DB, used as the primary regression gate for day-to-day retrieval tuning. Env-var `RERANK=1` toggle for A/B comparisons.
 - **`tests/latency-probe.ts`** — reusable latency A/B tool. Reads config from the live openclaw config file (not 1Password) and secrets from 1Password.
 - **Chunked embedding in `tests/longmemeval-benchmark.ts`** — Phase 1 now splits each session into overlapping 2000-char chunks via `chunkDocument` and dedupes by sessionId at retrieval time, matching `fast-benchmark.ts` and production behavior. Previously truncated each session to 2000 chars, which was a ~34pp R@1 gap vs production. Extracted as `dedupeChunkResultsBySession` with 10 unit tests.
 - **`RERANK=1` support in `tests/longmemeval-benchmark.ts`** — Phase 1 can now run with the reranker enabled (previously hardcoded `rerank: "none"` with a stale comment about bge hurting long sessions).
+- **`FAST_BENCH_CACHE_PATH` / `FAST_BENCH_CHUNK_SCORES_PATH` env overrides** in `tests/fast-benchmark.ts` — lets the bakeoff harness point fast-benchmark at an alternate research cache (e.g. built with a candidate embedder) without moving files.
 
 ### Changed
 
