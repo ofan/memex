@@ -150,7 +150,59 @@ interface BenchEnv {
   tier?: "fast" | "e2e";
 }
 
-async function runDomainEval(env: BenchEnv): Promise<{ domainHits: number; domainTotal: number }> {
+// ============================================================================
+// Output parsers (pure functions — unit-testable without spawning processes)
+// ============================================================================
+
+export interface DomainEvalOutput {
+  domainHits: number;
+  domainTotal: number;
+}
+
+export interface FastBenchOutput {
+  lmeR1: number;
+  lmeR3: number;
+  lmeTotal: number;
+  lmeE2E?: number;
+}
+
+/** Parse `Hits: N/M` from domain-eval.ts stdout. Throws on malformed input. */
+export function parseDomainEvalOutput(stdout: string): DomainEvalOutput {
+  const m = stdout.match(/Hits:\s+(\d+)\/(\d+)/);
+  if (!m) {
+    throw new Error(
+      "could not parse domain-eval output — expected 'Hits: N/M' line. " +
+      "Got (first 500 chars): " + stdout.slice(0, 500)
+    );
+  }
+  return { domainHits: parseInt(m[1], 10), domainTotal: parseInt(m[2], 10) };
+}
+
+/** Parse `R@1: N/M`, `R@3: N/M`, optional `E2E: N/M` from fast-benchmark.ts stdout. */
+export function parseFastBenchOutput(stdout: string): FastBenchOutput {
+  const r1 = stdout.match(/R@1:\s+(\d+)\/(\d+)/);
+  const r3 = stdout.match(/R@3:\s+(\d+)\/(\d+)/);
+  if (!r1 || !r3) {
+    throw new Error(
+      "could not parse fast-benchmark output — expected 'R@1: N/M' and 'R@3: N/M' lines. " +
+      "Got (first 500 chars): " + stdout.slice(0, 500)
+    );
+  }
+  const result: FastBenchOutput = {
+    lmeR1: parseInt(r1[1], 10),
+    lmeR3: parseInt(r3[1], 10),
+    lmeTotal: parseInt(r1[2], 10),
+  };
+  const e2e = stdout.match(/E2E:\s+(\d+)\/(\d+)/);
+  if (e2e) result.lmeE2E = parseInt(e2e[1], 10);
+  return result;
+}
+
+// ============================================================================
+// Child-process dispatch
+// ============================================================================
+
+async function runDomainEval(env: BenchEnv): Promise<DomainEvalOutput> {
   const subEnv: Record<string, string> = {
     ...process.env as Record<string, string>,
     RERANK: env.rerank ? "1" : "0",
@@ -169,12 +221,10 @@ async function runDomainEval(env: BenchEnv): Promise<{ domainHits: number; domai
     join(REPO_ROOT, "tests", "domain-eval.ts"),
   ], subEnv);
 
-  const m = out.match(/Hits:\s+(\d+)\/(\d+)/);
-  if (!m) throw new Error("could not parse domain-eval output");
-  return { domainHits: parseInt(m[1]), domainTotal: parseInt(m[2]) };
+  return parseDomainEvalOutput(out);
 }
 
-async function runFastBench(env: BenchEnv): Promise<{ lmeR1: number; lmeR3: number; lmeTotal: number; lmeE2E?: number }> {
+async function runFastBench(env: BenchEnv): Promise<FastBenchOutput> {
   const tier = env.tier || "fast";
   const subEnv: Record<string, string> = {
     ...process.env as Record<string, string>,
@@ -195,17 +245,7 @@ async function runFastBench(env: BenchEnv): Promise<{ lmeR1: number; lmeR3: numb
     join(REPO_ROOT, "tests", "fast-benchmark.ts"),
   ], subEnv);
 
-  const r1 = out.match(/R@1:\s+(\d+)\/(\d+)/);
-  const r3 = out.match(/R@3:\s+(\d+)\/(\d+)/);
-  if (!r1 || !r3) throw new Error("could not parse fast-benchmark output");
-  const result: { lmeR1: number; lmeR3: number; lmeTotal: number; lmeE2E?: number } = {
-    lmeR1: parseInt(r1[1]),
-    lmeR3: parseInt(r3[1]),
-    lmeTotal: parseInt(r1[2]),
-  };
-  const e2e = out.match(/E2E:\s+(\d+)\/(\d+)/);
-  if (e2e) result.lmeE2E = parseInt(e2e[1]);
-  return result;
+  return parseFastBenchOutput(out);
 }
 
 function spawnCapture(cmd: string, args: string[], env: Record<string, string>): Promise<string> {

@@ -10,6 +10,7 @@ import { Stopwatch } from "./telemetry.js";
 import { detectTemporalRange } from "./temporal.js";
 import { extractEntities, entityOverlap } from "./entities.js";
 import { expandOneHop, LINK_SCORE_DISCOUNT_FACTOR } from "./graph.js";
+import { withTransientRetry } from "./transient-retry.js";
 
 // ============================================================================
 // Types & Configuration
@@ -572,64 +573,75 @@ export class MemoryRetriever {
         // Build provider-specific request
         const { headers, body } = buildRerankRequest(provider, this.config.rerankApiKey, model, query, documents, results.length);
 
-        // Timeout: 15 seconds (model swap on llama-swap can take 2-5s)
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
-
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
+        // 15s per-attempt timeout, retried up to 4 times on transient
+        // upstream failures (502/503/504/AbortError). Persistent failures
+        // fall through to the catch block → cosine fallback.
+        const response = await withTransientRetry(async () => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 15000);
+          try {
+            const resp = await fetch(endpoint, {
+              method: "POST",
+              headers,
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            });
+            if (!resp.ok) {
+              const err = new Error(`rerank endpoint returned ${resp.status}`) as Error & { status: number };
+              err.status = resp.status;
+              throw err;
+            }
+            return resp;
+          } finally {
+            clearTimeout(timeout);
+          }
         });
 
-        clearTimeout(timeout);
+        // If we reach this point the response is ok; withTransientRetry
+        // threw on non-ok statuses and the outer catch handles them.
+        const data = await response.json() as Record<string, unknown>;
 
-        if (response.ok) {
-          const data = await response.json() as Record<string, unknown>;
+        // Parse provider-specific response into unified format
+        const parsed = parseRerankResponse(provider, data);
 
-          // Parse provider-specific response into unified format
-          const parsed = parseRerankResponse(provider, data);
-
-          if (!parsed) {
-            console.warn("Rerank API: invalid response shape, falling back to cosine");
-          } else {
-            // Build a Set of returned indices to identify unreturned candidates
-            const returnedIndices = new Set(parsed.map(r => r.index));
-
-            const reranked = parsed
-              .filter(item => item.index >= 0 && item.index < results.length)
-              .map(item => {
-                const original = results[item.index];
-                // Blend: 80% cross-encoder score + 20% original fused score
-                // High reranker weight ensures irrelevant results (reranker=0) are demoted
-                const blendedScore = clamp01(
-                  item.score * 0.8 + original.score * 0.2,
-                );
-                return {
-                  ...original,
-                  score: blendedScore,
-                  sources: {
-                    ...original.sources,
-                    reranked: { score: item.score },
-                  },
-                };
-              });
-
-            // Keep unreturned candidates with their original scores (slightly penalized)
-            const unreturned = results
-              .filter((_, idx) => !returnedIndices.has(idx))
-              .map(r => ({ ...r, score: r.score * 0.8 }));
-
-            return [...reranked, ...unreturned].sort((a, b) => b.score - a.score);
-          }
+        if (!parsed) {
+          console.warn("Rerank API: invalid response shape, falling back to cosine");
         } else {
-          const errText = await response.text().catch(() => "");
-          console.warn(`Rerank API returned ${response.status}: ${errText.slice(0, 200)}, falling back to cosine`);
+          // Build a Set of returned indices to identify unreturned candidates
+          const returnedIndices = new Set(parsed.map(r => r.index));
+
+          const reranked = parsed
+            .filter(item => item.index >= 0 && item.index < results.length)
+            .map(item => {
+              const original = results[item.index];
+              // Blend: 80% cross-encoder score + 20% original fused score
+              // High reranker weight ensures irrelevant results (reranker=0) are demoted
+              const blendedScore = clamp01(
+                item.score * 0.8 + original.score * 0.2,
+              );
+              return {
+                ...original,
+                score: blendedScore,
+                sources: {
+                  ...original.sources,
+                  reranked: { score: item.score },
+                },
+              };
+            });
+
+          // Keep unreturned candidates with their original scores (slightly penalized)
+          const unreturned = results
+            .filter((_, idx) => !returnedIndices.has(idx))
+            .map(r => ({ ...r, score: r.score * 0.8 }));
+
+          return [...reranked, ...unreturned].sort((a, b) => b.score - a.score);
         }
       } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          console.warn("Rerank API timed out (15s), falling back to cosine");
+        const errStatus = (error as { status?: number })?.status;
+        if (typeof errStatus === "number") {
+          console.warn(`Rerank API returned ${errStatus} after retries, falling back to cosine`);
+        } else if (error instanceof Error && error.name === "AbortError") {
+          console.warn("Rerank API timed out after retries, falling back to cosine");
         } else {
           console.warn("Rerank API failed, falling back to cosine:", error);
         }

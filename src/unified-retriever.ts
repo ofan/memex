@@ -10,6 +10,7 @@ import type { MemoryStore, MemoryEntry, MemorySearchResult } from "./memory.js";
 import type { Embedder } from "./embedder.js";
 import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 import { buildRerankRequest, parseRerankResponse } from "./retriever.js";
+import { withTransientRetry } from "./transient-retry.js";
 
 // =============================================================================
 // Types
@@ -398,23 +399,30 @@ export class UnifiedRetriever {
         n,
       );
 
-      const controller = new AbortController();
-      // 10s timeout — accounts for llama-swap model swap (2-5s) + rerank inference
-      const timeout = setTimeout(() => controller.abort(), 10000);
-
-      const response = await fetch(rerankerConfig.endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
+      // Per-attempt 10s timeout; retried up to 4 times on transient upstream
+      // failures (502/503/504/AbortError). On persistent failure we fall back
+      // to the calibrated scores via the outer catch block.
+      const response = await withTransientRetry(async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+          const resp = await fetch(rerankerConfig.endpoint, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+          if (!resp.ok) {
+            // Throw with a status so withTransientRetry can decide to retry.
+            const err = new Error(`rerank endpoint returned ${resp.status}`) as Error & { status: number };
+            err.status = resp.status;
+            throw err;
+          }
+          return resp;
+        } finally {
+          clearTimeout(timeout);
+        }
       });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        console.warn(`Unified rerank API returned ${response.status}, falling back to calibrated scores`);
-        return pool;
-      }
 
       const data = await response.json() as Record<string, unknown>;
       const parsed = parseRerankResponse(provider, data);

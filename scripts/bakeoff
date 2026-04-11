@@ -20,12 +20,91 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
+print_help() {
+  cat <<'HELP'
+bakeoff — quick go/no-go evaluation for a candidate reranker or embedder model.
+
+USAGE
+  bakeoff reranker <endpoint-url> <model-name> [--provider <name>] [--skip-e2e]
+  bakeoff embedder <endpoint-url> <model-name> <vector-dim>   (not yet in v1)
+  bakeoff -h | --help
+
+MODES
+  reranker    Swap the reranker, keep the embedder. Runs in ~5 min for the
+              cheap stage (stage 1); ~4 more min for the optional stage 2
+              with GPT-4o reader + gpt-4o-mini judge. Safe because the
+              cached vectors are unaffected — no corpus re-embed required.
+
+  embedder    Swap the embedder. Requires re-embedding the test corpus
+              first, so this mode is inherently slower (~15–20 min).
+              Not implemented in v1 — queued for v2.
+
+ARGS (reranker mode)
+  <endpoint-url>      Full URL of the candidate's /v1/rerank endpoint, e.g.
+                      http://inference-host:8090/v1/rerank
+  <model-name>        Exact model identifier the candidate endpoint expects,
+                      e.g. Qwen3-Reranker-0.6B-Q8_0
+
+FLAGS (reranker mode)
+  --provider <name>   Reranker API shape (jina|siliconflow|voyage|pinecone).
+                      Default: jina. Most llama.cpp --rerank servers are
+                      jina-compatible.
+  --skip-e2e          Skip stage 2 (GPT-4o reader + judge) entirely. Useful
+                      for fast iteration during tuning — decision is based
+                      on stage 1 metrics alone.
+
+REQUIRED ENV (no silent fallbacks — bakeoff exits 2 if any are missing)
+  MEMEX_LLAMA_SWAP_API_KEY
+      Auth header for the inference host. Fetch from 1Password:
+        $(op read "op://dev-vm/dev-claude/MEMEX_LLAMA_SWAP_API_KEY")
+  MEMEX_BENCHMARK_OPENAI_API_KEY
+      OpenAI key for the GPT-4o reader + gpt-4o-mini judge in stage 2.
+        $(op read "op://dev-vm/dev-claude/MEMEX_BENCHMARK_OPENAI_API_KEY")
+  MEMEX_DB
+      Path to the production memex sqlite (read-only), e.g.
+        $HOME/.openclaw/memory/memex/memex.sqlite
+  EMBED_MODEL
+      Name of the current embedding model (constant during reranker swaps)
+  EMBED_BASE_URL
+      Base URL of the inference host, e.g. http://inference-host:8090/v1
+      Usually read from ~/.openclaw/openclaw.json
+
+EXIT CODES
+  0   PASS — candidate beats baseline, ship it
+  1   HOLD / FAIL — candidate is neutral, regresses, or fails hard
+  2   Usage error, missing env, or internal failure
+
+EXAMPLES
+  # Read env from 1Password + openclaw config, then run:
+  export MEMEX_LLAMA_SWAP_API_KEY=$(op read "op://dev-vm/dev-claude/MEMEX_LLAMA_SWAP_API_KEY")
+  export MEMEX_BENCHMARK_OPENAI_API_KEY=$(op read "op://dev-vm/dev-claude/MEMEX_BENCHMARK_OPENAI_API_KEY")
+  export EMBED_BASE_URL=$(python3 -c "import json; print(json.load(open('$HOME/.openclaw/openclaw.json'))['plugins']['entries']['memex']['config']['embedding']['baseURL'])")
+  export MEMEX_DB=$HOME/.openclaw/memory/memex/memex.sqlite
+  export EMBED_MODEL=Qwen3-Embedding-4B-Q8_0
+
+  ./scripts/bakeoff reranker "${EMBED_BASE_URL}/rerank" Qwen3-Reranker-0.6B-Q8_0
+  ./scripts/bakeoff reranker "${EMBED_BASE_URL}/rerank" candidate-v2 --skip-e2e
+
+See docs/design/model-bakeoff.md for the full spec.
+HELP
+}
+
+# Help flag — check before env validation so `--help` works without secrets
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+  esac
+done
+
 # Validate required env up front (no silent fallbacks)
 require_env() {
   local var="$1"
   if [ -z "${!var:-}" ]; then
     echo "ERROR: required env var $var is unset" >&2
-    echo "       see scripts/bakeoff header for the full list" >&2
+    echo "       run with --help for the full list" >&2
     exit 2
   fi
 }
@@ -39,6 +118,7 @@ require_env EMBED_BASE_URL
 # Argument parsing
 if [ $# -lt 1 ]; then
   echo "ERROR: missing mode (reranker|embedder)" >&2
+  echo "       run 'bakeoff --help' for usage" >&2
   exit 2
 fi
 MODE="$1"
