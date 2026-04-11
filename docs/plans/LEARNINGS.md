@@ -59,6 +59,18 @@ The `before_prompt_build` hook runs every time OpenClaw rebuilds the LLM prompt 
 
 **Lesson:** hook semantics matter. A hook called "before_prompt_build" sounds idempotent-per-user-message, but it's actually per-LLM-invocation. Anything expensive inside such a hook needs per-turn memoization. Flagged this in the memory auto-memory as "Hooks" — future sessions should treat hook multiplication as a default concern.
 
+### When tuning fails, probe the raw scores before declaring the problem intrinsic
+
+For the `gemma4-stability` domain-eval miss, I assumed Qwen3-Reranker was inherently bad at distinguishing rule memories from incident memories. The blend-weight A/B (0.4/0.5/0.6/0.8) reinforced the assumption — no weight helped. I almost moved on.
+
+Then I wrote a small diagnostic that probed the reranker directly with the full top-30 candidate pool and got a surprise: **the reranker actually put the correct memory at rank 1**, with a 0.0001 lead over the wrong memory. The reranker knew the right answer. The blend math was destroying its signal because Qwen3-Reranker saturates — all top candidates score ~0.9998 regardless of whether they're actually relevant, and that 0.0001 differential gets dissolved by the much larger fusion score gap (0.049 between the two memories).
+
+**Fix:** rank-mode scoring (use `1 - (rank-1)/N` instead of raw score) turned the ordinal "this is rank 1" into a stable signal that survives the blend. Recovered +1 domain-eval query and +7/+13 R@1/R@3 on TIER=pipeline.
+
+**Lesson:** when every knob you try fails to move a metric, **instrument the decision surface** before concluding the problem is intrinsic. For reranker issues, dumping the raw score distribution on the failing candidates takes 20 lines of code and tells you whether the reranker is "wrong" or "right but drowned out." For embeddings, a cosine-similarity histogram does the same. For ranking, a trace of the per-stage scores at each candidate tells you which stage is the culprit.
+
+The first three days of tuning domain-eval was me picking knobs. The fourth day I finally looked at the scores. The knob I needed (rank-mode) wasn't obvious from the metrics — it was obvious from the scores.
+
 ### Reranker model matters more than reranker-on/off
 
 Measured in 2026-04-10 against memex production DB (2105 memories) and cached LongMemEval fixture (N=50):
