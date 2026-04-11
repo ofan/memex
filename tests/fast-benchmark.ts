@@ -39,8 +39,13 @@ const __dirname = dirname(__filename);
 // Config
 // ============================================================================
 
-const CACHE_PATH = join(__dirname, "fixtures", "longmemeval-cache", "research-cache-50.json");
-const CHUNK_SCORES_PATH = join(__dirname, "fixtures", "longmemeval-cache", "chunk-scores-50.json");
+// Cache paths — overridable via env vars so the bakeoff harness can point
+// the benchmark at an alternate cache (e.g. built with a candidate embedder)
+// without moving files.
+const CACHE_PATH = process.env.FAST_BENCH_CACHE_PATH ||
+  join(__dirname, "fixtures", "longmemeval-cache", "research-cache-50.json");
+const CHUNK_SCORES_PATH = process.env.FAST_BENCH_CHUNK_SCORES_PATH ||
+  join(__dirname, "fixtures", "longmemeval-cache", "chunk-scores-50.json");
 const TIER = (process.env.TIER || "fast") as "fast" | "pipeline" | "e2e";
 const FUSION = (process.env.FUSION || "zscore") as "zscore" | "weighted" | "veconly";
 const VEC_WEIGHT = parseFloat(process.env.VEC_WEIGHT || "0.8");

@@ -26,7 +26,8 @@ bakeoff — quick go/no-go evaluation for a candidate reranker or embedder model
 
 USAGE
   bakeoff reranker <endpoint-url> <model-name> [--provider <name>] [--skip-e2e]
-  bakeoff embedder <endpoint-url> <model-name> <vector-dim>   (not yet in v1)
+  bakeoff embedder <endpoint-url> <model-name> <vector-dim> \
+    --cache <path> --chunk-scores <path> [--skip-e2e]
   bakeoff -h | --help
 
 MODES
@@ -35,9 +36,14 @@ MODES
               with GPT-4o reader + gpt-4o-mini judge. Safe because the
               cached vectors are unaffected — no corpus re-embed required.
 
-  embedder    Swap the embedder. Requires re-embedding the test corpus
-              first, so this mode is inherently slower (~15–20 min).
-              Not implemented in v1 — queued for v2.
+  embedder    Swap the embedder. The candidate research-cache-{N}.json and
+              chunk-scores-{N}.json must be pre-built by pointing
+              tests/build-research-cache.ts + tests/build-chunk-cache.ts at
+              the candidate's endpoint/model. Pass the paths to the
+              pre-built files via --cache and --chunk-scores. Bakeoff runs
+              fast-benchmark against both baseline and candidate caches.
+              Domain-eval is skipped because it queries the live memex DB
+              whose vectors are built with the BASELINE embedder.
 
 ARGS (reranker mode)
   <endpoint-url>      Full URL of the candidate's /v1/rerank endpoint, e.g.
@@ -124,6 +130,12 @@ fi
 MODE="$1"
 shift
 
+PROVIDER="jina"
+SKIP_E2E="false"
+VECTOR_DIM_ARG=""
+CANDIDATE_CACHE_PATH=""
+CANDIDATE_CHUNK_SCORES_PATH=""
+
 case "$MODE" in
   reranker)
     if [ $# -lt 2 ]; then
@@ -133,8 +145,6 @@ case "$MODE" in
     ENDPOINT="$1"
     MODEL="$2"
     shift 2
-    PROVIDER="jina"
-    SKIP_E2E="false"
     while [ $# -gt 0 ]; do
       case "$1" in
         --provider) PROVIDER="$2"; shift 2 ;;
@@ -144,8 +154,40 @@ case "$MODE" in
     done
     ;;
   embedder)
-    echo "ERROR: embedder mode not yet implemented in v1" >&2
-    exit 2
+    if [ $# -lt 3 ]; then
+      echo "ERROR: bakeoff embedder <endpoint> <model> <vector-dim> --cache <path> --chunk-scores <path>" >&2
+      echo "       (pre-build the candidate cache with tests/build-research-cache.ts + tests/build-chunk-cache.ts)" >&2
+      exit 2
+    fi
+    ENDPOINT="$1"
+    MODEL="$2"
+    VECTOR_DIM_ARG="$3"
+    shift 3
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --cache)        CANDIDATE_CACHE_PATH="$2"; shift 2 ;;
+        --chunk-scores) CANDIDATE_CHUNK_SCORES_PATH="$2"; shift 2 ;;
+        --skip-e2e)     SKIP_E2E="true"; shift ;;
+        *) echo "ERROR: unknown flag $1" >&2; exit 2 ;;
+      esac
+    done
+    if [ -z "$CANDIDATE_CACHE_PATH" ] || [ -z "$CANDIDATE_CHUNK_SCORES_PATH" ]; then
+      echo "ERROR: embedder mode requires --cache <path> and --chunk-scores <path>" >&2
+      echo "       Pre-build them with:" >&2
+      echo "         EMBED_BASE_URL=<candidate> EMBED_MODEL=<candidate> EMBED_API_KEY=<candidate> \\" >&2
+      echo "           node --import jiti/register tests/build-research-cache.ts" >&2
+      echo "         EMBED_BASE_URL=<candidate> EMBED_MODEL=<candidate> EMBED_API_KEY=<candidate> \\" >&2
+      echo "           node --import jiti/register tests/build-chunk-cache.ts" >&2
+      exit 2
+    fi
+    if [ ! -f "$CANDIDATE_CACHE_PATH" ]; then
+      echo "ERROR: candidate cache file does not exist: $CANDIDATE_CACHE_PATH" >&2
+      exit 2
+    fi
+    if [ ! -f "$CANDIDATE_CHUNK_SCORES_PATH" ]; then
+      echo "ERROR: candidate chunk-scores file does not exist: $CANDIDATE_CHUNK_SCORES_PATH" >&2
+      exit 2
+    fi
     ;;
   *)
     echo "ERROR: unknown mode $MODE (expected reranker|embedder)" >&2
@@ -170,5 +212,8 @@ export BAKEOFF_ENDPOINT="$ENDPOINT"
 export BAKEOFF_MODEL="$MODEL"
 export BAKEOFF_PROVIDER="$PROVIDER"
 export BAKEOFF_SKIP_E2E="$SKIP_E2E"
+export BAKEOFF_VECTOR_DIM="$VECTOR_DIM_ARG"
+export BAKEOFF_CANDIDATE_CACHE_PATH="$CANDIDATE_CACHE_PATH"
+export BAKEOFF_CANDIDATE_CHUNK_SCORES_PATH="$CANDIDATE_CHUNK_SCORES_PATH"
 
 exec node --import jiti/register "$REPO_ROOT/tests/bakeoff/main.ts"

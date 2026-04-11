@@ -31,6 +31,17 @@ export interface BakeoffMode {
   vectorDim?: number;
   /** Reranker mode only — provider format (defaults to "jina"). */
   provider?: string;
+  /**
+   * Embedder mode only — path to the pre-built candidate cache
+   * (research-cache-{N}.json built with `tests/build-research-cache.ts`
+   * pointed at the candidate embedder).
+   */
+  candidateCachePath?: string;
+  /**
+   * Embedder mode only — path to the pre-built candidate chunk-scores
+   * (chunk-scores-{N}.json built with `tests/build-chunk-cache.ts`).
+   */
+  candidateChunkScoresPath?: string;
 }
 
 export interface BakeoffOptions {
@@ -43,11 +54,26 @@ export interface BakeoffOptions {
 
 export async function runBakeoff(mode: BakeoffMode, options: BakeoffOptions = {}): Promise<{ verdict: string; baseline: BenchmarkResult; candidate: BenchmarkResult }> {
   if (mode.kind === "embedder") {
-    throw new Error("Embedder bakeoff not yet implemented in v1. Reranker only.");
+    // v1.5: the harness supports embedder mode as long as the candidate
+    // research-cache and chunk-scores files have already been built by
+    // `tests/build-research-cache.ts` + `tests/build-chunk-cache.ts`
+    // pointed at the candidate embedder. The harness then runs fast-bench
+    // against both the baseline cache and the candidate cache and reports
+    // the delta. Domain-eval is skipped in embedder mode because it hits
+    // the live memex DB whose vectors are built with the BASELINE embedder
+    // — not a clean comparison.
+    if (!mode.candidateCachePath || !mode.candidateChunkScoresPath) {
+      throw new Error(
+        "Embedder bakeoff requires `candidateCachePath` and `candidateChunkScoresPath`. " +
+        "Pre-build them with `tests/build-research-cache.ts` and `tests/build-chunk-cache.ts` " +
+        "pointed at the candidate embedder endpoint/model/dim."
+      );
+    }
+    return runEmbedderBakeoff(mode, options);
   }
 
   // ---------------------------------------------------------------------------
-  // Stage 1: cheap fast benchmarks
+  // Stage 1: cheap fast benchmarks (reranker mode)
   // ---------------------------------------------------------------------------
   console.log(`\n=== Stage 1: cheap benchmarks (no LLM cost) ===\n`);
 
@@ -148,6 +174,99 @@ interface BenchEnv {
   rerankModel?: string;
   rerankProvider?: string;
   tier?: "fast" | "e2e";
+  /** Override research-cache-50.json (embedder mode). */
+  cachePath?: string;
+  /** Override chunk-scores-50.json (embedder mode). */
+  chunkScoresPath?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Embedder mode
+// ---------------------------------------------------------------------------
+
+async function runEmbedderBakeoff(
+  mode: BakeoffMode,
+  options: BakeoffOptions,
+): Promise<{ verdict: string; baseline: BenchmarkResult; candidate: BenchmarkResult }> {
+  console.log(`\n=== Stage 1: cheap benchmarks (embedder swap) ===\n`);
+  console.log(`Candidate embedder: ${mode.model} @ ${mode.endpoint} (dim=${mode.vectorDim ?? "default"})`);
+  console.log(`Candidate cache:    ${mode.candidateCachePath}`);
+  console.log(`Candidate chunks:   ${mode.candidateChunkScoresPath}`);
+  console.log("");
+  console.log("NOTE: domain-eval is skipped in embedder mode because it runs against");
+  console.log("the live memex DB, whose vectors are built with the baseline embedder.");
+  console.log("Only fast-benchmark (which uses the configurable cache paths) is used.");
+  console.log("");
+
+  console.log("running fast-benchmark TIER=fast on baseline cache...");
+  const baselineFast = await runFastBench({ rerank: false });
+  console.log(`  baseline: R@1=${baselineFast.lmeR1}/${baselineFast.lmeTotal}, R@3=${baselineFast.lmeR3}/${baselineFast.lmeTotal}`);
+
+  console.log("running fast-benchmark TIER=fast on candidate cache...");
+  const candidateFast = await runFastBench({
+    rerank: false,
+    cachePath: mode.candidateCachePath,
+    chunkScoresPath: mode.candidateChunkScoresPath,
+  });
+  console.log(`  candidate: R@1=${candidateFast.lmeR1}/${candidateFast.lmeTotal}, R@3=${candidateFast.lmeR3}/${candidateFast.lmeTotal}`);
+
+  const baseline: BenchmarkResult = {
+    // Domain eval not run in embedder mode — set to 0/0 and mark via
+    // the delta table that domain-eval wasn't measured.
+    domainHits: 0,
+    domainTotal: 0,
+    lmeR1: baselineFast.lmeR1,
+    lmeR3: baselineFast.lmeR3,
+    lmeTotal: baselineFast.lmeTotal,
+  };
+  const candidate: BenchmarkResult = {
+    domainHits: 0,
+    domainTotal: 0,
+    lmeR1: candidateFast.lmeR1,
+    lmeR3: candidateFast.lmeR3,
+    lmeTotal: candidateFast.lmeTotal,
+  };
+
+  const stage1Delta = computeDelta(baseline, candidate);
+  console.log("\n" + formatDeltaTable(stage1Delta));
+
+  if (options.skipE2E || !shouldRunStage2(stage1Delta)) {
+    if (options.skipE2E) {
+      console.log("\n[stage 2 skipped — --skip-e2e]");
+    } else {
+      console.log("\n[stage 2 skipped — stage 1 hard fail]");
+    }
+    const verdict = decide(stage1Delta);
+    console.log(`\nverdict: ${verdict}`);
+    return { verdict, baseline, candidate };
+  }
+
+  // Stage 2 — e2e with cache-protected fresh generation
+  console.log(`\n=== Stage 2: e2e with GPT-4o (cache-protected) ===\n`);
+
+  await withCacheGuard(async () => {
+    console.log("running fast-benchmark TIER=e2e on baseline cache (fresh generation)...");
+    const baselineE2E = await runFastBench({ rerank: false, tier: "e2e" });
+    baseline.lmeE2E = baselineE2E.lmeE2E;
+    console.log(`  baseline E2E: ${baselineE2E.lmeE2E}/${baselineE2E.lmeTotal}`);
+
+    console.log("running fast-benchmark TIER=e2e on candidate cache (fresh generation)...");
+    const candidateE2E = await runFastBench({
+      rerank: false,
+      tier: "e2e",
+      cachePath: mode.candidateCachePath,
+      chunkScoresPath: mode.candidateChunkScoresPath,
+    });
+    candidate.lmeE2E = candidateE2E.lmeE2E;
+    console.log(`  candidate E2E: ${candidateE2E.lmeE2E}/${candidateE2E.lmeTotal}`);
+  });
+
+  const stage2Delta = computeDelta(baseline, candidate);
+  console.log("\n" + formatDeltaTable(stage2Delta));
+
+  const verdict = decide(stage2Delta);
+  console.log(`\nverdict: ${verdict}`);
+  return { verdict, baseline, candidate };
 }
 
 // ============================================================================
@@ -238,6 +357,12 @@ async function runFastBench(env: BenchEnv): Promise<FastBenchOutput> {
     subEnv.RERANK_ENDPOINT = env.rerankEndpoint;
     subEnv.RERANK_MODEL = env.rerankModel;
     subEnv.RERANK_API_KEY = process.env.RERANK_API_KEY || subEnv.EMBED_API_KEY || "";
+  }
+  if (env.cachePath) {
+    subEnv.FAST_BENCH_CACHE_PATH = env.cachePath;
+  }
+  if (env.chunkScoresPath) {
+    subEnv.FAST_BENCH_CHUNK_SCORES_PATH = env.chunkScoresPath;
   }
 
   const out = await spawnCapture("node", [
