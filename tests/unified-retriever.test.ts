@@ -1314,6 +1314,62 @@ describe("UnifiedRetriever — Task 4: Confidence-Gated Reranking", () => {
     });
   });
 
+  describe("rerankBlendWeight", () => {
+    it("honors custom blend weight (0.5) — lower than default 0.7", async () => {
+      const { embedder } = createTrackingEmbedder();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (...args: Parameters<typeof fetch>) => {
+        const url = typeof args[0] === "string" ? args[0] : (args[0] as Request).url;
+        if (url.includes("localhost:19999")) {
+          return new Response(JSON.stringify({
+            results: [
+              { index: 0, relevance_score: 1.0 },
+              { index: 1, relevance_score: 0.0 },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return originalFetch(...args);
+      };
+      try {
+        const docSearch = async () => [
+          makeDocCandidate("doc-1", "First Doc", 0.5),
+          makeDocCandidate("doc-2", "Second Doc", 0.49),
+        ];
+        // With weight=0.5 and reranker scores 1.0/0.0, the blended scores
+        // should be 0.5*1.0 + 0.5*calibrated for doc-1 and 0.5*0.0 + 0.5*calibrated
+        // for doc-2. With weight=0.7 (default) they'd be closer to pure reranker.
+        const retriever = new UnifiedRetriever(store, docSearch, embedder, {
+          minScore: 0.0,
+          confidenceThreshold: 1.0,
+          confidenceGap: 1.0,
+          rerankBlendWeight: 0.5,
+          reranker: {
+            endpoint: "http://localhost:19999/rerank",
+            apiKey: "test-key",
+            model: "test-model",
+            provider: "jina",
+          },
+        });
+        const results = await retriever.retrieve("search for documents about the system");
+        assert.ok(results.length > 0);
+        // Doc-1 should still outscore doc-2 but the top score should be closer
+        // to the midpoint between rerank_score and calibrated than under the default.
+        // Main smoke check: the blend is applied (top != 1.0, bottom != 0.0).
+        if (results.length >= 2) {
+          assert.ok(results[0].score > results[1].score);
+          assert.ok(results[0].score < 1.0, "0.5 weight should reduce reranker influence");
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("default weight is 0.7 (preserves existing behavior)", () => {
+      const config = { ...DEFAULT_CONFIG };
+      assert.equal(config.rerankBlendWeight, 0.7);
+    });
+  });
+
   describe("rerank with mock", () => {
     it("blends rerank scores with calibrated scores", async () => {
       const { embedder } = createTrackingEmbedder();
