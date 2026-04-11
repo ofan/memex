@@ -10,16 +10,21 @@
  *   BEIR_MODE=fts node --import jiti/register tests/beir-benchmark.ts
  *   BEIR_MODE=hybrid BEIR_DATASETS=fiqa,scifact node --import jiti/register tests/beir-benchmark.ts
  *
- * Environment:
+ * Environment (tuning knobs — have defaults):
  *   BEIR_MODE         — fts | hybrid | both (default: hybrid)
  *   BEIR_DATASETS     — comma-separated datasets (default: fiqa,scifact,nq)
  *   BEIR_MAX_QUERIES  — cap queries per dataset (default: 50)
  *   BEIR_MAX_CORPUS   — cap corpus size per dataset (default: 1000)
  *   BEIR_LIMIT        — retrieval depth / metric cutoff (default: 10)
- *   EMBED_BASE_URL    — embedding endpoint for hybrid mode
- *   EMBED_MODEL       — embedding model for hybrid mode
  *   EMBEDDING_DIMS    — vector dimensions (default: 2560)
- *   LLAMA_SWAP_API_KEY / RERANK_API_KEY / RERANK_ENDPOINT / RERANK_MODEL
+ *
+ * Environment (config — no defaults, script fails fast if missing and hybrid mode is requested):
+ *   EMBED_BASE_URL    — embedding endpoint (e.g. http://inference-host:8090/v1)
+ *   EMBED_MODEL       — embedding model identifier
+ *   EMBED_API_KEY     — auth for the embedding endpoint (falls back to legacy LLAMA_SWAP_API_KEY)
+ *   RERANK_ENDPOINT   — rerank endpoint (optional; defaults off in hybrid mode if unset)
+ *   RERANK_MODEL      — rerank model identifier (required if RERANK_ENDPOINT is set)
+ *   RERANK_API_KEY    — auth for the rerank endpoint (falls back to EMBED_API_KEY)
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -34,17 +39,20 @@ import { evaluateBeirQuery, summarizeBeirQueries, type BeirSummary } from "./hel
 
 type BenchmarkMode = "fts" | "hybrid" | "both";
 
+// Tuning knobs — defaults OK
 const MODE = (process.env.BEIR_MODE || "hybrid") as BenchmarkMode;
 const MAX_QUERIES = parseInt(process.env.BEIR_MAX_QUERIES || "50", 10);
 const MAX_CORPUS = parseInt(process.env.BEIR_MAX_CORPUS || "1000", 10);
 const LIMIT = parseInt(process.env.BEIR_LIMIT || "10", 10);
-const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "http://localhost:8090/v1";
-const EMBED_MODEL = process.env.EMBED_MODEL || "Qwen3-Embedding-4B-Q8_0";
 const EMBEDDING_DIMS = parseInt(process.env.EMBEDDING_DIMS || "2560", 10);
-const EMBED_API_KEY = process.env.LLAMA_SWAP_API_KEY || "";
-const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || process.env.EMBED_BASE_URL || "http://localhost:8090/v1/rerank";
-const RERANK_MODEL = process.env.RERANK_MODEL || "bge-reranker-v2-m3-Q8_0";
-const RERANK_API_KEY = process.env.RERANK_API_KEY || EMBED_API_KEY || "unused";
+
+// Config — no defaults, no silent fallbacks
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "";
+const EMBED_MODEL = process.env.EMBED_MODEL || "";
+const EMBED_API_KEY = process.env.EMBED_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
+const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "";
+const RERANK_MODEL = process.env.RERANK_MODEL || "";
+const RERANK_API_KEY = process.env.RERANK_API_KEY || EMBED_API_KEY || "";
 
 interface DatasetRunResult {
   dataset: BeirDatasetName;
@@ -91,14 +99,26 @@ function ensureHybridConfigured(): void {
   });
 }
 
+function assertHybridConfig(): void {
+  const missing: string[] = [];
+  if (!EMBED_BASE_URL) missing.push("EMBED_BASE_URL");
+  if (!EMBED_MODEL) missing.push("EMBED_MODEL");
+  if (!EMBED_API_KEY) missing.push("EMBED_API_KEY (or legacy LLAMA_SWAP_API_KEY)");
+  if (missing.length > 0) {
+    throw new Error(
+      `BEIR_MODE=hybrid requires these env vars: ${missing.join(", ")}. ` +
+      `Set them for this shell before running hybrid mode.`
+    );
+  }
+}
+
 async function assertHybridBackendReady(): Promise<void> {
+  assertHybridConfig();
   const modelsUrl = `${EMBED_BASE_URL.replace(/\/$/, "")}/models`;
   try {
     const response = await fetch(modelsUrl, {
       signal: AbortSignal.timeout(5000),
-      headers: EMBED_API_KEY && EMBED_API_KEY !== "unused"
-        ? { Authorization: `Bearer ${EMBED_API_KEY}` }
-        : undefined,
+      headers: { Authorization: `Bearer ${EMBED_API_KEY}` },
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -106,7 +126,6 @@ async function assertHybridBackendReady(): Promise<void> {
   } catch (error) {
     throw new Error(
       `Hybrid mode requires a reachable embedding backend at ${modelsUrl}. ` +
-      `Set EMBED_BASE_URL/EMBED_MODEL for this shell before running BEIR_MODE=hybrid. ` +
       `Cause: ${error instanceof Error ? error.message : String(error)}`
     );
   }

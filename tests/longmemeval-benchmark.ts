@@ -111,6 +111,41 @@ interface CachedResult {
   hit_at_10: boolean;
 }
 
+/**
+ * Collapse chunked retrieval results to session-level top-K.
+ *
+ * Each chunk carries a parent sessionId in metadata. Results arrive sorted
+ * by score descending, so the first occurrence of each sessionId is the
+ * max-sim chunk for that session. Deduping by sessionId while iterating
+ * in score order is equivalent to "max-sim per session, then top-K".
+ *
+ * Exported for unit testing (see tests/longmemeval-chunked-dedupe.test.ts).
+ */
+export function dedupeChunkResultsBySession(
+  results: Array<{ entry: { text: string; metadata?: string | null } }>,
+  k: number,
+): { retrievedSessionIds: string[]; retrievedTexts: string[] } {
+  const retrievedSessionIds: string[] = [];
+  const retrievedTexts: string[] = [];
+  if (k <= 0) return { retrievedSessionIds, retrievedTexts };
+  const seenSessions = new Set<string>();
+  for (const r of results) {
+    let sessionId = "";
+    try {
+      const meta = JSON.parse(r.entry.metadata || "{}");
+      sessionId = (meta.sessionId as string) || "";
+    } catch {
+      // unparseable metadata — skip
+    }
+    if (!sessionId || seenSessions.has(sessionId)) continue;
+    seenSessions.add(sessionId);
+    retrievedSessionIds.push(sessionId);
+    retrievedTexts.push(r.entry.text);
+    if (retrievedSessionIds.length >= k) break;
+  }
+  return { retrievedSessionIds, retrievedTexts };
+}
+
 interface CacheFile {
   metadata: {
     sample_size: number;
@@ -348,24 +383,7 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
     // chunks, then collapse to sessions (max-sim: keep first occurrence
     // because results are score-sorted descending).
     const results = await retriever.retrieve({ query: example.question, limit: K * 3 });
-
-    const seenSessions = new Set<string>();
-    const retrievedSessionIds: string[] = [];
-    const retrievedTexts: string[] = [];
-    for (const r of results) {
-      let sessionId = "";
-      try {
-        const meta = JSON.parse(r.entry.metadata || "{}");
-        sessionId = (meta.sessionId as string) || "";
-      } catch {
-        // skip unparseable
-      }
-      if (!sessionId || seenSessions.has(sessionId)) continue;
-      seenSessions.add(sessionId);
-      retrievedSessionIds.push(sessionId);
-      retrievedTexts.push(r.entry.text);
-      if (retrievedSessionIds.length >= K) break;
-    }
+    const { retrievedSessionIds, retrievedTexts } = dedupeChunkResultsBySession(results, K);
 
     // Check if any answer session appears in top-K results
     const answerSet = new Set(example.answer_session_ids);
@@ -990,7 +1008,22 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("LongMemEval benchmark failed:", err);
-  process.exit(1);
-});
+// Only run main() when executed directly, not when imported for unit testing.
+// jiti's ESM loader sets import.meta.url to the transpiled file URL, which
+// doesn't equal process.argv[1], so compare the resolved file paths instead.
+const isDirectRun = (() => {
+  try {
+    const invokedPath = process.argv[1] ? fileURLToPath(new URL(`file://${process.argv[1]}`)).replace(/\\/g, "/") : "";
+    const selfPath = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+    return invokedPath && selfPath.endsWith(invokedPath.replace(/^.*\//, ""));
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("LongMemEval benchmark failed:", err);
+    process.exit(1);
+  });
+}
