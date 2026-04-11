@@ -156,6 +156,59 @@ Started at 21:59 with `--parallel 1` + chunked embedding + retry-on-502. As of 2
 
 Projected ETA: ~100 more minutes. Phase 1 will not complete within this loop. Leaving it running disowned in the background. When it finishes the new `tests/fixtures/longmemeval-cache/retrieval-50.json` will be on disk and ready to commit; at that point the next session can run Phase 2 read against the fresh cache to get the "real" longmemeval numbers with Qwen3-Reranker baked into the retrieval order.
 
+### Item 8 — Reranker retry + shared helper — DONE
+
+Extracted the transient-retry pattern from `embedder.ts` into a shared `src/transient-retry.ts` module and wired it into both reranker call sites (`src/unified-retriever.ts` rerank stage and `src/retriever.ts` rerankResults).
+
+Previously only embed calls got automatic retry on 502/503/504/AbortError. Rerank calls were bare — during Phase 1 earlier this loop I saw `Rerank API timed out (15s), falling back to cosine` twice in 50 examples with no recovery attempt. Now rerank gets the same 4-attempt exponential backoff the embedder has, so transient reranker failures (inference-host crashes, temporary saturation) no longer propagate to retrieval.
+
+Non-OK rerank responses now throw inside the retry block with a `status` property so `withTransientRetry` can make the retry-or-throw decision. The outer catch still handles persistent failures by returning the pool unchanged.
+
+12 unit tests in `tests/transient-retry.test.ts` cover: happy path, 502/503/504/AbortError/TimeoutError retry, 4xx/500 non-retry, maxAttempts exhaustion, custom `extraTransientStatuses`, `onRetry` callback, error-shape preservation.
+
+### Item 9 — Bakeoff parser tests + --help — DONE
+
+**Parser tests:** extracted the regex-based stdout parsers from `tests/bakeoff/runner.ts` into two pure exported functions `parseDomainEvalOutput` and `parseFastBenchOutput`, then wrote `tests/bakeoff/runner-parser.test.ts` with 14 cases covering realistic stdout from both benchmarks. Includes the tricky case where a per-example line `R@1/CORRECT [...]` must NOT be confused with the summary `R@1: N/M` line (the regex requires `:` to disambiguate).
+
+**--help flag:** `./scripts/bakeoff --help` now prints a structured help screen — modes, args, flags, required env vars, exit codes, and worked examples. Help is checked before env validation so it works without any 1Password secrets set up.
+
+### Item 10 — Rerank-failure fallback bug — FOUND AND FIXED
+
+Found this while writing the diagnostic for the domain-eval -1 regression. The legacy `MemoryRetriever.rerankResults` had a cosine-similarity fallback that was SHARED between two cases:
+
+- **Rerank not configured** — cosine pass is a helpful second stage (improves pure BM25 rankings)
+- **Rerank configured but API failed** — cosine pass aggressively RE-RANKS the pool, displacing the hybrid-fusion winners
+
+The two cases should behave differently. Fixed:
+
+- Rerank not configured → cosine pass (unchanged)
+- Rerank configured AND succeeds → reranked results (unchanged)
+- Rerank configured AND fails → return hybrid-fusion ranking unchanged (NEW; trust the first-stage ranking instead of re-ranking with raw cosine)
+
+The `UnifiedRetriever` path already had the correct behavior (`return pool` on rerank failure) — this brings the legacy retriever to parity.
+
+Added `tests/retriever-rerank-fallback.test.ts` with two integration-style tests that mock `globalThis.fetch`, configure rerank with a persistently-502 endpoint, and assert the results do NOT have `sources.reranked` set (proving the cosine fallback did NOT run). Also verifies that `withTransientRetry` retries transient 502s before giving up.
+
+### Item 11 — Clean domain-eval run with all fixes — DONE
+
+Killed Phase 1 (was going to take ~6+ hours with chunked embedding + crash loops) and ran a fresh bakeoff stage 1 against the unsaturated host with all the loop's fixes applied:
+
+| Metric | Baseline | Qwen3-Reranker | Δ |
+|---|---|---|---|
+| domain-eval | 12/15 | **11/15** | −1 query |
+| LME R@1 (fast-bench N=50) | 39/50 | **41/50** | **+2 queries** |
+| LME R@3 | 45/50 | 45/50 | 0 |
+
+**Bakeoff verdict: PASS** (exit 0). `+2 R@1` meets the decisive-win threshold, `-1 domain-eval` is within the 1-query regression tolerance.
+
+**The domain-eval -1 regression is real Qwen3-Reranker behavior**, not the cosine-fallback bug. With the fallback fix in place, the same 4 misses remain: `mbp1-model`, `gemma4-stability`, `virgil-qwen`, `ryan-cabbie-behavior`. Specifically:
+
+- `ryan-response-style` flipped from MISS → HIT (reranker win)
+- `mbp1-model` flipped from HIT → MISS (reranker loss)
+- `gemma4-stability` flipped from HIT → MISS (reranker loss)
+
+For `gemma4-stability`, the reranker prefers the generic deployment-rule memory ("Ryan's host-A deployment rule: only one active model at a time") over the specific crash incident memory ("Gemma 4 heretic crashed after ~5 messages in multi-turn use") — picking the semantically-prominent rule over the specific incident. This is a known property of Qwen3-Reranker's instruction-free prompting; the instruction-aware rerank template (llama.cpp PR #20009, still unmerged) might address it but hasn't been merged yet.
+
 ### Item 7 — longmemeval-benchmark chunked embedding — FIXED
 
 The Phase 2 rerun (2026-04-11 ~00:45) revealed that `longmemeval-benchmark.ts` and `fast-benchmark.ts` were measuring **different pipelines**: fast-benchmark used pre-computed chunked embeddings (max-sim across chunks of long sessions) while longmemeval-benchmark was truncating each session to its first 2000 chars and embedding the truncated whole. Same 50 examples, but baselines differed by ~34pp R@1 (78% vs 44%) because of the chunking gap. On the truncated pipeline, Qwen3-Reranker *hurt* R@3 and E2E because it aggressively promoted top-1 at the cost of top-K diversity on a pool of already-weak candidates.
@@ -184,3 +237,12 @@ Side benefit: the chunked pipeline also exercises more of the production code pa
 - **2026-04-11 00:44** — Phase 1 finished (80 min total); ran Phase 2 read against fresh cache
 - **2026-04-11 00:47** — Phase 2 numbers contradict fast-benchmark (R@1 ↑, R@3/E2E ↓). Root cause: longmemeval-benchmark was truncating, not chunking. Fast-benchmark and production use chunked embedding.
 - **2026-04-11 01:00** — Rewrote Phase 1 retrieve loop to use `chunkDocument` + sessionId dedupe. Committing fix and kicking off full N=50 rebuild in background.
+- **2026-04-11 01:14** — Chunked Phase 1 restarted
+- **2026-04-11 01:22** — Phase 1 died silently on example 1; restarted
+- **2026-04-11 01:30** — Added `src/transient-retry.ts` shared helper; wrapped both reranker fetches in `withTransientRetry`; 12 unit tests for the helper
+- **2026-04-11 01:33** — Added `--help` flag to scripts/bakeoff; extracted stdout parsers to pure functions with 14 unit tests
+- **2026-04-11 01:34** — Domain-eval regression diagnostic ran; found the cosine-fallback bug (rerank-failure path re-ranked instead of returning unchanged)
+- **2026-04-11 01:35** — Fixed the fallback path; regression test added
+- **2026-04-11 01:44** — Killed Phase 1 (still on 1/50 after 45 min); restored old cache
+- **2026-04-11 01:46** — Deployed all fixes to plugin dir, gateway restart
+- **2026-04-11 01:47** — Fresh bakeoff stage 1: PASS verdict. Domain -1 is real Qwen3 behavior (not the cosine fallback bug); LME R@1 +2 stands.
