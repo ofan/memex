@@ -39,6 +39,7 @@ import { createEmbedder } from "../src/embedder.js";
 import type { Embedder } from "../src/embedder.js";
 import { createRetriever } from "../src/retriever.js";
 import type { RetrievalConfig } from "../src/retriever.js";
+import { chunkDocument } from "../src/chunker.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -242,34 +243,73 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
     const embedder = getEmbedder();
     const texts = example.haystack_sessions.map(s => sessionToText(s));
 
-    // Embed sessions if vectors enabled (truncate to ~2000 chars for embedding context)
+    // Chunked embedding: split each session into overlapping 2000-char chunks,
+    // embed each chunk, store each chunk as its own memory entry with the
+    // parent sessionId in metadata. At retrieve time we dedupe by sessionId
+    // to get the session-level top-K (max-sim aggregation).
     //
-    // Chunked into small mini-batches: large single-batch embed calls (50+ texts
-    // → multi-MB JSON responses) reproducibly crash the host's llama-server even
-    // with --parallel 1, after one or two big batches succeed (likely a memory
-    // pressure / Metal buffer issue specific to large outputs). Splitting into
-    // batches of EMBED_CHUNK keeps each request small enough to avoid the crash.
-    // Performance hit is small because the embedder client reuses the HTTP keep-alive.
+    // This matches fast-benchmark's chunked embedding strategy and production
+    // memex behavior. Previous truncate-to-2000-chars approach left answer
+    // content beyond the window invisible to vector search, which is the
+    // +34pp gap documented in docs/research/005-longmemeval-baseline.md.
+    //
+    // Mini-batched into groups of 8 to stay under the host's embed-lane
+    // large-batch crash threshold (large single-request responses can still
+    // crash even with --parallel 1; see LEARNINGS.md).
+    interface SessionChunk {
+      text: string;
+      sessionId: string;
+      chunkIdx: number;
+    }
+    const sessionChunks: SessionChunk[] = [];
+    if (USE_VECTORS) {
+      for (let i = 0; i < texts.length; i++) {
+        const result = chunkDocument(texts[i], {
+          maxChunkSize: 2000,
+          overlapSize: 200,
+          minChunkSize: 200,
+          semanticSplit: true,
+          maxLinesPerChunk: 50,
+        });
+        const chunks = result.chunks.length > 0 ? result.chunks : [texts[i].slice(0, 2000)];
+        for (let j = 0; j < chunks.length; j++) {
+          sessionChunks.push({
+            text: chunks[j],
+            sessionId: example.haystack_session_ids[i],
+            chunkIdx: j,
+          });
+        }
+      }
+    } else {
+      // No-vector path: one chunk per session (used for BM25-only baselines)
+      for (let i = 0; i < texts.length; i++) {
+        sessionChunks.push({
+          text: texts[i],
+          sessionId: example.haystack_session_ids[i],
+          chunkIdx: 0,
+        });
+      }
+    }
+
     let vectors: number[][] | null = null;
     if (USE_VECTORS) {
-      const truncated = texts.map(t => t.slice(0, 2000));
       const EMBED_CHUNK = 8;
       vectors = [];
-      for (let i = 0; i < truncated.length; i += EMBED_CHUNK) {
-        const slice = truncated.slice(i, i + EMBED_CHUNK);
+      for (let i = 0; i < sessionChunks.length; i += EMBED_CHUNK) {
+        const slice = sessionChunks.slice(i, i + EMBED_CHUNK).map(c => c.text);
         const out = await embedder.embedBatchPassage(slice);
         vectors.push(...out);
       }
     }
 
-    // Index all haystack sessions as memories
-    const entries = texts.map((text, i) => ({
-      text,
+    // Index each chunk as its own memory entry with parent sessionId
+    const entries = sessionChunks.map((sc, i) => ({
+      text: sc.text,
       vector: vectors ? vectors[i] : new Array(VECTOR_DIM).fill(0),
       category: "fact" as const,
       scope: "global",
       importance: 0.5,
-      metadata: JSON.stringify({ sessionId: example.haystack_session_ids[i] }),
+      metadata: JSON.stringify({ sessionId: sc.sessionId, chunkIdx: sc.chunkIdx }),
     }));
 
     await store.bulkStore(entries);
@@ -290,7 +330,10 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
       rerankModel: RERANK_MODEL,
       rerankApiKey: RERANK_API_KEY,
       rerankProvider: RERANK_PROVIDER,
-      candidatePoolSize: K * 3,
+      // With chunked embedding a single session produces multiple chunks.
+      // Pool 3× larger so that after dedupe by sessionId we still have
+      // room for K distinct sessions in the output.
+      candidatePoolSize: K * 6,
       minScore: 0.05,        // low initial filter — let reranker decide
       hardMinScore: 0.10,    // low adaptive floor for benchmark
       recencyHalfLifeDays: 0, // disable recency boost (all same time)
@@ -301,19 +344,27 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
     };
 
     const retriever = createRetriever(store, embedder, retrieverConfig);
-    const results = await retriever.retrieve({ query: example.question, limit: K });
+    // Ask for 3× more results than K so dedupe has room. Retrieve from
+    // chunks, then collapse to sessions (max-sim: keep first occurrence
+    // because results are score-sorted descending).
+    const results = await retriever.retrieve({ query: example.question, limit: K * 3 });
 
-    // Extract session IDs and full texts from search results
+    const seenSessions = new Set<string>();
     const retrievedSessionIds: string[] = [];
     const retrievedTexts: string[] = [];
     for (const r of results) {
+      let sessionId = "";
       try {
         const meta = JSON.parse(r.entry.metadata || "{}");
-        retrievedSessionIds.push(meta.sessionId as string);
+        sessionId = (meta.sessionId as string) || "";
       } catch {
-        retrievedSessionIds.push("");
+        // skip unparseable
       }
+      if (!sessionId || seenSessions.has(sessionId)) continue;
+      seenSessions.add(sessionId);
+      retrievedSessionIds.push(sessionId);
       retrievedTexts.push(r.entry.text);
+      if (retrievedSessionIds.length >= K) break;
     }
 
     // Check if any answer session appears in top-K results

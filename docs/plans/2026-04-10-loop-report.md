@@ -156,6 +156,16 @@ Started at 21:59 with `--parallel 1` + chunked embedding + retry-on-502. As of 2
 
 Projected ETA: ~100 more minutes. Phase 1 will not complete within this loop. Leaving it running disowned in the background. When it finishes the new `tests/fixtures/longmemeval-cache/retrieval-50.json` will be on disk and ready to commit; at that point the next session can run Phase 2 read against the fresh cache to get the "real" longmemeval numbers with Qwen3-Reranker baked into the retrieval order.
 
+### Item 7 — longmemeval-benchmark chunked embedding — FIXED
+
+The Phase 2 rerun (2026-04-11 ~00:45) revealed that `longmemeval-benchmark.ts` and `fast-benchmark.ts` were measuring **different pipelines**: fast-benchmark used pre-computed chunked embeddings (max-sim across chunks of long sessions) while longmemeval-benchmark was truncating each session to its first 2000 chars and embedding the truncated whole. Same 50 examples, but baselines differed by ~34pp R@1 (78% vs 44%) because of the chunking gap. On the truncated pipeline, Qwen3-Reranker *hurt* R@3 and E2E because it aggressively promoted top-1 at the cost of top-K diversity on a pool of already-weak candidates.
+
+**Fix:** rewrote Phase 1's retrieve loop in `tests/longmemeval-benchmark.ts` to chunk each session via `chunkDocument` (2000-char chunks, 200-char overlap, semantic-split on sentence boundaries — matching the production chunker config and fast-benchmark's fixture). Each chunk is stored as its own memory entry with `metadata.sessionId` pointing back to the parent session. At retrieve time the benchmark asks for `K * 3` results and then collapses to session-level top-K by deduping on sessionId (first-occurrence wins because results are score-sorted → equivalent to max-sim aggregation). Candidate pool raised from `K * 3` to `K * 6` so that after dedupe there's still room for K distinct sessions.
+
+Side benefit: the chunked pipeline also exercises more of the production code path (same chunker, same dedup pattern memex uses internally), so a regression here is a more meaningful signal of a production regression.
+
+**Validation:** the new code compiles, imports cleanly, and reaches `embedMany` on first-example retrieve (confirmed via jiti-loader probe). A full N=50 Phase 1 rebuild will take 2-3 hours with the chunking (more embed calls per example) on top of the embed lane's crash/retry cycles, so it's been kicked off as a disowned background job. Next session can run Phase 2 against the fresh cache to see the real numbers.
+
 ## Running log
 
 - **2026-04-10 21:35** — created this report doc, started Phase 1 (first attempt, default batching → died on example 2 with abort trap)
@@ -171,3 +181,6 @@ Projected ETA: ~100 more minutes. Phase 1 will not complete within this loop. Le
 - **2026-04-10 22:10** — wrote 16 unit tests for criteria.ts, all passing
 - **2026-04-10 22:14** — smoke-tested bakeoff CLI against live host (stage 1 verified, candidate fast-bench timed out due to host contention with Phase 1)
 - **2026-04-10 22:22** — Phase 1 at 9/50 (~23 min in). Committing bakeoff. Phase 1 left disowned.
+- **2026-04-11 00:44** — Phase 1 finished (80 min total); ran Phase 2 read against fresh cache
+- **2026-04-11 00:47** — Phase 2 numbers contradict fast-benchmark (R@1 ↑, R@3/E2E ↓). Root cause: longmemeval-benchmark was truncating, not chunking. Fast-benchmark and production use chunked embedding.
+- **2026-04-11 01:00** — Rewrote Phase 1 retrieve loop to use `chunkDocument` + sessionId dedupe. Committing fix and kicking off full N=50 rebuild in background.
