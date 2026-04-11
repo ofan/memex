@@ -22,25 +22,42 @@ That separation matters operationally, but from the agent's point of view both a
 
 This benchmark measures **conversation-memory quality**, not the full mixed-source memex path.
 
-**90% end-to-end accuracy** — #2 overall, within 1.4pp of the best system.
+**94% end-to-end accuracy with Qwen3-Reranker** (90% without reranker) — competitive with the best published systems.
 
-Tested on LongMemEval_s (N=50) using official prompts and GPT-4o-mini LLM-judge.
+Tested on LongMemEval_s (N=50) using official prompts and GPT-4o reader with GPT-4o-mini LLM-judge. Numbers below are from `tests/fast-benchmark.ts` TIER=e2e with fresh response generation.
 
-| System | E2E Accuracy | Reader LLM |
-|---|---|---|
-| Hindsight/TEMPR | 91.4% | GPT-4o |
-| **Memex** | **90.0%** | GPT-4o |
-| Zep/Graphiti | ~85% | GPT-4o |
-| mem0 (graph) | ~78% | GPT-4o |
-| MemGPT/Letta | ~75% | GPT-4o |
+| System | E2E Accuracy | Reader LLM | Notes |
+|---|---|---|---|
+| **Memex (Qwen3-Reranker)** | **94.0%** | GPT-4o | added 2026-04-10 |
+| Hindsight/TEMPR | 91.4% | GPT-4o | |
+| Memex (no reranker) | 90.0% | GPT-4o | prior baseline |
+| Zep/Graphiti | ~85% | GPT-4o | |
+| mem0 (graph) | ~78% | GPT-4o | |
+| MemGPT/Letta | ~75% | GPT-4o | |
 
 **What the metrics mean:**
-- **R@1 (78%)** — correct session ranked #1. Strictest measure of retrieval precision.
+- **R@1 (82% with reranker, 78% without)** — correct session ranked #1. Strictest measure of retrieval precision.
 - **R@3 (90%)** — correct session in top 3. Reflects production behavior (LLM sees top 3).
 - **R@5 (96%)** — correct session in top 5. Matches auto-recall window. Only 2 queries miss.
-- **E2E (90%)** — can the system actually answer the question? This is what users experience. E2E can exceed R@1 because the LLM reads multiple retrieved sessions and may find the answer even when the "official" correct session isn't ranked first.
+- **E2E (94% with reranker, 90% without)** — can the system actually answer the question? This is what users experience. E2E can exceed R@1 because the LLM reads multiple retrieved sessions and may find the answer even when the "official" correct session isn't ranked first.
+
+N=50 is small enough that a ±2 query swing is within noise. The reranker improvement was reproduced twice on independent runs and is supported by a mechanistic argument (32K context Qwen3-Reranker vs. 8K-truncating bge-reranker-v2-m3 on long chunked sessions — see `docs/research/embed-rerank-upgrade-brief.md`).
 
 LongMemEval is the right benchmark for "does memex remember conversation history well over time?" It is **not** the canonical benchmark for mixed memory + document retrieval quality. That benchmark track is being separated out so the project does not overclaim an overall quality number from a memory-only benchmark.
+
+### Domain eval
+
+A 15-query entity-rich eval against the author's production memex DB lives at `tests/domain-eval.ts`. It's the primary regression gate for day-to-day retrieval tuning because it runs in under 10s with no LLM cost. Current score: 12/15 without reranker, 11/15 with Qwen3-Reranker (one query loses to a "defensible but wrong" semantic match). See `docs/plans/LEARNINGS.md` for the history.
+
+### Model bakeoff harness
+
+Run a complete go/no-go evaluation for a candidate reranker model in under 5 minutes:
+
+```sh
+./scripts/bakeoff reranker <endpoint-url> <model-name> [--skip-e2e]
+```
+
+Two-stage gate: cheap stage 1 (domain-eval + fast-benchmark) runs first; expensive stage 2 (e2e with GPT-4o reader) runs only if stage 1 wasn't a hard fail. Exits 0 on PASS, 1 on HOLD/FAIL, 2 on error. Unit-tested decision logic. See `docs/design/model-bakeoff.md`.
 
 ## Technical Overview
 
@@ -56,8 +73,10 @@ This is why memex is a `memory` plugin instead of a plain search plugin: the goa
 
 - **3 tools**: `memory_recall`, `memory_store`, `memory_forget`
 - **Hybrid retrieval**: z-score fusion (vector + BM25), max-sim chunked embedding
+- **Cross-encoder reranking**: configurable (Jina / SiliconFlow / Voyage / Pinecone shapes). Default off; enable via config when running against an instruction-capable reranker like Qwen3-Reranker-0.6B.
+- **Transient-failure retry**: embedder and reranker clients both retry on 502/503/504/timeouts with exponential backoff (`src/transient-retry.ts`), so inference-server crashes never propagate to callers as failed recalls.
 - **Document search**: FTS5 + sqlite-vec, dual-granularity (whole-doc + section/bullet)
-- **Auto-recall**: injects relevant memories into prompt every turn (~150ms)
+- **Auto-recall**: injects relevant memories into prompt every turn, with an in-turn dedup cache so multiple prompt rebuilds per agent turn only cost one retrieve() call
 - **LLM-driven storage**: system prompt nudges the LLM to store facts, no heuristic auto-capture
 - **Multi-vector**: long memories (>1500 chars) get chunked, each chunk independently embedded
 - **Single SQLite database**: memories + documents + vectors in one file
@@ -102,17 +121,22 @@ Add to your OpenClaw config:
 ## Development
 
 ```bash
-# Run tests (488)
+# Run tests (~680)
 node --import jiti/register --test tests/*.test.ts
 
 # Run benchmarks
-node --import jiti/register tests/benchmark.ts
+node --import jiti/register tests/fast-benchmark.ts           # cached-fusion simulator, <1s
+TIER=e2e node --import jiti/register tests/fast-benchmark.ts  # + GPT-4o reader, ~4 min
+node --import jiti/register tests/domain-eval.ts              # 15 entity-rich queries, ~10s
 
-# Deploy
-rm -rf ~/.openclaw/plugins/memex
-cp -r . ~/.openclaw/plugins/memex
-rm -rf ~/.openclaw/plugins/memex/.git
-openclaw gateway restart
+# Evaluate a candidate reranker end-to-end (PASS/HOLD/FAIL verdict)
+./scripts/bakeoff --help
+./scripts/bakeoff reranker <endpoint-url> <model-name> --skip-e2e
+
+# Deploy (when installed via link)
+rsync -av --exclude=node_modules --exclude=.git --exclude=tests --exclude=docs \
+  . ~/.openclaw/plugins/memex/
+systemctl --user restart openclaw-gateway
 ```
 
 ## Architecture
@@ -127,12 +151,15 @@ memex (kind: "memory")
 │   ├── Z-score fusion (0.8 vec + 0.2 BM25)
 │   ├── Max-sim chunked embedding
 │   ├── Cross-encoder reranking (optional)
+│   ├── In-turn recall cache (per-agent-turn dedup)
+│   ├── Rerank-failure fallback → hybrid fusion ranking unchanged (not cosine)
 │   ├── Time decay + importance weighting
 │   └── Source diversity guarantee
-└── Embedding
-    ├── OpenAI-compatible HTTP client
-    ├── LRU cache (256 entries, 30min TTL)
-    └── Auto-chunking for long documents
+├── Embedding + Rerank Clients
+│   ├── OpenAI-compatible HTTP client
+│   ├── LRU cache (256 entries, 30min TTL)
+│   ├── Transient-failure retry (502/503/504/AbortError, exponential backoff)
+│   └── Auto-chunking for long documents
 ```
 
 ## License
