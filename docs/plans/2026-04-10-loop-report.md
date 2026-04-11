@@ -260,6 +260,56 @@ So the blend lever can't fix these queries. **The fix is either upstream (query 
 
 **Net position unchanged:** reranker costs −1 domain eval query but wins +4pp on LongMemEval R@1 and +4pp on E2E. Bakeoff verdict stays at PASS. The clean A/B didn't change the decision; it just closed off "blend tuning" as a mitigation path.
 
+### Item 19 — Rank-mode rerank scoring — recovers gemma4-stability
+
+The blend-weight A/B in item 18 was a negative result BECAUSE the raw-score blend math can't compensate for saturated rerank output. Probed the full top-30 pool directly for the `gemma4-stability` query and found:
+
+```
+Reranker output:
+ 1. 0.9998  CORRECT: "Gemma 4 ... crashed after ~5 messages in multi-turn use"
+ 2. 0.9997  WRONG:   "Ryan's [host] deployment rule"
+ 3. 0.9987  "Gemma 4 deployed on [host]. llama-server upgraded"
+
+Hybrid-fusion scores:
+ #1 fused=0.748  "Ryan's [host] deployment rule" (wrong, but denser BM25 match)
+ #2 fused=0.699  "Gemma 4 ... crashed"          (correct, but longer text → lower density)
+
+Raw blend at weight=0.8:
+ blended_correct = 0.8 * 0.9998 + 0.2 * 0.699 = 0.9396
+ blended_wrong   = 0.8 * 0.9997 + 0.2 * 0.748 = 0.9494   ← wins by 0.01
+```
+
+The reranker CORRECTLY identifies the crashed memory as rank 1 with a 0.0001 lead. But the fusion gap (0.049) dwarfs the rerank differential — wrong memory wins after blending. No blend weight fixes this: you'd need `weight > 0.998` which makes the blend essentially pure-reranker (loses fusion signal for all other queries).
+
+**Fix:** `rerankScoreMode: "raw" | "rank"` config option on both retrievers. Rank mode replaces raw scores with rank-normalized values: `1 - (rank - 1) / N`. Top-1 always gets 1.0, top-2 gets 1 - 1/N, etc. The reranker's ordinal signal then survives the blend regardless of score saturation.
+
+Re-run math:
+```
+rank_correct = 1.0    (rank 1)
+rank_wrong   = 0.9667 (rank 2, N=30)
+
+blended_correct = 0.8 * 1.0    + 0.2 * 0.699 = 0.9398
+blended_wrong   = 0.8 * 0.9667 + 0.2 * 0.748 = 0.9229
+correct wins by 0.017 ✓
+```
+
+### Item 19 A/B results
+
+| Benchmark | raw mode | rank mode | Δ |
+|---|---|---|---|
+| **domain-eval (N=15)** | 11/15 | **12/15** | **+1 query** (recovered gemma4-stability) |
+| **fast-benchmark TIER=pipeline R@1 (N=50)** | 25/50 (50%) | **32/50 (64%)** | **+7 queries (+14pp)** |
+| **fast-benchmark TIER=pipeline R@3** | 26/50 (52%) | **39/50 (78%)** | **+13 queries (+26pp)** |
+| fast-benchmark TIER=fast R@1 | 41/50 | 41/50 | 0 (runFast has its own rerank path, not affected) |
+
+Rank mode is strictly better or neutral on every benchmark tested. **Default stays "raw" for backward compat**; users opt in via `reranker.scoreMode: "rank"` in `openclaw.json` or `MEMEX_RERANK_SCORE_MODE=rank` at benchmark time.
+
+The `runFast` path in `fast-benchmark.ts` uses direct `fetch` + `sort by relevance_score` — it bypasses `createRetriever` entirely, so my change doesn't affect it. Updating that to use rank mode would be a separate diff. For now, the production path (`createRetriever` / `UnifiedRetriever`) is what matters and both now support rank mode.
+
+### Why this took so long to find
+
+I initially assumed the domain-eval regression was intrinsic to Qwen3-Reranker ("it prefers rule memories over incident memories"). The negative blend-weight A/B seemed to confirm that — no reasonable blend could recover the miss. But the probe on the full 30-doc pool revealed the real problem: **the reranker was actually right**, and the blend math was dissolving its signal. A diagnostic spike that dumped the full top-30 rerank scores is what exposed the dissolution. Worth noting in LEARNINGS: when tuning fails, probe the scores directly before declaring the problem intrinsic.
+
 ## Running log
 
 - **2026-04-10 21:35** — created this report doc, started Phase 1 (first attempt, default batching → died on example 2 with abort trap)
