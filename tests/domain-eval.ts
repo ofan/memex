@@ -167,6 +167,9 @@ async function main() {
     rerankEndpoint: process.env.MEMEX_RERANK_ENDPOINT,
     rerankModel: process.env.MEMEX_RERANK_MODEL,
     rerankProvider: "jina",
+    rerankBlendWeight: process.env.MEMEX_RERANK_BLEND_WEIGHT
+      ? parseFloat(process.env.MEMEX_RERANK_BLEND_WEIGHT)
+      : undefined,
     minScore: 0.05,
     candidatePoolSize: poolSize,
   });
