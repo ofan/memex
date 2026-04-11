@@ -40,6 +40,14 @@ export interface UnifiedRetrieverConfig {
   confidenceThreshold: number;
   /** Gap between top and second result for confidence check (default: 0.15) */
   confidenceGap: number;
+  /**
+   * Weight given to the cross-encoder rerank score when blending with the
+   * source-calibrated fused score. Final reranked score is:
+   *     blended = rerankBlendWeight * rerank_score + (1 - rerankBlendWeight) * calibrated_score
+   * Higher = reranker dominates. Lower = calibrated fusion has more say.
+   * Default: 0.7 (keeping the existing behavior).
+   */
+  rerankBlendWeight: number;
 }
 
 export interface UnifiedResult {
@@ -90,6 +98,7 @@ export const DEFAULT_CONFIG: UnifiedRetrieverConfig = {
   candidatePoolSize: 15,
   confidenceThreshold: 0.88,
   confidenceGap: 0.15,
+  rerankBlendWeight: 0.7,
 };
 
 // =============================================================================
@@ -432,12 +441,15 @@ export class UnifiedRetriever {
         return pool;
       }
 
-      // Blend: 0.7 * rerank_score + 0.3 * calibrated_score
+      // Blend: rerankBlendWeight * rerank_score + (1-weight) * calibrated_score
+      // Default: 0.7 reranker + 0.3 calibrated (see DEFAULT_CONFIG).
+      const blendWeight = this.config.rerankBlendWeight;
+      const fusionWeight = 1 - blendWeight;
       const reranked = parsed
         .filter(item => item.index >= 0 && item.index < candidates.length)
         .map(item => {
           const original = candidates[item.index];
-          const blended = 0.7 * item.score + 0.3 * original.score;
+          const blended = blendWeight * item.score + fusionWeight * original.score;
           return { ...original, score: blended };
         });
 
