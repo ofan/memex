@@ -139,6 +139,81 @@ describe("rerankBlendWeight — configurable rerank/fusion blend", () => {
     );
   });
 
+  it("rankScoreMode: uses rank-normalized scores instead of raw", async () => {
+    // Test that rerankScoreMode='rank' transforms raw scores into rank
+    // positions: top-1 → 1.0, top-k → 1 - (k-1)/N.
+    // With two candidates, raw scores 1.0 and 0.99 become 1.0 and 0.5.
+    const embedder = makeFakeEmbedder(dim);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url: any) => {
+      const urlStr = typeof url === "string" ? url : (url as Request).url;
+      if (urlStr.includes("/rerank")) {
+        return new Response(JSON.stringify({
+          results: [
+            { index: 0, relevance_score: 1.00 },  // raw top-1 (saturated)
+            { index: 1, relevance_score: 0.99 },  // raw top-2 (saturated, barely below)
+          ],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return originalFetch(url);
+    };
+    try {
+      const rawRetriever = createRetriever(store, embedder, {
+        mode: "hybrid",
+        rerank: "cross-encoder",
+        rerankEndpoint: "http://fake-rerank/v1/rerank",
+        rerankApiKey: "fake-key",
+        rerankModel: "fake-model",
+        rerankProvider: "jina",
+        rerankBlendWeight: 0.8,
+        rerankScoreMode: "raw",
+        candidatePoolSize: 10,
+        minScore: 0.0,
+        hardMinScore: 0.0,
+        recencyHalfLifeDays: 0,
+        recencyWeight: 0,
+        timeDecayHalfLifeDays: 0,
+        lengthNormAnchor: 0,
+        filterNoise: false,
+      });
+      const rankRetriever = createRetriever(store, embedder, {
+        mode: "hybrid",
+        rerank: "cross-encoder",
+        rerankEndpoint: "http://fake-rerank/v1/rerank",
+        rerankApiKey: "fake-key",
+        rerankModel: "fake-model",
+        rerankProvider: "jina",
+        rerankBlendWeight: 0.8,
+        rerankScoreMode: "rank",
+        candidatePoolSize: 10,
+        minScore: 0.0,
+        hardMinScore: 0.0,
+        recencyHalfLifeDays: 0,
+        recencyWeight: 0,
+        timeDecayHalfLifeDays: 0,
+        lengthNormAnchor: 0,
+        filterNoise: false,
+      });
+      const rawResults = await rawRetriever.retrieve({ query: "dark mode preference", limit: 5 });
+      const rankResults = await rankRetriever.retrieve({ query: "dark mode preference", limit: 5 });
+      // Raw mode: both blended scores are near 1.0 because both rerank values are saturated
+      // (0.8*1.0 + 0.2*fused vs 0.8*0.99 + 0.2*fused) → diff is 0.002
+      // Rank mode: top-1 gets 1.0, top-2 gets 1 - 1/2 = 0.5
+      // (0.8*1.0 + 0.2*fused vs 0.8*0.5 + 0.2*fused) → diff is 0.4
+      // So the rank-mode gap between results[0] and results[1] should be much larger.
+      if (rawResults.length >= 2 && rankResults.length >= 2) {
+        const rawGap = rawResults[0].score - rawResults[1].score;
+        const rankGap = rankResults[0].score - rankResults[1].score;
+        assert.ok(
+          rankGap > rawGap,
+          `rank mode should produce a larger top-1 vs top-2 gap (raw=${rawGap.toFixed(4)}, rank=${rankGap.toFixed(4)})`,
+        );
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("undefined blend weight defaults to 0.8 (backward compat)", async () => {
     // The previous hardcoded behavior was item.score * 0.8 + original.score * 0.2.
     // Omitting rerankBlendWeight should give the same answer as explicit 0.8.

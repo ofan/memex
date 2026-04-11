@@ -170,6 +170,7 @@ async function main() {
     rerankBlendWeight: process.env.MEMEX_RERANK_BLEND_WEIGHT
       ? parseFloat(process.env.MEMEX_RERANK_BLEND_WEIGHT)
       : undefined,
+    rerankScoreMode: (process.env.MEMEX_RERANK_SCORE_MODE as "raw" | "rank" | undefined),
     minScore: 0.05,
     candidatePoolSize: poolSize,
   });

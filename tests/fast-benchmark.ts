@@ -395,6 +395,7 @@ async function runPipeline(cache: ResearchCache): Promise<ExampleResult[]> {
         rerankBlendWeight: process.env.MEMEX_RERANK_BLEND_WEIGHT
           ? parseFloat(process.env.MEMEX_RERANK_BLEND_WEIGHT)
           : undefined,
+        rerankScoreMode: (process.env.MEMEX_RERANK_SCORE_MODE as "raw" | "rank" | undefined),
         candidatePoolSize: Math.max(POOL_VEC, POOL_BM25),
         minScore: 0.05,
         hardMinScore: 0.10,

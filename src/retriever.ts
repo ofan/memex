@@ -47,6 +47,21 @@ export interface RetrievalConfig {
    *  - "pinecone": Api-Key header, {text}[] documents, data[].score */
   rerankProvider?: "jina" | "siliconflow" | "voyage" | "pinecone";
   /**
+   * How to interpret the reranker's output score for blending:
+   *
+   * - "raw" (default): use the raw relevance_score as returned by the reranker.
+   *   Works well when the reranker produces a broad score distribution.
+   * - "rank": replace the raw score with a rank-normalized value
+   *   `1 - (rank - 1) / N` where N is the pool size. Top-1 gets 1.0, top-2
+   *   gets 1 - 1/N, etc. Useful when the reranker saturates (all top scores
+   *   are near 1.0) and the raw-score differentials get dissolved by the
+   *   blend math with the fusion score. Qwen3-Reranker tends to saturate
+   *   on short, semantically-similar technical content.
+   *
+   * Default: "raw" (backward compatible).
+   */
+  rerankScoreMode?: "raw" | "rank";
+  /**
    * Weight given to the cross-encoder rerank score when blending with the
    * original fused score. Final score is:
    *     blended = clamp01(rerankScore * rerankBlendWeight + originalScore * (1 - rerankBlendWeight))
@@ -633,13 +648,31 @@ export class MemoryRetriever {
           // protect fusion winners from overconfident reranker calls.
           const blendWeight = this.config.rerankBlendWeight ?? 0.8;
           const fusionWeight = 1 - blendWeight;
+          const scoreMode = this.config.rerankScoreMode ?? "raw";
+
+          // For rank-mode scoring, convert the reranker's raw scores into
+          // rank-normalized values (top-1 = 1.0, top-k = 1 - (k-1)/N). This
+          // makes the rerank signal "ordinal" so saturated reranker output
+          // (all scores near 1.0) can't get dissolved by the fusion gap
+          // during blending.
+          const rerankScoreByIndex = new Map<number, number>();
+          if (scoreMode === "rank") {
+            const sorted = [...parsed].sort((a, b) => b.score - a.score);
+            const n = sorted.length || 1;
+            sorted.forEach((item, rank) => {
+              rerankScoreByIndex.set(item.index, 1 - rank / n);
+            });
+          }
 
           const reranked = parsed
             .filter(item => item.index >= 0 && item.index < results.length)
             .map(item => {
               const original = results[item.index];
+              const rerankScore = scoreMode === "rank"
+                ? (rerankScoreByIndex.get(item.index) ?? 0)
+                : item.score;
               const blendedScore = clamp01(
-                item.score * blendWeight + original.score * fusionWeight,
+                rerankScore * blendWeight + original.score * fusionWeight,
               );
               return {
                 ...original,
