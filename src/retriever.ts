@@ -605,7 +605,7 @@ export class MemoryRetriever {
         const parsed = parseRerankResponse(provider, data);
 
         if (!parsed) {
-          console.warn("Rerank API: invalid response shape, falling back to cosine");
+          console.warn("Rerank API: invalid response shape, returning hybrid-fusion ranking unchanged");
         } else {
           // Build a Set of returned indices to identify unreturned candidates
           const returnedIndices = new Set(parsed.map(r => r.index));
@@ -639,16 +639,27 @@ export class MemoryRetriever {
       } catch (error) {
         const errStatus = (error as { status?: number })?.status;
         if (typeof errStatus === "number") {
-          console.warn(`Rerank API returned ${errStatus} after retries, falling back to cosine`);
+          console.warn(`Rerank API returned ${errStatus} after retries, returning hybrid-fusion ranking unchanged`);
         } else if (error instanceof Error && error.name === "AbortError") {
-          console.warn("Rerank API timed out after retries, falling back to cosine");
+          console.warn("Rerank API timed out after retries, returning hybrid-fusion ranking unchanged");
         } else {
-          console.warn("Rerank API failed, falling back to cosine:", error);
+          console.warn("Rerank API failed, falling back to calibrated scores:", error);
         }
       }
+      // Rerank was configured but the API call failed. Return the input
+      // results unchanged — the hybrid-fusion ranking is already a good
+      // default and is what the domain eval passes on. (Previously this
+      // fell through to the cosine-similarity fallback below, which
+      // aggressively re-ranked and displaced correct fusion winners.
+      // That behavior is intended for the case where rerank is not
+      // configured at all, not for transient rerank API failures.)
+      return results;
     }
 
-    // Fallback: lightweight cosine similarity rerank (skip if vectors unavailable/mismatched)
+    // Cosine-similarity second pass — runs ONLY when no cross-encoder rerank
+    // is configured at all (e.g. in a lightweight deployment without a
+    // reranker endpoint). Improves pure BM25 results slightly by mixing in
+    // vector similarity.
     try {
       const reranked = results.map(result => {
         if (!result.entry.vector || result.entry.vector.length !== queryVector.length) {
@@ -669,7 +680,7 @@ export class MemoryRetriever {
 
       return reranked.sort((a, b) => b.score - a.score);
     } catch (error) {
-      console.warn("Reranking failed, returning original results:", error);
+      console.warn("Cosine fallback reranking failed, returning original results:", error);
       return results;
     }
   }
