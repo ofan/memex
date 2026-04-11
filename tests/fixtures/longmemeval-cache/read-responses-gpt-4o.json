@@ -3,7 +3,7 @@
     "question_id": "e47becba",
     "question": "What degree did I graduate with?",
     "expected_answer": "Business Administration",
-    "generated_answer": "NOT FOUND",
+    "generated_answer": null,
     "answer_correct": false,
     "hit_at_10": false
   },
@@ -35,9 +35,9 @@
     "question_id": "1e043500",
     "question": "What is the name of the playlist I created on Spotify?",
     "expected_answer": "Summer Vibes",
-    "generated_answer": "Summer Vibes",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": "NOT FOUND",
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "c5e8278d",
@@ -51,15 +51,15 @@
     "question_id": "6ade9755",
     "question": "Where do I take yoga classes?",
     "expected_answer": "Serenity Yoga",
-    "generated_answer": "NOT FOUND",
-    "answer_correct": false,
+    "generated_answer": "Serenity Yoga.",
+    "answer_correct": true,
     "hit_at_10": true
   },
   {
     "question_id": "6f9b354f",
     "question": "What color did I repaint my bedroom walls?",
     "expected_answer": "a lighter shade of gray",
-    "generated_answer": "NOT FOUND",
+    "generated_answer": null,
     "answer_correct": false,
     "hit_at_10": false
   },
@@ -75,8 +75,8 @@
     "question_id": "f8c5f88b",
     "question": "Where did I buy my new tennis racket from?",
     "expected_answer": "the sports store downtown",
-    "generated_answer": "NOT FOUND",
-    "answer_correct": false,
+    "generated_answer": "A sports store downtown.",
+    "answer_correct": true,
     "hit_at_10": true
   },
   {
@@ -91,9 +91,9 @@
     "question_id": "7527f7e2",
     "question": "How much did I spend on a designer handbag?",
     "expected_answer": "$800",
-    "generated_answer": "You spent $800 on a designer handbag.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": "NOT FOUND",
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "c960da58",
@@ -107,7 +107,7 @@
     "question_id": "3b6f954b",
     "question": "Where did I attend for my study abroad program?",
     "expected_answer": "University of Melbourne in Australia",
-    "generated_answer": "NOT FOUND",
+    "generated_answer": null,
     "answer_correct": false,
     "hit_at_10": false
   },
@@ -115,17 +115,17 @@
     "question_id": "726462e0",
     "question": "What was the discount I got on my first purchase from the new clothing brand?",
     "expected_answer": "10%",
-    "generated_answer": "10% discount.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": "NOT FOUND",
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "94f70d80",
     "question": "How long did it take me to assemble the IKEA bookshelf?",
     "expected_answer": "4 hours",
-    "generated_answer": "It took you 4 hours to assemble the IKEA bookshelf.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": null,
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "66f24dbb",
@@ -139,16 +139,16 @@
     "question_id": "ad7109d1",
     "question": "What speed is my new internet plan?",
     "expected_answer": "500 Mbps",
-    "generated_answer": "Your new internet plan is 500 Mbps.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": null,
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "af8d2e46",
     "question": "How many shirts did I pack for my 5-day trip to Costa Rica?",
     "expected_answer": "7",
-    "generated_answer": "NOT FOUND",
-    "answer_correct": false,
+    "generated_answer": "You packed 7 shirts for your 5-day trip to Costa Rica.",
+    "answer_correct": true,
     "hit_at_10": true
   },
   {
@@ -171,17 +171,17 @@
     "question_id": "8ebdbe50",
     "question": "What certification did I complete last month?",
     "expected_answer": "Data Science",
-    "generated_answer": "Data Science certification.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": null,
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "6b168ec8",
     "question": "How many bikes do I own?",
     "expected_answer": "three",
-    "generated_answer": "You own three bikes: a road bike, a mountain bike, and a commuter bike.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": null,
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "75499fd8",
@@ -189,7 +189,7 @@
     "expected_answer": "Golden Retriever",
     "generated_answer": "NOT FOUND",
     "answer_correct": false,
-    "hit_at_10": true
+    "hit_at_10": false
   },
   {
     "question_id": "21436231",
@@ -203,7 +203,7 @@
     "question_id": "95bcc1c8",
     "question": "How many amateur comedians did I watch perform at the open mic night?",
     "expected_answer": "10",
-    "generated_answer": "10",
+    "generated_answer": "You watched 10 amateur comedians perform at the open mic night.",
     "answer_correct": true,
     "hit_at_10": true
   },
@@ -219,9 +219,9 @@
     "question_id": "853b0a1d",
     "question": "How old was I when my grandma gave me the silver necklace?",
     "expected_answer": "18",
-    "generated_answer": "You were 18 years old when your grandma gave you the silver necklace.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": "NOT FOUND",
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "a06e4cfe",
@@ -251,9 +251,9 @@
     "question_id": "d52b4f67",
     "question": "Where did I attend my cousin's wedding?",
     "expected_answer": "The Grand Ballroom",
-    "generated_answer": "The Grand Ballroom.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": "NOT FOUND",
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "25e5aa4f",
@@ -283,7 +283,7 @@
     "question_id": "60d45044",
     "question": "What type of rice is my favorite?",
     "expected_answer": "Japanese short-grain rice",
-    "generated_answer": "NOT FOUND",
+    "generated_answer": null,
     "answer_correct": false,
     "hit_at_10": false
   },
@@ -315,7 +315,7 @@
     "question_id": "ec81a493",
     "question": "How many copies of my favorite artist's debut album were released worldwide?",
     "expected_answer": "500",
-    "generated_answer": "500 copies.",
+    "generated_answer": "500 copies worldwide.",
     "answer_correct": true,
     "hit_at_10": true
   },
@@ -331,7 +331,7 @@
     "question_id": "e01b8e2f",
     "question": "Where did I go on a week-long trip with my family?",
     "expected_answer": "Hawaii",
-    "generated_answer": "Hawaii, USA.",
+    "generated_answer": "Hawaii",
     "answer_correct": true,
     "hit_at_10": true
   },
@@ -339,7 +339,7 @@
     "question_id": "bc8a6e93",
     "question": "What did I bake for my niece's birthday party?",
     "expected_answer": "a lemon blueberry cake",
-    "generated_answer": "NOT FOUND",
+    "generated_answer": null,
     "answer_correct": false,
     "hit_at_10": false
   },
@@ -347,7 +347,7 @@
     "question_id": "ccb36322",
     "question": "What is the name of the music streaming service have I been using lately?",
     "expected_answer": "Spotify",
-    "generated_answer": "NOT FOUND",
+    "generated_answer": null,
     "answer_correct": false,
     "hit_at_10": false
   },
@@ -387,16 +387,16 @@
     "question_id": "545bd2b5",
     "question": "How much screen time have I been averaging on Instagram per day?",
     "expected_answer": "2 hours",
-    "generated_answer": "You have been averaging around 2 hours of screen time on Instagram per day for the past two weeks.",
-    "answer_correct": true,
-    "hit_at_10": true
+    "generated_answer": "NOT FOUND",
+    "answer_correct": false,
+    "hit_at_10": false
   },
   {
     "question_id": "8a137a7f",
     "question": "What type of bulb did I replace in my bedside lamp?",
     "expected_answer": "Philips LED bulb",
-    "generated_answer": "Philips LED bulb.",
-    "answer_correct": true,
+    "generated_answer": "NOT FOUND",
+    "answer_correct": false,
     "hit_at_10": true
   }
 ]
