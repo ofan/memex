@@ -219,6 +219,24 @@ Side benefit: the chunked pipeline also exercises more of the production code pa
 
 **Validation:** the new code compiles, imports cleanly, and reaches `embedMany` on first-example retrieve (confirmed via jiti-loader probe). A full N=50 Phase 1 rebuild will take 2-3 hours with the chunking (more embed calls per example) on top of the embed lane's crash/retry cycles, so it's been kicked off as a disowned background job. Next session can run Phase 2 against the fresh cache to see the real numbers.
 
+### Items 12–17 — continued loop (task batch 3)
+
+After the initial bakeoff + reranker-retry batch committed at `525cd46`, `dc5c5b3`, `cdd71b1`, the loop continued with:
+
+**Item 12 — no-defaults cleanup on legacy benchmark scripts.** `tests/beir-benchmark.ts`, `tests/benchmark.ts`, `tests/build-chunk-cache.ts`, `tests/build-research-cache.ts` all had hardcoded `|| "http://localhost:8090/v1"` defaults for the embed URL and `LLAMA_SWAP_API_KEY` for the key. Removed; all four now fail fast with a structured error listing the missing env vars. Legacy `LLAMA_SWAP_API_KEY` env var still works as a fallback for the new `EMBED_API_KEY` name.
+
+**Item 13 — longmemeval-benchmark chunked-dedup unit test.** Extracted the chunk → session dedup logic into `dedupeChunkResultsBySession` (exported from `tests/longmemeval-benchmark.ts`) and wrote 10 unit tests. Includes the critical "max-sim aggregation" invariant: since retrieval results are score-sorted descending, the first occurrence of each sessionId is the best chunk for that session, so first-occurrence-wins dedup is equivalent to max-sim per session. Also added an `isDirectRun` guard around the script's `main()` call so tests can import the module without triggering the full benchmark.
+
+**Item 14 — README refresh.** Updated memex README to reflect current state: Qwen3-Reranker numbers (R@1 82, E2E 94), mention of the bakeoff harness and latency-probe, transient-failure retry behavior, in-turn recall cache, rsync+systemctl deploy command, ~680 test count. Added dedicated "Model bakeoff harness" section linking the design doc.
+
+**Item 15 — bakeoff v1.5 embedder mode.** Added `bakeoff embedder <endpoint> <model> <dim> --cache <path> --chunk-scores <path>` mode. User pre-builds the candidate cache via existing `tests/build-research-cache.ts` + `tests/build-chunk-cache.ts` pointed at the candidate embedder; bakeoff then runs `fast-benchmark.ts` against both the baseline cache and the candidate cache via new `FAST_BENCH_CACHE_PATH` / `FAST_BENCH_CHUNK_SCORES_PATH` env var overrides. Domain-eval is skipped in embedder mode (it queries the live memex DB whose vectors are baseline-embedder-tied). Full v2 automation (rebuild on the fly, hash-named staging files) deferred. Arg handling smoke-tested: missing flags → helpful error, nonexistent cache → rejected, valid args → dispatches cleanly.
+
+**Item 16 — CHANGELOG.md.** First formal changelog for memex. Keep-a-Changelog format, starting with the 2026-04-10/11 loop changes. Covers added/changed/fixed/methodology/infrastructure/known-limitations sections.
+
+**Item 17 — doc updates + session-indexer default.** `docs/BENCHMARKS.md` and `docs/COMPARISON.md` refreshed with Qwen3-Reranker numbers, small-sample caveat, and new reproduction commands. `src/session-indexer.ts` default `rerankModel` updated from `bge-reranker-v2-m3-Q8_0` to `Qwen3-Reranker-0.6B-Q8_0` to match production (the session indexer is a standalone utility that would otherwise default to a no-longer-served model).
+
+**Test count progression:** 657 → 673 (bakeoff+retry) → 681 (chunked dedup) → **711** (all green). The growth is all from new unit tests for code added this loop, not existing-test expansion.
+
 ## Running log
 
 - **2026-04-10 21:35** — created this report doc, started Phase 1 (first attempt, default batching → died on example 2 with abort trap)
@@ -246,3 +264,9 @@ Side benefit: the chunked pipeline also exercises more of the production code pa
 - **2026-04-11 01:44** — Killed Phase 1 (still on 1/50 after 45 min); restored old cache
 - **2026-04-11 01:46** — Deployed all fixes to plugin dir, gateway restart
 - **2026-04-11 01:47** — Fresh bakeoff stage 1: PASS verdict. Domain -1 is real Qwen3 behavior (not the cosine fallback bug); LME R@1 +2 stands.
+- **2026-04-11 01:50** — Phase 1 restarted (again) in background; item 12 no-defaults cleanup on 4 benchmark scripts
+- **2026-04-11 01:52** — Item 13 chunked dedup unit test (10 new tests)
+- **2026-04-11 01:53** — Item 14 README refresh
+- **2026-04-11 01:55** — Item 15 bakeoff v1.5 embedder mode
+- **2026-04-11 01:58** — Items 16 + 17 CHANGELOG + BENCHMARKS/COMPARISON/session-indexer
+- **2026-04-11 02:04** — Full suite 711/711 green
