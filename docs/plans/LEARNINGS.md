@@ -17,6 +17,28 @@
 - Stored entities enable: contradiction detection, agent provenance, future graph links
 - The work wasn't wasted — it's infrastructure for the next feature
 
+### `--embeddings --parallel N>1` is broken upstream (llama.cpp)
+
+The Qwen3-Embedding-4B-Q8_0 lane on the inference host crashed reproducibly under memex's auto-recall workload. Symptom in `llama-swap.log`:
+
+```
+[WARN] <Qwen3-Embedding-4B-Q8_0> ExitError >> signal: abort trap, exit code: -1
+```
+
+Each crash forced a llama-swap automatic restart taking 5-15s, and the next embed call after restart paid that latency. ~28% crash rate during a 25-retrieve latency probe (7 crashes, 1 outright failure even after retries).
+
+**Root cause is upstream, not in memex.** Three open llama.cpp issues all describe the same pattern: `--embeddings` combined with `--parallel N>1` triggers `GGML_ASSERT` failures (which call `abort()`, surfacing as SIGABRT / "abort trap" on macOS):
+
+- llama.cpp #15849 — "Can't Parallel with --embedding"
+- llama.cpp #6722 — "multiple simultaneous API calls on embeddings endpoint"
+- llama.cpp #5655 — "Segmentation fault" with parallel embeddings
+
+The current host build (`ecd99d6`, 2026-03-03) does not have a fix.
+
+**Fix:** drop the embedding lane to `--parallel 1`. Sequential single-slot processing eliminates the crash. The throughput hit is negligible for memex (auto-recall makes 1-3 embed calls per agent turn, never burst-parallel). Verified: 7 crashes/probe → 0 crashes/probe; mean latency 2588ms → 1030ms; max latency 22421ms → 3834ms. Committed in homeinfra `4730f38`.
+
+**Lesson:** when triaging "intermittent server crash" symptoms, check upstream issue trackers BEFORE deep-diving into reproduction. The crash signature ("abort trap" + `--embeddings` + `--parallel`) was a textbook match for #15849 / #6722 / #5655 — 5 minutes of search would have identified the cause without any reproduction work. I burned ~30 min trying to reproduce locally before searching. Add "search upstream issues" as the FIRST step of operational crash triage, not the last.
+
 ### shouldRerank confidence gate was dead code
 
 The `UnifiedRetriever.shouldRerank` gate compared `pool[0].score` against a `confidenceThreshold` of 0.88. But pool scores are multiplied by `conversationWeight` (0.55) or `documentWeight` (0.45) in `mergeAndCalibrate`, so the maximum possible pool score is 0.55 — making the threshold unreachable.
