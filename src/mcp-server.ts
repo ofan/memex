@@ -236,7 +236,7 @@ async function main() {
   }
 
   const embedEndpoint = flagValue("--embed-endpoint");
-  const embedApiKey = flagValue("--embed-api-key") || "";
+  const embedApiKey = flagValue("--embed-api-key") || process.env.MEMEX_EMBED_API_KEY || "";
   const embedModel = flagValue("--embed-model") || "default";
   const noDream = args.includes("--no-dream");
   const dreamInterval = parseInt(flagValue("--dream-interval") || "86400000", 10);
