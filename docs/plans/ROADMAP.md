@@ -115,23 +115,13 @@ Ordered by dependency and impact.
 
 **Measured by:** Number of learnings generated, contradiction resolution rate, domain eval improvement.
 
-### Project 4: Session import v2
-**Goal:** Replace the garbage session import pipeline with LLM extraction that produces high-quality atomic facts.
+### ~~Project 4: Session import v2~~ — KILLED
 
-**What:**
-- Narrative chunking by topic boundaries (not fixed windows or bin-packing)
-- Frontier model extraction with custom prompt + few-shot examples + negative cases
-- Two-phase pipeline: extract → dedupe against existing store (Mem0 pattern, with better prompt)
-- Provenance metadata (sessionKey, agentId, source)
-- Fact precision/recall measurement against human-labeled gold set
+Session import was an OpenClaw-specific workaround for backfilling from historical conversations. Now that memex is an MCP server with real-time capture (`memory_store` tool), facts get extracted during conversation — no batch import needed. The 1,666 garbage session imports get evicted by cleanup decay rules. Going forward, the memory lifecycle is: **capture → store → reflect → synthesize**.
 
-**Why fourth:** After cleanup and reflection establish what "good memory" looks like, the extraction pipeline has clear quality targets. The reflection phase provides contradiction detection, so newly extracted facts get checked against existing knowledge.
+Agents that want to bulk-import memories can use the `memory_store` MCP tool directly.
 
-**Research backing:** Hindsight narrative chunking, Mem0 two-phase pipeline (with lesson on prompt quality), Letta hybrid approach.
-
-**Measured by:** Extraction precision (no hallucinated facts), extraction recall (no missed facts), pool quality after re-import.
-
-### Project 5: Model bakeoff
+### Project 4: Model bakeoff
 **Goal:** Evaluate whether newer models improve retrieval without architectural changes.
 
 **What:**
@@ -145,7 +135,7 @@ Ordered by dependency and impact.
 
 **Measured by:** Domain eval, LongMemEval R@1/R@3/E2E, latency.
 
-### Project 6: Memory hierarchy (future)
+### Project 5: Memory hierarchy (future)
 **Goal:** Evolve from flat store to structured knowledge — topic → episode → fact.
 
 **What:**
@@ -170,6 +160,7 @@ Ordered by dependency and impact.
 | Mastra-style no-RAG architecture | Fundamentally different approach requiring large context windows. Interesting but incompatible. |
 | Full BEIR benchmark suite | Bakeoff harness covers the critical path. Academic overhead. |
 | ~~MCP server~~ | **PROMOTED to Project 2.** Enables background processing (the #1 SOTA gap), cross-platform memory, and solves issue #8. |
+| Session import v2 | **Killed.** Real-time capture via `memory_store` replaces batch import. Platform-agnostic. |
 | Procedural memory | New category, not a quality improvement. Future. |
 
 ---
@@ -178,9 +169,9 @@ Ordered by dependency and impact.
 
 | Metric | Current | Target | Which project |
 |---|---|---|---|
-| Pool noise ratio | ~79% | < 20% | 1 (cleanup) + 3 (import v2) |
-| Never-recalled ratio | 99% | < 60% | 1 (cleanup) + 2 (reflection) |
-| Domain eval | 12/15 (80%) | ≥ 14/15 | 2 (reflection) + 3 (import v2) |
-| LongMemEval E2E | 94% | ≥ 95% | 2 + 3 + 4 |
-| Memories with contradictions | Unknown | 0 detected | 2 (reflection) |
-| Learnings generated | 0 | 10+ per reflection cycle | 2 (reflection) |
+| Pool noise ratio | ~79% | < 20% | 1 (cleanup decay) |
+| Never-recalled ratio | 99% | < 60% | 1 (cleanup) + 3 (reflection) |
+| Domain eval | 12/15 (80%) | ≥ 14/15 | 3 (reflection) + 4 (models) |
+| LongMemEval E2E | 94% | ≥ 95% | 3 + 4 |
+| Memories with contradictions | Unknown | 0 detected | 3 (reflection) |
+| Learnings generated | 0 | 10+ per reflection cycle | 3 (reflection) |

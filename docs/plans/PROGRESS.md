@@ -15,9 +15,9 @@
 | 1 | Pool Cleanup | **Done** — session import decay (>14d → 0.1, >30d → evict), entity boost/graph gated off |
 | 2 | MCP Server | **Done** — 5 tools (recall/store/forget/dream/stats), stdio transport, env-driven config, op injection, BM25-only fallback, background dreaming. 10 tests. E2E verified against production DB. |
 | 3 | Dreaming Reflection | **Done** — Stanford question synthesis, contradiction detection via SUPERSEDED markers, idempotent learning storage. 5 tests. Not yet tested on production data. |
-| 4 | Session Import v2 | **Next** — replace 1,666 garbage session imports with LLM-extracted facts |
-| 5 | Model Bakeoff | Queued — EmbeddingGemma-300M, Contextual AI Reranker v2 |
-| 6 | Memory Hierarchy | Future — topic → episode → fact structure |
+| ~~4~~ | ~~Session Import v2~~ | **Killed** — real-time capture via `memory_store` replaces batch import |
+| 4 | Model Bakeoff | Queued — EmbeddingGemma-300M, Contextual AI Reranker v2 |
+| 5 | Memory Hierarchy | Future — topic → episode → fact structure |
 
 ## Commits This Session (2026-04-12)
 
@@ -50,6 +50,7 @@
 
 ## Next Session Should
 
-1. **Test reflection on production data** — run dream cycle with reflection, verify learnings are sensible
-2. **Project 4: Session Import v2** — diagnosis step: manual extraction on 3 sessions → gold set
-3. Reference `02-projects.md` for full ACs, `ROADMAP.md` for strategic context
+1. **Add LLM config to MCP server** — `MEMEX_LLM_ENDPOINT` / `MEMEX_LLM_MODEL` env vars, wire into reflection
+2. **Test reflection on production data** — run dream cycle with reflection, verify learnings are sensible
+3. **Focus on dreaming** — this is now the core feature. Reflection → contradiction detection → memory evolution
+4. Reference `02-projects.md` for ACs, `ROADMAP.md` for strategic context
