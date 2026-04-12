@@ -108,11 +108,12 @@ AC8: Zero required config — only --db-path needed
 
 ---
 
-### Project 3: Dreaming Reflection
+### Project 3: Dreaming Reflection — THE CORE FEATURE
 
-**Goal:** LLM-driven knowledge synthesis. Turn scattered facts into learnings. Detect contradictions.
-**Branch:** `project/reflection`
+**Goal:** LLM-driven knowledge synthesis. Turn scattered facts into learnings. Detect contradictions. This is the memory lifecycle — what makes memex a memory system, not just a retrieval system.
+**Branch:** master (reflection code is in `src/dreaming.ts`)
 **Depends on:** MCP Server (reflection runs in MCP server's background timer)
+**Requires:** LLM chat endpoint (`MEMEX_LLM_ENDPOINT` / `MEMEX_LLM_MODEL`) for synthesis
 
 **Diagnosis (required before design):**
 - What do the 21 recalled memories have in common? Why are they useful?
@@ -150,52 +151,17 @@ AC7: At least 3 learnings produced from real memex production data
 
 ---
 
-### Project 4: Session Import v2
+### ~~Project 4: Session Import v2~~ — KILLED
 
-**Goal:** Replace garbage session import with LLM extraction producing high-quality atomic facts.
-**Branch:** `project/session-import-v2`
-**Depends on:** Dreaming Reflection (contradiction detection validates extracted facts)
-
-**Diagnosis (required before design):**
-- Take 3 real sessions, manually extract the facts a human would want remembered
-- Compare against what the current pipeline produces for those same sessions
-- Measure: how many facts did the current pipeline miss? How many did it hallucinate?
-
-**Metrics:**
-
-| Metric | Baseline | Target |
-|---|---|---|
-| Extraction precision | Unknown | > 90% (no hallucinated facts) |
-| Extraction recall | Unknown | > 70% (few missed facts) |
-| Pool quality post-import | ~79% noise | < 20% noise |
-
-**Milestones:**
-
-0. Diagnose — manual extraction on 3 sessions → gold set (1 hr)
-1. Design — narrative chunking, extraction prompt, two-phase dedupe
-2. Build — narrative chunker (topic boundary detection)
-3. Build — extraction pipeline (LLM → JSON facts → store)
-4. Build — two-phase dedupe (vector match → LLM ADD/UPDATE/NOOP)
-5. Evaluate — precision/recall against gold set, domain eval, pool quality
-
-**ACs:**
-```
-AC1: Sessions chunked by topic boundaries (not fixed windows)
-AC2: Extraction prompt with few-shot examples produces atomic facts
-AC3: Extracted facts have provenance metadata (sessionKey, agentId)
-AC4: Two-phase dedupe: new fact matched against existing memories before storing
-AC5: Extraction precision > 90% on gold set
-AC6: Domain eval ≥ 12/15 after re-import
-AC7: Heuristic fallback when no LLM configured (existing path preserved)
-```
+Real-time capture via `memory_store` MCP tool replaces batch session import. The garbage session imports get evicted by cleanup decay rules. Agents that need to bulk-import can call `memory_store` directly — no platform-specific import pipeline needed.
 
 ---
 
-### Project 5: Model Bakeoff
+### Project 4: Model Bakeoff
 
 **Goal:** Evaluate newer embedding/reranker models for incremental gains.
 **Branch:** master (uses existing bakeoff harness)
-**Depends on:** Clean pool (projects 1+4) for meaningful evaluation
+**Depends on:** Clean pool (project 1) for meaningful evaluation
 
 **Candidates:**
 - EmbeddingGemma-300M — 10x smaller, MRL dimension truncation
