@@ -51,8 +51,12 @@
       "./index.ts"
     ]
   },
+  "bin": {
+    "memex-mcp": "./src/mcp-server.ts"
+  },
   "scripts": {
-    "test": "node --import jiti/register --test tests/*.test.ts"
+    "test": "node --import jiti/register --test tests/*.test.ts",
+    "mcp": "npx tsx src/mcp-server.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
