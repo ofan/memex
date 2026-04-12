@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "memex": {
+      "command": "npx",
+      "args": ["tsx", "src/mcp-server.ts", "--db", "~/.openclaw/memory/memex/memex.sqlite"]
+    }
+  }
+}

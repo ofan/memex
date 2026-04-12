@@ -23,7 +23,8 @@ import { detectCategory } from "../index.js";
 export interface McpServerOptions {
   dbPath: string;
   vectorDim?: number;
-  embedder: Embedder;
+  /** Embedder for vector search. If omitted, recall uses BM25-only and store skips vectors. */
+  embedder?: Embedder;
   dreamIntervalMs?: number;
   noDream?: boolean;
 }
@@ -31,11 +32,11 @@ export interface McpServerOptions {
 export function createMemexMcpServer(options: McpServerOptions) {
   const { dbPath, vectorDim, embedder, dreamIntervalMs, noDream } = options;
 
-  const store = new MemoryStore({ dbPath, vectorDim: vectorDim ?? embedder.dimensions });
-  const retriever = createRetriever(store, embedder, {
-    mode: "hybrid",
-    rerank: "none",
-  });
+  const dim = vectorDim ?? embedder?.dimensions ?? 8;
+  const store = new MemoryStore({ dbPath, vectorDim: dim });
+  const retriever = embedder
+    ? createRetriever(store, embedder, { mode: "hybrid", rerank: "none" })
+    : null;
 
   const server = new McpServer(
     { name: "memex", version: "0.6.0" },
@@ -65,7 +66,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
     }
 
     const resolvedCategory = category || detectCategory(text);
-    const vector = await embedder.embedDocument(text);
+    const vector = embedder ? await embedder.embedDocument(text) : new Array(dim).fill(0);
     const entry = await store.store({
       text,
       vector,
@@ -102,18 +103,36 @@ export function createMemexMcpServer(options: McpServerOptions) {
   }, async (_params) => {
     const { query, limit = 5 } = _params as { query: string; limit?: number };
 
-    const results = await retriever.retrieve({ query, limit });
+    if (retriever) {
+      const results = await retriever.retrieve({ query, limit });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            results: results.map(r => ({
+              id: r.entry.id,
+              text: r.entry.text,
+              category: r.entry.category,
+              score: Math.round(r.score * 1000) / 1000,
+            })),
+          }),
+        }],
+      };
+    }
 
+    // BM25-only fallback when no embedder configured
+    const bm25Results = await store.bm25Search(query, limit);
     return {
       content: [{
         type: "text",
         text: JSON.stringify({
-          results: results.map(r => ({
+          results: bm25Results.map(r => ({
             id: r.entry.id,
             text: r.entry.text,
             category: r.entry.category,
             score: Math.round(r.score * 1000) / 1000,
           })),
+          mode: "bm25-only",
         }),
       }],
     };
@@ -212,22 +231,20 @@ async function main() {
 
   const dbPath = flagValue("--db");
   if (!dbPath) {
-    console.error("Usage: memex-mcp --db <path> --embed-endpoint <url> [--embed-api-key <key>] [--embed-model <name>] [--no-dream] [--dream-interval <ms>]");
+    console.error("Usage: memex-mcp --db <path> [--embed-endpoint <url>] [--embed-api-key <key>] [--embed-model <name>] [--no-dream] [--dream-interval <ms>]");
     process.exit(1);
   }
 
   const embedEndpoint = flagValue("--embed-endpoint");
-  if (!embedEndpoint) {
-    console.error("Error: --embed-endpoint is required for vector search");
-    process.exit(1);
-  }
-
   const embedApiKey = flagValue("--embed-api-key") || "";
   const embedModel = flagValue("--embed-model") || "default";
   const noDream = args.includes("--no-dream");
   const dreamInterval = parseInt(flagValue("--dream-interval") || "86400000", 10);
 
-  const embedder = createEmbedder(embedEndpoint, embedApiKey, embedModel);
+  const embedder = embedEndpoint ? createEmbedder(embedEndpoint, embedApiKey, embedModel) : undefined;
+  if (!embedEndpoint) {
+    console.error("memex-mcp: no --embed-endpoint, running in BM25-only mode (no vector search)");
+  }
   const { server, store } = createMemexMcpServer({
     dbPath,
     embedder,

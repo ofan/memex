@@ -200,6 +200,59 @@ describe("MCP Server", () => {
     st2.close();
   });
 
+  it("AC5: shared DB — two server instances see same data", async () => {
+    // Store via first server (the one in beforeEach)
+    await client.callTool({
+      name: "memory_store",
+      arguments: { text: "Shared fact across instances", category: "fact" },
+    });
+
+    // Create second server pointing at same DB
+    const dbPath = join(tmpDir, "memex.sqlite");
+    const { server: s2, store: st2 } = createMemexMcpServer({
+      dbPath,
+      vectorDim: VECTOR_DIM,
+      embedder: makeFakeEmbedder(),
+    });
+
+    // Verify second server's store sees the memory
+    const count = (st2.db.prepare("SELECT COUNT(*) as c FROM memories").get() as any).c;
+    assert.ok(count >= 1, "second server should see memory from first");
+    st2.close();
+  });
+
+  it("AC8: works without embedder (BM25-only mode)", async () => {
+    const dbPath2 = join(tmpDir, "bm25-only.sqlite");
+    const { server: s2 } = createMemexMcpServer({
+      dbPath: dbPath2,
+      vectorDim: VECTOR_DIM,
+      // No embedder — BM25-only
+    });
+
+    const client2 = new Client({ name: "test-bm25", version: "1.0.0" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client2.connect(ct), s2.connect(st)]);
+
+    // Store should work (zero vector)
+    const storeResult = await client2.callTool({
+      name: "memory_store",
+      arguments: { text: "BM25-only fact about servers", category: "fact" },
+    });
+    const stored = JSON.parse((storeResult.content as any)[0].text);
+    assert.ok(stored.id, "should store even without embedder");
+
+    // Recall should work via BM25
+    const recallResult = await client2.callTool({
+      name: "memory_recall",
+      arguments: { query: "servers", limit: 5 },
+    });
+    const recalled = JSON.parse((recallResult.content as any)[0].text);
+    assert.ok(recalled.mode === "bm25-only", "should indicate BM25-only mode");
+
+    await client2.close();
+    await s2.close();
+  });
+
   it("memory_store rejects noise", async () => {
     const result = await client.callTool({
       name: "memory_store",
