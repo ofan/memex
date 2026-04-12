@@ -60,7 +60,7 @@ const daysAgo = (d: number) => Date.now() - d * 86400_000;
 // ============================================================================
 
 // These will fail until src/dreaming.ts is created
-import { lightSweep, deepSweep, runDreamCycle, type DreamConfig } from "../src/dreaming.js";
+import { lightSweep, deepSweep, reflectionSweep, runDreamCycle, type DreamConfig, type ReflectionLLMConfig } from "../src/dreaming.js";
 
 // ============================================================================
 // Light Sweep
@@ -328,6 +328,154 @@ describe("deep sweep", () => {
 
     const log = await readFile(logPath, "utf-8");
     assert.ok(log.includes("[dream:deep]"), "log should contain dream:deep entry");
+  });
+});
+
+// ============================================================================
+// Reflection Sweep
+// ============================================================================
+
+describe("reflection sweep", () => {
+  let tmpDir: string;
+  let store: MemoryStore;
+  let logPath: string;
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "dream-reflect-"));
+    store = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: VECTOR_DIM });
+    logPath = join(tmpDir, "memex.log");
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    await store.close();
+    await rm(tmpDir, { recursive: true }).catch(() => {});
+  });
+
+  it("produces learnings from LLM response", async () => {
+    // Seed 10 memories so we pass the minimum threshold
+    for (let i = 0; i < 10; i++) {
+      await seedMemory(store, `Important fact number ${i} about deployment infrastructure`, {
+        importance: 0.7,
+        seed: i,
+        timestamp: daysAgo(i),
+      });
+    }
+
+    // Mock LLM to return learnings
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "Deployment infrastructure is a recurring concern across multiple decisions.\nInfrastructure changes require careful sequencing to avoid cascading failures.\nDocumentation of deployment decisions prevents repeated mistakes.",
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    const result = await reflectionSweep(store, {
+      endpoint: "http://fake-llm/v1/chat/completions",
+      model: "test",
+    }, logPath);
+
+    assert.equal(result.learnings, 3);
+    assert.equal(result.contradictions, 0);
+    assert.equal(result.errors.length, 0);
+
+    // Verify learnings are stored in DB
+    const storedLearnings = store.db.prepare(
+      "SELECT text, category, importance FROM memories WHERE category = 'learning'"
+    ).all() as Array<{ text: string; category: string; importance: number }>;
+    assert.equal(storedLearnings.length, 3);
+    assert.ok(storedLearnings.every(l => l.importance === 0.85));
+  });
+
+  it("handles contradictions via SUPERSEDED markers", async () => {
+    const older = await seedMemory(store, "Audio transcription uses Whisper turbo", {
+      importance: 0.6,
+      seed: 1,
+      timestamp: daysAgo(20),
+    });
+    const newer = await seedMemory(store, "Audio transcription switched to Deepgram Nova-3", {
+      importance: 0.6,
+      seed: 2,
+      timestamp: daysAgo(5),
+    });
+
+    // Pad to meet minimum
+    for (let i = 0; i < 8; i++) {
+      await seedMemory(store, `Filler fact ${i}`, { importance: 0.5, seed: 100 + i });
+    }
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: `Audio transcription stack evolved from Whisper to Deepgram Nova-3.\nSUPERSEDED:${older!.id}|${newer!.id}|switched to Deepgram`,
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    const result = await reflectionSweep(store, {
+      endpoint: "http://fake-llm/v1/chat/completions",
+      model: "test",
+    }, logPath);
+
+    assert.equal(result.learnings, 1);
+    assert.equal(result.contradictions, 1);
+
+    // Older memory should be demoted
+    const olderRow = store.db.prepare("SELECT importance FROM memories WHERE id = ?").get(older!.id) as any;
+    assert.equal(olderRow.importance, 0.1, "superseded memory should be demoted to 0.1");
+  });
+
+  it("skips when too few memories", async () => {
+    await seedMemory(store, "Only one memory", { importance: 0.7 });
+
+    globalThis.fetch = async () => {
+      throw new Error("should not be called");
+    };
+
+    const result = await reflectionSweep(store, {
+      endpoint: "http://fake-llm/v1/chat/completions",
+      model: "test",
+    }, logPath);
+
+    assert.equal(result.learnings, 0);
+    assert.equal(result.errors.length, 0);
+  });
+
+  it("handles LLM errors gracefully", async () => {
+    for (let i = 0; i < 10; i++) {
+      await seedMemory(store, `Fact ${i} for error test`, { importance: 0.7, seed: i });
+    }
+
+    globalThis.fetch = async () => new Response("Internal Server Error", { status: 500 });
+
+    const result = await reflectionSweep(store, {
+      endpoint: "http://fake-llm/v1/chat/completions",
+      model: "test",
+    }, logPath);
+
+    assert.equal(result.learnings, 0);
+    assert.ok(result.errors.length > 0);
+  });
+
+  it("is idempotent — same learnings not stored twice", async () => {
+    for (let i = 0; i < 10; i++) {
+      await seedMemory(store, `Fact ${i} for idempotency`, { importance: 0.7, seed: i });
+    }
+
+    const mockResponse = JSON.stringify({
+      choices: [{ message: { content: "Infrastructure reliability is the top engineering priority." } }],
+    });
+
+    globalThis.fetch = async () => new Response(mockResponse, { status: 200, headers: { "Content-Type": "application/json" } });
+
+    const r1 = await reflectionSweep(store, { endpoint: "http://fake/v1/chat/completions", model: "test" }, logPath);
+    const r2 = await reflectionSweep(store, { endpoint: "http://fake/v1/chat/completions", model: "test" }, logPath);
+
+    assert.equal(r1.learnings, 1);
+    assert.equal(r2.learnings, 0, "second run should not create duplicate learnings");
   });
 });
 
