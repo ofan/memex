@@ -182,9 +182,156 @@ export async function deepSweep(
 }
 
 // ============================================================================
+// Reflection — LLM-driven knowledge synthesis
+// ============================================================================
+
+/** Config for the LLM used by reflection. */
+export interface ReflectionLLMConfig {
+  endpoint: string;
+  model: string;
+  apiKey?: string;
+  maxTokens?: number;
+  timeout?: number;
+}
+
+const REFLECTION_SYSTEM_PROMPT = `You are a memory consolidation system. You receive a batch of stored memories (facts, decisions, preferences) and must:
+
+1. Identify the 3 most important themes or patterns across these memories.
+2. For each theme, synthesize a concise learning (1-2 sentences) that captures the key insight.
+3. If you find contradictions (e.g., "switched to X" then later "switched to Y"), note only the LATEST state.
+
+Output format — exactly one learning per line, no numbering, no bullets:
+<learning>
+<learning>
+<learning>
+
+If there are contradictions, add lines in this format:
+SUPERSEDED:<older_memory_id>|<newer_memory_id>|<reason>
+
+If no useful learnings can be synthesized, output: NONE`;
+
+/**
+ * Reflection phase: LLM-driven synthesis of learnings from recent memories.
+ * Stanford Generative Agents pattern: send memories → generate questions → synthesize.
+ *
+ * Requires an LLM endpoint. Skips gracefully if not configured.
+ */
+export async function reflectionSweep(
+  store: MemoryStore,
+  llmConfig: ReflectionLLMConfig,
+  logPath?: string,
+): Promise<{ learnings: number; contradictions: number; errors: string[] }> {
+  const db = store.db;
+  const errors: string[] = [];
+  let learnings = 0;
+  let contradictions = 0;
+
+  // Gather recent high-value memories for synthesis (importance > 0.3, limit 100)
+  const memories = db.prepare(`
+    SELECT id, text, category, importance, timestamp
+    FROM memories
+    WHERE importance > 0.3
+    ORDER BY timestamp DESC
+    LIMIT 100
+  `).all() as Array<{
+    id: string;
+    text: string;
+    category: string;
+    importance: number;
+    timestamp: number;
+  }>;
+
+  if (memories.length < 5) {
+    log(logPath, "dream:reflect", { skipped: true, reason: "too_few_memories", count: memories.length });
+    return { learnings: 0, contradictions: 0, errors: [] };
+  }
+
+  // Build the memory block for the LLM
+  const memoryBlock = memories
+    .map(m => `[${m.id}] [${m.category}] ${m.text}`)
+    .join("\n");
+
+  try {
+    const resp = await fetch(llmConfig.endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(llmConfig.apiKey ? { "Authorization": `Bearer ${llmConfig.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: llmConfig.model,
+        messages: [
+          { role: "system", content: REFLECTION_SYSTEM_PROMPT },
+          { role: "user", content: memoryBlock },
+        ],
+        temperature: 0.3,
+        max_tokens: llmConfig.maxTokens ?? 2048,
+      }),
+      signal: AbortSignal.timeout(llmConfig.timeout ?? 120_000),
+    });
+
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => "");
+      errors.push(`LLM HTTP ${resp.status}: ${errBody.slice(0, 200)}`);
+      log(logPath, "dream:reflect", { error: `HTTP ${resp.status}` });
+      return { learnings: 0, contradictions: 0, errors };
+    }
+
+    const data = await resp.json() as any;
+    const content = (data.choices?.[0]?.message?.content?.trim() || "") as string;
+
+    if (content === "NONE" || !content) {
+      log(logPath, "dream:reflect", { learnings: 0, contradictions: 0 });
+      return { learnings: 0, contradictions: 0, errors: [] };
+    }
+
+    const lines = content.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+
+    for (const line of lines) {
+      // Handle contradiction markers
+      if (line.startsWith("SUPERSEDED:")) {
+        const parts = line.slice("SUPERSEDED:".length).split("|");
+        if (parts.length >= 2) {
+          const [olderId, _newerId, reason] = parts;
+          // Demote the older memory
+          const older = db.prepare("SELECT id, importance FROM memories WHERE id = ?").get(olderId.trim()) as any;
+          if (older && older.importance > 0.1) {
+            db.prepare("UPDATE memories SET importance = 0.1 WHERE id = ?").run(older.id);
+            contradictions++;
+          }
+        }
+        continue;
+      }
+
+      // Store learning as a new memory
+      if (line.length >= 20) {
+        const hash = createHash("sha256").update(line).digest("hex");
+        // Check if already exists (idempotent)
+        const existing = db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(hash) as any;
+        if (!existing) {
+          const id = crypto.randomUUID();
+          db.prepare(`
+            INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash)
+            VALUES (?, ?, 'learning', 'global', 0.85, ?, ?)
+          `).run(id, line, Date.now(), hash);
+          learnings++;
+        }
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`reflection: ${msg}`);
+  }
+
+  log(logPath, "dream:reflect", { learnings, contradictions, errors: errors.length });
+  return { learnings, contradictions, errors };
+}
+
+// ============================================================================
 // Dream Cycle Orchestrator
 // ============================================================================
 
+/** Config for the LLM used by reflection. */
 export interface DreamConfig {
   enabled: boolean;
   phases: {
@@ -193,11 +340,14 @@ export interface DreamConfig {
     reflection: boolean;
   };
   logPath?: string;
+  /** LLM config for reflection phase. Reflection skips if not provided. */
+  reflectionLLM?: ReflectionLLMConfig;
 }
 
 export interface DreamCycleResult {
   light?: { deduped: number; noiseRemoved: number; fragmentsRemoved: number };
   deep?: { rescored: number; decayed: number };
+  reflection?: { learnings: number; contradictions: number; errors: string[] };
   errors: string[];
   duration_ms: number;
 }
@@ -259,8 +409,19 @@ export async function runDreamCycle(
     }
   }
 
-  // Phase 3: Reflection (future — needs LLM via subagent)
-  // if (config.phases.reflection) { ... }
+  // Phase 3: Reflection (LLM-driven knowledge synthesis)
+  if (config.phases.reflection && config.reflectionLLM) {
+    try {
+      result.reflection = await reflectionSweep(store, config.reflectionLLM, logPath);
+      sw.lap("reflect");
+      track?.("dream", { phase: "reflection", ...result.reflection, ...sw.timings });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.errors.push(`reflection: ${msg}`);
+      log(logPath, "dream:error", { phase: "reflection", error: msg });
+      sw.lap("reflect");
+    }
+  }
 
   result.duration_ms = sw.total;
 
@@ -268,6 +429,7 @@ export async function runDreamCycle(
   const summary = [
     result.light ? `light(deduped=${result.light.deduped}, noise=${result.light.noiseRemoved}, fragments=${result.light.fragmentsRemoved})` : null,
     result.deep ? `deep(rescored=${result.deep.rescored}, decayed=${result.deep.decayed})` : null,
+    result.reflection ? `reflect(learnings=${result.reflection.learnings}, contradictions=${result.reflection.contradictions})` : null,
     result.errors.length > 0 ? `errors=${result.errors.length}` : null,
   ].filter(Boolean).join(" ");
   log(logPath, "dream:cycle", { summary, duration_ms: result.duration_ms });
