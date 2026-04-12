@@ -229,20 +229,43 @@ async function main() {
     return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
   };
 
-  const dbPath = flagValue("--db");
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+  const defaultDbPath = homeDir ? `${homeDir}/.openclaw/memory/memex/memex.sqlite` : "";
+  const dbPath = flagValue("--db") || process.env.MEMEX_DB_PATH || defaultDbPath;
   if (!dbPath) {
-    console.error("Usage: memex-mcp --db <path> [--embed-endpoint <url>] [--embed-api-key <key>] [--embed-model <name>] [--no-dream] [--dream-interval <ms>]");
+    console.error("Usage: memex-mcp [--db <path>]");
+    console.error("  Defaults to ~/.openclaw/memory/memex/memex.sqlite");
+    console.error("  Env vars: MEMEX_DB_PATH, MEMEX_EMBED_ENDPOINT, MEMEX_EMBED_API_KEY, MEMEX_EMBED_MODEL");
     process.exit(1);
   }
 
-  const embedEndpoint = flagValue("--embed-endpoint");
-  const embedApiKey = flagValue("--embed-api-key") || process.env.MEMEX_EMBED_API_KEY || "";
-  const embedModel = flagValue("--embed-model") || "default";
+  const embedBaseURL = flagValue("--embed-endpoint") || process.env.MEMEX_EMBED_ENDPOINT || undefined;
+  let embedApiKey = flagValue("--embed-api-key") || process.env.MEMEX_EMBED_API_KEY || "";
+  if (!embedApiKey && embedBaseURL) {
+    try {
+      const { execFileSync } = await import("node:child_process");
+      embedApiKey = execFileSync("op", ["read", "op://dev-vm/dev-claude/MEMEX_LLAMA_SWAP_API_KEY"], { encoding: "utf-8", timeout: 5000 }).trim();
+      if (embedApiKey) console.error("memex-mcp: loaded embed API key from 1Password");
+    } catch {
+      console.error("memex-mcp: no embed API key (set MEMEX_EMBED_API_KEY or --embed-api-key)");
+    }
+  }
+  const embedModel = flagValue("--embed-model") || process.env.MEMEX_EMBED_MODEL || "default";
+  const embedDim = parseInt(flagValue("--embed-dim") || process.env.MEMEX_EMBED_DIM || "0", 10) || undefined;
   const noDream = args.includes("--no-dream");
   const dreamInterval = parseInt(flagValue("--dream-interval") || "86400000", 10);
 
-  const embedder = embedEndpoint ? createEmbedder(embedEndpoint, embedApiKey, embedModel) : undefined;
-  if (!embedEndpoint) {
+  // baseURL should be the OpenAI-compatible base (e.g. http://host:8090/v1)
+  // The SDK appends /embeddings automatically
+  const baseURL = embedBaseURL?.endsWith("/v1") ? embedBaseURL : embedBaseURL ? `${embedBaseURL}/v1` : undefined;
+  const embedder = baseURL ? createEmbedder({
+    provider: "openai-compatible",
+    baseURL,
+    apiKey: embedApiKey,
+    model: embedModel,
+    ...(embedDim ? { dimensions: embedDim } : {}),
+  }) : undefined;
+  if (!embedBaseURL) {
     console.error("memex-mcp: no --embed-endpoint, running in BM25-only mode (no vector search)");
   }
   const { server, store } = createMemexMcpServer({
