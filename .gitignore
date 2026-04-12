@@ -1,5 +1,6 @@
 node_modules/
 .claude/
+.mcp.json
 *.db
 *.db-journal
 *.lance/
