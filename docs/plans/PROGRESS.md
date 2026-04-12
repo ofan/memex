@@ -50,9 +50,6 @@
 
 ## Next Session Should
 
-1. Start **Project 1: Pool Cleanup** — begin with diagnosis step:
-   - Sample 50 random importance=0.3 session imports, classify as keep/delete
-   - Verify 0 of 1,669 session imports have ever been recalled
-   - Design aggressive decay rules based on findings
-2. Reference `02-projects.md` for full ACs and milestone structure
-3. Reference `ROADMAP.md` for strategic context and research backing
+1. **Project 2 (MCP Server):** Test Claude Code integration — add `.mcp.json` to project, verify tools work end-to-end with a real embedding endpoint
+2. **Project 3 (Dreaming Reflection):** Start diagnosis — cluster sample memories, test Stanford question synthesis manually
+3. Reference `02-projects.md` for full ACs and milestone structure
