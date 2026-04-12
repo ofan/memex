@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "memex": {
-      "command": "npx",
-      "args": ["tsx", "src/mcp-server.ts", "--db", "~/.openclaw/memory/memex/memex.sqlite"]
+      "command": "node",
+      "args": ["--import", "jiti/register", "src/mcp-server.ts", "--db", "/home/ubuntu/.openclaw/memory/memex/memex.sqlite"],
+      "cwd": "/home/ubuntu/projects/memex"
     }
   }
 }
