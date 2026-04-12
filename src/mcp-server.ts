@@ -247,8 +247,10 @@ async function main() {
   const embedApiKey = flagValue("--embed-api-key") || process.env.MEMEX_EMBED_API_KEY || "";
   const embedModel = flagValue("--embed-model") || process.env.MEMEX_EMBED_MODEL || "default";
   const embedDim = parseInt(flagValue("--embed-dim") || process.env.MEMEX_EMBED_DIM || "0", 10) || undefined;
-  const noDream = args.includes("--no-dream");
-  const dreamInterval = parseInt(flagValue("--dream-interval") || "86400000", 10);
+  const noDream = args.includes("--no-dream") || process.env.MEMEX_NO_DREAM === "1";
+  const dreamInterval = parseInt(
+    flagValue("--dream-interval") || process.env.MEMEX_DREAM_INTERVAL || "86400000", 10
+  );
 
   // baseURL should be the OpenAI-compatible base (e.g. http://host:8090/v1)
   // The SDK appends /embeddings automatically
@@ -286,17 +288,32 @@ async function main() {
     noDream,
   });
 
-  // Background dreaming
+  // Background dreaming — periodic schedule
   if (!noDream) {
-    setInterval(async () => {
+    const dreamConfig = {
+      enabled: true,
+      phases: { light: true, deep: true, reflection: !!reflectionLLM },
+      reflectionLLM,
+    };
+
+    const runDream = async (reason: string) => {
       try {
-        await runDreamCycle(store, {
-          enabled: true,
-          phases: { light: true, deep: true, reflection: !!reflectionLLM },
-          reflectionLLM,
-        });
-      } catch { /* dream cycle failure is non-fatal */ }
-    }, dreamInterval);
+        const result = await runDreamCycle(store, dreamConfig);
+        const parts = [
+          result.light ? `light(deduped=${result.light.deduped},noise=${result.light.noiseRemoved})` : null,
+          result.deep ? `deep(rescored=${result.deep.rescored},decayed=${result.deep.decayed})` : null,
+          result.reflection ? `reflect(learnings=${result.reflection.learnings},contradictions=${result.reflection.contradictions})` : null,
+        ].filter(Boolean).join(" ");
+        console.error(`memex-mcp: dream [${reason}] (${result.duration_ms}ms) ${parts}`);
+      } catch (err) {
+        console.error("memex-mcp: dream failed:", err instanceof Error ? err.message : err);
+      }
+    };
+
+    // Initial run shortly after startup, then on interval
+    setTimeout(() => runDream("startup"), 5 * 60_000);
+    setInterval(() => runDream("scheduled"), dreamInterval);
+    console.error(`memex-mcp: dreaming scheduled (first in 5m, then every ${Math.round(dreamInterval / 3600_000)}h)`);
   }
 
   const transport = new StdioServerTransport();
