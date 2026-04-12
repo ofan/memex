@@ -6,57 +6,50 @@
 
 **Retrieval quality:** 94% E2E (LongMemEval, GPT-4o), 82% R@1, 90% R@3. Domain eval 12/15.
 **Test suite:** 709 tests, all passing.
-**Architecture:** Single SQLite DB (no LanceDB). Dual retriever: MemoryRetriever (tools) + UnifiedRetriever (auto-recall).
+**Architecture:** Single SQLite DB. Dual retriever: MemoryRetriever (tools) + UnifiedRetriever (auto-recall). MCP server for cross-platform access.
 
-## Plan Status
+## Roadmap Status
 
-| Plan | Title | Status | Notes |
-|---|---|---|---|
-| 001 | Benchmarks design | **Superseded** | Bakeoff harness (`tests/bakeoff/`) covers the critical path. Full BEIR suite is academic overhead. |
-| 002 | Benchmarks impl | **Superseded** | Same as 001. Domain eval + fast-benchmark + bakeoff is sufficient. |
-| 003 | Session import v2 | **Open** | Not started. Highest-ROI quality project — 76% of memories are low-quality session imports. |
-| 004 | Retrieval quality fixes | **Done** | BM25 OR matching live (`search.ts:2442`). Adaptive fusion gate live (`search.ts:3355`). |
-| 005 | Chunk-level FTS | **Open** | Not started. Lower priority — depends on whether doc search quality is a bottleneck. |
-| 006 | SQLite consolidation | **Done** | LanceDB dropped. Single SQLite DB. `loadLanceDB()` remains in memory.ts for migration only. |
-| 007 | Rename cleanup | **Done** | `src/qmd/` flattened into `src/`. |
-| 008 | Lazy DB init | **Open** | Not started. Fixes CLI hanging (issue #8). Small scope. |
-| 009 | Unified retriever | **Done** | `src/unified-retriever.ts` implemented. 10-stage pipeline. Used by auto-recall. |
-| 010 | Chunked embed + sliding capture | **Partially done** | Chunked embedding + `filterAssistantText` + `capture-windows.ts` exist. Sliding window auto-capture not wired into production hook. |
-| 011 | Reranker modes + fallback | **Mostly done** | Qwen3-Reranker deployed. Fallback returns pool unchanged. Transient retry. Health checks. Remaining: rerank-failure cooldown to avoid per-query log spam. |
-| 012 | Dreaming | **Mostly done** | Light sweep ✅, deep sweep ✅, orchestrator ✅, CLI `/dream` ✅, intake guards ✅, recall tracking ✅, backfill ✅. Remaining: reflection phase (LLM-driven, large effort), telemetry events. |
+| # | Project | Status |
+|---|---|---|
+| 1 | Pool Cleanup | **Done** — session import decay (>14d → 0.1, >30d → evict), entity boost/graph gated off |
+| 2 | MCP Server | **Done** — 5 tools (recall/store/forget/dream/stats), stdio transport, env-driven config, op injection, BM25-only fallback, background dreaming. 10 tests. E2E verified against production DB. |
+| 3 | Dreaming Reflection | **Done** — Stanford question synthesis, contradiction detection via SUPERSEDED markers, idempotent learning storage. 5 tests. Not yet tested on production data. |
+| 4 | Session Import v2 | **Next** — replace 1,666 garbage session imports with LLM-extracted facts |
+| 5 | Model Bakeoff | Queued — EmbeddingGemma-300M, Contextual AI Reranker v2 |
+| 6 | Memory Hierarchy | Future — topic → episode → fact structure |
 
-## Recently Completed (April 2026 session)
+## Commits This Session (2026-04-12)
 
-- **Entity boost + entity graph gated off** — disabled by default via `entityBoost` / `entityGraph` config flags
-- **Rank-mode rerank scoring** — `rerankScoreMode: "rank"` transforms saturated reranker output into ordinal signal
-- **shouldRerank gate fix** — was dead code (compared weighted score max 0.55 vs threshold 0.88)
-- **In-turn recall cache** — `before_prompt_build` fires N+1 times per turn; cache dedupes
-- **Reranker upgrade** — bge → Qwen3-Reranker-0.6B-Q8_0 (+4pp E2E)
-- **Embed lane crash fix** — `--parallel 1` for embedding lane (upstream llama.cpp bug)
-- **Transient retry** — shared `withTransientRetry` for embed + rerank calls
-- **Rerank-failure fallback** — returns hybrid-fusion pool unchanged (was cosine re-rank)
-- **Model bakeoff harness** — two-stage gate for rapid model evaluation
-- **Dreaming v1** — light + deep sweep + CLI command
-- **Registration idempotency** — `_registered` guard, verified by test
+| Commit | What |
+|---|---|
+| `aa37247` | Pool cleanup: session import decay + entity feature gating |
+| `56b52f2` | MCP server: 5 tools, stdio, background dreaming |
+| `f384b01` | Dreaming reflection: LLM synthesis + contradiction detection |
+| `165aabb` | MCP: shared DB test, BM25-only mode, .mcp.json |
+| `7bebad9` | Gitignore .mcp.json, env var for API key |
+| `cc58895` | .mcp.json: jiti loader, absolute paths |
+| `9315017` | MCP: full env-driven config, op for API key, base URL |
+| `01201ed` | Remove hardcoded op call from server code |
 
-## Decisions
+## Pool State
 
+- 2,112 memories total
+- 1,666 session imports (importance 0.3, from March 14 batch) — will be evicted when >30 days old
+- 263 agent-stored memories (importance 0.6-0.95)
+- 21 memories ever recalled (recall tracking added April 8; 254 agent memories predate it)
+- After cleanup: pool will shrink to ~450 memories
+
+## Key Decisions This Session
+
+- 2026-04-12: MCP server is infrastructure (enables background processing), not just adoption
 - 2026-04-12: Entity boost + entity graph gated behind disabled-by-default config flags
-- 2026-04-10: Enable Qwen3-Reranker-0.6B-Q8_0 in runtime
-- 2026-04-10: Research rigor rule: diagnose failures before scoping quality projects
-- 2026-04-09: Domain eval is primary quality metric (not LongMemEval)
-- 2026-04-09: Entity boost weight=0 (disabled). BM25 sufficient for keyword entities
-- 2026-04-09: GPT-4o default for E2E benchmark
-
-## Recently Completed (this session, 2026-04-12)
-
-- **Project 1: Pool Cleanup** — session import decay (>14d → 0.1, >30d → evict), entity feature gating
-- **Project 2: MCP Server** — 5 tools over stdio, shared SQLite DB, BM25-only fallback, .mcp.json, background dreaming. All 8 ACs verified. 10 tests.
-- **Project 3: Dreaming Reflection** — LLM synthesis (Stanford pattern), contradiction detection via SUPERSEDED markers, idempotent learning storage. 5 tests.
+- 2026-04-12: Session import decay: source=session + never-recalled + imp≤0.3 → 0.1 after 14d, evict after 30d
+- 2026-04-12: Server reads secrets via env vars, not hardcoded — op injection via `op run` in .mcp.json
+- 2026-04-12: Dreaming reflection uses Stanford Generative Agents pattern (threshold → questions → synthesis)
 
 ## Next Session Should
 
-1. **Test MCP server E2E** with real embedding endpoint — `npx tsx src/mcp-server.ts --db ~/.openclaw/memory/memex/memex.sqlite --embed-endpoint <url>`
-2. **Test dreaming reflection** with real LLM — run reflection on production DB, verify learnings are sensible
-3. **Project 4: Session Import v2** — start diagnosis step (manual extraction on 3 sessions)
-4. Reference `02-projects.md` for full ACs and milestone structure
+1. **Test reflection on production data** — run dream cycle with reflection, verify learnings are sensible
+2. **Project 4: Session Import v2** — diagnosis step: manual extraction on 3 sessions → gold set
+3. Reference `02-projects.md` for full ACs, `ROADMAP.md` for strategic context
