@@ -5,7 +5,7 @@
 ## Current State
 
 **Retrieval quality:** 94% E2E (LongMemEval, GPT-4o), 82% R@1, 90% R@3. Domain eval 12/15.
-**Test suite:** 690 tests, all passing.
+**Test suite:** 709 tests, all passing.
 **Architecture:** Single SQLite DB (no LanceDB). Dual retriever: MemoryRetriever (tools) + UnifiedRetriever (auto-recall).
 
 ## Plan Status
@@ -48,8 +48,15 @@
 - 2026-04-09: Entity boost weight=0 (disabled). BM25 sufficient for keyword entities
 - 2026-04-09: GPT-4o default for E2E benchmark
 
+## Recently Completed (this session, 2026-04-12)
+
+- **Project 1: Pool Cleanup** — session import decay (>14d → 0.1, >30d → evict), entity feature gating
+- **Project 2: MCP Server** — 5 tools over stdio, shared SQLite DB, BM25-only fallback, .mcp.json, background dreaming. All 8 ACs verified. 10 tests.
+- **Project 3: Dreaming Reflection** — LLM synthesis (Stanford pattern), contradiction detection via SUPERSEDED markers, idempotent learning storage. 5 tests.
+
 ## Next Session Should
 
-1. **Project 2 (MCP Server):** Test Claude Code integration — add `.mcp.json` to project, verify tools work end-to-end with a real embedding endpoint
-2. **Project 3 (Dreaming Reflection):** Start diagnosis — cluster sample memories, test Stanford question synthesis manually
-3. Reference `02-projects.md` for full ACs and milestone structure
+1. **Test MCP server E2E** with real embedding endpoint — `npx tsx src/mcp-server.ts --db ~/.openclaw/memory/memex/memex.sqlite --embed-endpoint <url>`
+2. **Test dreaming reflection** with real LLM — run reflection on production DB, verify learnings are sensible
+3. **Project 4: Session Import v2** — start diagnosis step (manual extraction on 3 sessions)
+4. Reference `02-projects.md` for full ACs and milestone structure
