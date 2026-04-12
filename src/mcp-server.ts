@@ -13,7 +13,7 @@ import { MemoryStore } from "./memory.js";
 import { createRetriever } from "./retriever.js";
 import { createEmbedder, type Embedder } from "./embedder.js";
 import { isNoise } from "./noise-filter.js";
-import { runDreamCycle } from "./dreaming.js";
+import { runDreamCycle, type ReflectionLLMConfig } from "./dreaming.js";
 import { detectCategory } from "../index.js";
 
 // ============================================================================
@@ -25,12 +25,14 @@ export interface McpServerOptions {
   vectorDim?: number;
   /** Embedder for vector search. If omitted, recall uses BM25-only and store skips vectors. */
   embedder?: Embedder;
+  /** LLM config for dreaming reflection. If omitted, reflection phase is skipped. */
+  reflectionLLM?: ReflectionLLMConfig;
   dreamIntervalMs?: number;
   noDream?: boolean;
 }
 
 export function createMemexMcpServer(options: McpServerOptions) {
-  const { dbPath, vectorDim, embedder, dreamIntervalMs, noDream } = options;
+  const { dbPath, vectorDim, embedder, reflectionLLM, dreamIntervalMs, noDream } = options;
 
   const dim = vectorDim ?? embedder?.dimensions ?? 8;
   const store = new MemoryStore({ dbPath, vectorDim: dim });
@@ -154,9 +156,9 @@ export function createMemexMcpServer(options: McpServerOptions) {
   // ── memory_dream ──────────────────────────────────────────────────────────
   server.registerTool("memory_dream", {
     title: "Dream",
-    description: "Run memory consolidation (dedup, noise removal, re-scoring). Use 'light', 'deep', or 'all'.",
+    description: "Run memory consolidation (dedup, noise removal, re-scoring, reflection). Use 'light', 'deep', 'reflect', or 'all'.",
     inputSchema: {
-      phase: z.enum(["light", "deep", "all"]).optional().describe("Which phase to run (default: all)"),
+      phase: z.enum(["light", "deep", "reflect", "all"]).optional().describe("Which phase to run (default: all)"),
     },
   }, async (_params) => {
     const { phase = "all" } = _params as { phase?: string };
@@ -166,8 +168,9 @@ export function createMemexMcpServer(options: McpServerOptions) {
       phases: {
         light: phase === "all" || phase === "light",
         deep: phase === "all" || phase === "deep",
-        reflection: false,
+        reflection: (phase === "all" || phase === "reflect") && !!reflectionLLM,
       },
+      reflectionLLM,
     });
 
     return {
@@ -176,6 +179,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
         text: JSON.stringify({
           light: result.light,
           deep: result.deep,
+          reflection: result.reflection,
           errors: result.errors,
           duration_ms: result.duration_ms,
         }),
@@ -259,9 +263,25 @@ async function main() {
   if (!embedBaseURL) {
     console.error("memex-mcp: no --embed-endpoint, running in BM25-only mode (no vector search)");
   }
+
+  // LLM config for dreaming reflection
+  const llmBaseURL = flagValue("--llm-endpoint") || process.env.MEMEX_LLM_ENDPOINT || undefined;
+  const llmModel = flagValue("--llm-model") || process.env.MEMEX_LLM_MODEL || "";
+  const llmApiKey = flagValue("--llm-api-key") || process.env.MEMEX_LLM_API_KEY || embedApiKey;
+  const llmURL = llmBaseURL?.endsWith("/v1") ? llmBaseURL : llmBaseURL ? `${llmBaseURL}/v1` : undefined;
+  const reflectionLLM = llmURL && llmModel ? {
+    endpoint: `${llmURL}/chat/completions`,
+    model: llmModel,
+    apiKey: llmApiKey,
+  } : undefined;
+  if (reflectionLLM) {
+    console.error(`memex-mcp: reflection enabled (model: ${llmModel})`);
+  }
+
   const { server, store } = createMemexMcpServer({
     dbPath,
     embedder,
+    reflectionLLM,
     dreamIntervalMs: dreamInterval,
     noDream,
   });
@@ -272,7 +292,8 @@ async function main() {
       try {
         await runDreamCycle(store, {
           enabled: true,
-          phases: { light: true, deep: true, reflection: false },
+          phases: { light: true, deep: true, reflection: !!reflectionLLM },
+          reflectionLLM,
         });
       } catch { /* dream cycle failure is non-fatal */ }
     }, dreamInterval);
