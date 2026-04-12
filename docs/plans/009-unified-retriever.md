@@ -1,6 +1,7 @@
 # Unified Retriever Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: DONE.** `src/unified-retriever.ts` implements the 10-stage pipeline.
+> Used by auto-recall. MemoryRetriever remains for tool-based recall (backward compat).
 
 **Goal:** Replace the dual-pipeline architecture (separate MemoryRetriever + hybridQuery + UnifiedRecall) with a single UnifiedRetriever that searches all sources in one pass with one embed call, one optional rerank call, z-score calibration, and durability-aware time decay.
 

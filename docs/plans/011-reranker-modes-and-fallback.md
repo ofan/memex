@@ -1,7 +1,7 @@
 # Reranker Modes and Graceful Fallback
 
 **Date:** 2026-03-30  
-**Status:** Draft
+**Status:** Mostly done — Qwen3-Reranker deployed, fallback fixed (returns pool unchanged), transient retry, health checks (`reranker_configured` + `rerank_probe`), blend weight + score mode configurable. Remaining: rerank-failure cooldown to suppress per-query log spam.
 
 ## Goal
 

@@ -114,7 +114,7 @@ export async function deepSweep(
   let decayed = 0;
 
   const entries = db.prepare(`
-    SELECT id, text, importance, timestamp, recall_count
+    SELECT id, text, importance, timestamp, recall_count, metadata
     FROM memories
   `).all() as {
     id: string;
@@ -122,6 +122,7 @@ export async function deepSweep(
     importance: number;
     timestamp: number;
     recall_count: number | null;
+    metadata: string | null;
   }[];
 
   const updateImportance = db.prepare("UPDATE memories SET importance = ? WHERE id = ?");
@@ -142,6 +143,18 @@ export async function deepSweep(
       newImportance = Math.min(newImportance, 0.1);
     } else if (recalls === 0 && ageDays > 30) {
       newImportance = Math.min(newImportance, 0.3);
+    }
+
+    // Aggressive decay for session imports: low-importance + never-recalled.
+    // Session imports at 0.3 that never proved useful decay faster than agent-stored memories.
+    // Two stages: >14d → 0.1, >30d → evict (0.05 triggers existing eviction rule).
+    const isSessionImport = entry.metadata?.includes('"source":"session-import"') ?? false;
+    if (isSessionImport && recalls === 0 && entry.importance <= 0.3) {
+      if (ageDays > 30) {
+        newImportance = 0.05;
+      } else if (ageDays > 14) {
+        newImportance = Math.min(newImportance, 0.1);
+      }
     }
 
     // Extra decay for ephemeral action logs

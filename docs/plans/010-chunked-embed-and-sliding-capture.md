@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Partially done — chunked embedding in production, `filterAssistantText` exists in `noise-filter.ts`, `capture-windows.ts` exists with `buildCaptureWindows`. Remaining: wire sliding window auto-capture into the production `before_prompt_build` hook.
+
 **Goal:** Bring chunked embedding into production so long memories get multi-vector representation with max-sim retrieval, and improve auto-capture to use a sliding window of user+assistant turns with filtered assistant output.
 
 **Architecture:** Three changes that complement each other: (1) Memory store gains multi-vector support — memories >1500 chars get chunked into overlapping pieces, each stored as a separate vector row, and vectorSearch aggregates chunk hits back to memory level via max-sim. (2) Auto-capture switches from individual user messages to a sliding window of recent turns (user + filtered assistant). (3) A new `filterAssistantText()` function strips code blocks, tool outputs, and data blobs from assistant messages before capture.
