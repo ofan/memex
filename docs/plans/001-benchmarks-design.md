@@ -1,7 +1,7 @@
 # Benchmark & Comparison Design
 
 **Date:** 2026-03-05
-**Status:** Approved
+**Status:** Superseded — bakeoff harness (`tests/bakeoff/`, `scripts/bakeoff`) + domain eval + fast-benchmark cover the critical path. Full BEIR suite not needed.
 
 ## Goals
 

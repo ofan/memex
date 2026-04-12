@@ -88,6 +88,19 @@ export interface RetrievalConfig {
    */
   lengthNormAnchor: number;
   /**
+   * Enable entity-graph expansion (one-hop through memory_links).
+   * Adds linked memories at a discounted score. Disabled by default —
+   * measured zero quality impact on domain eval (BM25 + rerank already
+   * capture the same signal).
+   */
+  entityGraph?: boolean;
+  /**
+   * Enable entity-overlap score boost (ACT-R spreading activation).
+   * Disabled by default — BM25 already captures keyword entity matching,
+   * and any positive weight hurts domain eval (73-75% vs 80% at 0).
+   */
+  entityBoost?: boolean;
+  /**
    * Hard cutoff after rerank: discard results below this score.
    * Applied after all scoring stages (rerank, recency, importance, length norm).
    * Higher = fewer but more relevant results. (default: 0.40)
@@ -396,35 +409,39 @@ export class MemoryRetriever {
 
     const fusedResults = await this.fuseResults(vectorResults, bm25Results);
 
-    // Graph expansion: one-hop through entity links
-    const fusedIds = fusedResults.map(r => r.entry.id);
-    try {
-      const linkedIds = expandOneHop(this.store.db, fusedIds);
-      if (linkedIds.length > 0) {
-        const bestScore = fusedResults[0]?.score || 0;
-        // Fetch linked memories and add with discounted score
-        for (const linkedId of linkedIds.slice(0, 5)) {
-          if (fusedResults.some(r => r.entry.id === linkedId)) continue;
-          const row = this.store.db.prepare(
-            "SELECT id, text, category, scope, importance, timestamp, metadata FROM memories WHERE id = ?"
-          ).get(linkedId) as any;
-          if (row) {
-            fusedResults.push({
-              entry: { ...row, vector: [] },
-              score: bestScore * LINK_SCORE_DISCOUNT_FACTOR,
-              sources: { graph: true },
-            } as any);
+    // Graph expansion: one-hop through entity links (disabled by default)
+    if (this.config.entityGraph) {
+      const fusedIds = fusedResults.map(r => r.entry.id);
+      try {
+        const linkedIds = expandOneHop(this.store.db, fusedIds);
+        if (linkedIds.length > 0) {
+          const bestScore = fusedResults[0]?.score || 0;
+          for (const linkedId of linkedIds.slice(0, 5)) {
+            if (fusedResults.some(r => r.entry.id === linkedId)) continue;
+            const row = this.store.db.prepare(
+              "SELECT id, text, category, scope, importance, timestamp, metadata FROM memories WHERE id = ?"
+            ).get(linkedId) as any;
+            if (row) {
+              fusedResults.push({
+                entry: { ...row, vector: [] },
+                score: bestScore * LINK_SCORE_DISCOUNT_FACTOR,
+                sources: { graph: true },
+              } as any);
+            }
           }
         }
-      }
-    } catch { /* graph not available — skip */ }
+      } catch { /* graph not available — skip */ }
+    }
     sw.lap("fuse");
 
     // Entity boost (disabled by default — BM25 handles keyword entities)
-    const queryEntities = extractEntities(query);
-    const entityBoosted = this.applyEntityBoost(fusedResults, queryEntities);
+    let postEntityResults = fusedResults;
+    if (this.config.entityBoost) {
+      const queryEntities = extractEntities(query);
+      postEntityResults = this.applyEntityBoost(fusedResults, queryEntities);
+    }
 
-    const filtered = entityBoosted.filter(r => r.score >= this.config.minScore);
+    const filtered = postEntityResults.filter(r => r.score >= this.config.minScore);
 
     const reranked = this.config.rerank !== "none"
       ? await this.rerankResults(query, queryVector, filtered.slice(0, limit * 2))

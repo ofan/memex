@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memex Roadmap — Path to SOTA Memory System</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2129;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --accent3: #d2a8ff;
+    --accent4: #ffa657;
+    --accent5: #ff7b72;
+    --accent6: #79c0ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 2.5rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 2.5rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 1.1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+  p, li { color: var(--text); font-size: 0.95rem; }
+  p { margin-bottom: 0.75rem; }
+  strong { color: #fff; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* Key distinction box */
+  .distinction {
+    background: var(--surface);
+    border-left: 3px solid var(--accent3);
+    padding: 1rem 1.25rem;
+    border-radius: 0 6px 6px 0;
+    margin: 1.25rem 0;
+  }
+  .distinction .label { color: var(--accent3); font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+  .distinction ul { list-style: none; padding: 0; }
+  .distinction li { padding: 0.15rem 0; }
+  .distinction li::before { content: ''; }
+
+  /* Pool stats */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+  }
+  .stat-card .number { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+  .stat-card .label { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; }
+  .stat-card.warn .number { color: var(--accent5); }
+  .stat-card.good .number { color: var(--accent2); }
+
+  /* Competitor table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  th {
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:hover td { background: var(--surface); }
+  .highlight { color: var(--accent2); font-weight: 600; }
+
+  /* Failure cards */
+  .failures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin: 1.25rem 0;
+  }
+  .failure-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    border-top: 3px solid var(--accent5);
+  }
+  .failure-card h4 { color: var(--accent5); font-size: 0.9rem; margin-bottom: 0.35rem; }
+  .failure-card p { font-size: 0.85rem; color: var(--text-muted); margin: 0; }
+
+  /* Lesson callout */
+  .lesson {
+    background: linear-gradient(135deg, rgba(210,168,255,0.08), rgba(88,166,255,0.08));
+    border: 1px solid rgba(210,168,255,0.2);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1.25rem 0;
+    font-style: italic;
+    color: var(--accent3);
+    font-size: 0.95rem;
+  }
+
+  /* Gap list */
+  .gaps {
+    display: grid;
+    gap: 1rem;
+    margin: 1.25rem 0;
+  }
+  .gap-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    display: grid;
+    grid-template-columns: 2.5rem 1fr;
+    gap: 0.75rem;
+    align-items: start;
+  }
+  .gap-num {
+    width: 2rem;
+    height: 2rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-top: 0.1rem;
+  }
+  .gap-item h4 { font-size: 0.95rem; margin-bottom: 0.25rem; }
+  .gap-item p { font-size: 0.85rem; color: var(--text-muted); margin: 0; }
+
+  /* Project cards */
+  .project {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin: 1.5rem 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .project::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .project.p1::before { background: linear-gradient(90deg, var(--accent5), var(--accent4)); }
+  .project.p2::before { background: linear-gradient(90deg, var(--accent3), var(--accent)); }
+  .project.p3::before { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .project.p4::before { background: linear-gradient(90deg, var(--accent4), var(--accent6)); }
+  .project.p5::before { background: linear-gradient(90deg, var(--accent6), var(--accent3)); }
+
+  .project-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .project-num {
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .p1 .project-num { background: rgba(255,123,114,0.15); color: var(--accent5); }
+  .p2 .project-num { background: rgba(210,168,255,0.15); color: var(--accent3); }
+  .p3 .project-num { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .p4 .project-num { background: rgba(255,166,87,0.15); color: var(--accent4); }
+  .p5 .project-num { background: rgba(121,192,255,0.15); color: var(--accent6); }
+  .project h3 { margin: 0; font-size: 1.15rem; }
+  .project-goal {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+    font-style: italic;
+  }
+
+  .project-section {
+    margin-bottom: 0.75rem;
+  }
+  .project-section-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 0.35rem;
+  }
+  .project-section ul {
+    list-style: none;
+    padding: 0;
+  }
+  .project-section li {
+    font-size: 0.9rem;
+    padding: 0.2rem 0;
+    padding-left: 1.1rem;
+    position: relative;
+  }
+  .project-section li::before {
+    content: '>';
+    position: absolute;
+    left: 0;
+    color: var(--text-muted);
+    font-family: monospace;
+  }
+  .project-section p { font-size: 0.9rem; }
+  .tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-right: 0.25rem;
+  }
+  .tag-research { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .tag-metric { background: rgba(126,231,135,0.15); color: var(--accent2); }
+
+  /* Not doing table */
+  .not-doing {
+    font-size: 0.85rem;
+  }
+  .not-doing td:first-child {
+    color: var(--text-muted);
+    text-decoration: line-through;
+    font-style: italic;
+  }
+  .not-doing td:last-child {
+    color: var(--text-muted);
+  }
+
+  /* Success criteria */
+  .criteria td:nth-child(2) { color: var(--accent5); font-family: monospace; font-size: 0.85rem; }
+  .criteria td:nth-child(3) { color: var(--accent2); font-weight: 600; font-family: monospace; font-size: 0.85rem; }
+  .criteria td:nth-child(4) { color: var(--text-muted); font-size: 0.85rem; }
+
+  /* Flow diagram */
+  .flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 2rem 0;
+    flex-wrap: wrap;
+  }
+  .flow-step {
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-align: center;
+    min-width: 120px;
+  }
+  .flow-arrow {
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    padding: 0 0.5rem;
+  }
+  .fs1 { background: rgba(255,123,114,0.15); color: var(--accent5); border: 1px solid rgba(255,123,114,0.3); }
+  .fs2 { background: rgba(210,168,255,0.15); color: var(--accent3); border: 1px solid rgba(210,168,255,0.3); }
+  .fs3 { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+  .fs4 { background: rgba(255,166,87,0.15); color: var(--accent4); border: 1px solid rgba(255,166,87,0.3); }
+  .fs5 { background: rgba(121,192,255,0.15); color: var(--accent6); border: 1px solid rgba(121,192,255,0.3); }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Memex Roadmap</h1>
+<p class="subtitle">Path to SOTA Memory System &mdash; April 2026<br>
+Research base: 15 SOTA iterations, data quality research, session learnings</p>
+
+<!-- ============================================================ -->
+<h2>Where memex is</h2>
+
+<p>Memex has a strong <strong>retrieval</strong> system (94% E2E, rank-mode reranking, z-score fusion, confidence-gated skip). But it's a retrieval system, not a memory system.</p>
+
+<div class="distinction">
+  <div class="label">The distinction</div>
+  <ul>
+    <li>A <strong>retrieval system</strong> stores things and finds them.</li>
+    <li>A <strong>memory system</strong> stores, organizes, maintains, evolves, and intelligently surfaces knowledge.</li>
+  </ul>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="number">2,111</div>
+    <div class="label">Total memories</div>
+  </div>
+  <div class="stat-card warn">
+    <div class="number">79%</div>
+    <div class="label">Session import noise</div>
+  </div>
+  <div class="stat-card warn">
+    <div class="number">99%</div>
+    <div class="label">Never recalled</div>
+  </div>
+  <div class="stat-card good">
+    <div class="number">21</div>
+    <div class="label">Actually useful</div>
+  </div>
+  <div class="stat-card good">
+    <div class="number">94%</div>
+    <div class="label">E2E accuracy</div>
+  </div>
+</div>
+
+<p>The retrieval pipeline is excellent at finding needles &mdash; but the haystack is 80% straw.</p>
+
+<!-- ============================================================ -->
+<h2>What SOTA looks like (2026)</h2>
+
+<p>Every leader has something memex doesn't:</p>
+
+<table>
+  <thead>
+    <tr><th>System</th><th>Key Differentiator</th><th>Memex Gap</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Mastra OM</strong> <span class="highlight">94.87%</span></td>
+      <td>Background Observer + Reflector agents compress history into stable context. No retrieval at all.</td>
+      <td>No background processing. Dreaming has no LLM reflection.</td>
+    </tr>
+    <tr>
+      <td><strong>HyperMem</strong> <span class="highlight">92.73%</span></td>
+      <td>Topic &rarr; episode &rarr; fact hierarchy. Coarse-to-fine retrieval.</td>
+      <td>Flat store. No hierarchy. All memories compete equally.</td>
+    </tr>
+    <tr>
+      <td><strong>Hindsight</strong> 91.4%</td>
+      <td>4 specialized networks + narrative chunking + graph traversal.</td>
+      <td>Single undifferentiated pool. Worst-possible session chunking.</td>
+    </tr>
+    <tr>
+      <td><strong>MemMachine</strong> 91.69%</td>
+      <td>Sentence-level episode indexing, 80% token reduction.</td>
+      <td>No episode structure. No compression.</td>
+    </tr>
+    <tr>
+      <td><strong>xMemory</strong></td>
+      <td>Uncertainty-gated retrieval &mdash; abstracts first, drill down on demand.</td>
+      <td>Always returns raw memories, no abstraction layer.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The common pattern: <strong>structured knowledge with active maintenance</strong>. Not just store-and-retrieve.</p>
+
+<!-- ============================================================ -->
+<h2>What we learned from failures</h2>
+
+<div class="failures">
+  <div class="failure-card">
+    <h4>Entity boost</h4>
+    <p>BM25 already captures keyword matching. Adding entity overlap double-counted the same signal. Domain eval dropped from 80% to 73&ndash;75%.</p>
+  </div>
+  <div class="failure-card">
+    <h4>Entity graph</h4>
+    <p>3,406 links created. Zero quality impact. Correct memories weren't reachable from top hits via graph traversal.</p>
+  </div>
+  <div class="failure-card">
+    <h4>Blend weight sweep</h4>
+    <p>Raw-score blending dissolved reranker's ordinal signal. All weights failed until rank-mode scoring fixed the root cause.</p>
+  </div>
+</div>
+
+<div class="lesson">
+  "Don't implement what a paper describes &mdash; implement what makes their results different."<br>
+  And: diagnose actual failures before scoping solutions.
+</div>
+
+<!-- ============================================================ -->
+<h2>The gap: five missing capabilities</h2>
+
+<div class="gaps">
+  <div class="gap-item">
+    <div class="gap-num">1</div>
+    <div>
+      <h4>Memory lifecycle</h4>
+      <p>Memories are created and sit forever. No evolution, no consolidation, no reflection. Mechanical sweeps clean surface garbage but can't synthesize knowledge or detect contradictions.</p>
+    </div>
+  </div>
+  <div class="gap-item">
+    <div class="gap-num">2</div>
+    <div>
+      <h4>Intake quality</h4>
+      <p>Session import dumped 1,666 fragments using tiny sliding windows (3 turns, 500 char truncation). Research consensus: narrative chunking + frontier model extraction + two-phase dedupe. The extraction prompt is make-or-break (Mem0's defaults &rarr; 97.8% junk).</p>
+    </div>
+  </div>
+  <div class="gap-item">
+    <div class="gap-num">3</div>
+    <div>
+      <h4>Pool hygiene</h4>
+      <p>No semantic near-duplicate detection. No contradiction detection. No staleness detection. Deep sweep's age-based decay is too slow (90 days to reach 0.1).</p>
+    </div>
+  </div>
+  <div class="gap-item">
+    <div class="gap-num">4</div>
+    <div>
+      <h4>Memory structure</h4>
+      <p>Flat store with importance scores. No hierarchy, no typed networks, no temporal validity windows. Categories exist but don't influence retrieval.</p>
+    </div>
+  </div>
+  <div class="gap-item">
+    <div class="gap-num">5</div>
+    <div>
+      <h4>Active observation</h4>
+      <p>Auto-capture is passive &mdash; nudges the LLM to call memory_store. SOTA systems use background agents that actively observe and extract. Sliding-window capture code exists but is dormant.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>The path</h2>
+
+<p>Ordered by dependency and impact. Each project builds on the previous.</p>
+
+<div class="flow">
+  <div class="flow-step fs1">1. Cleanup</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-step fs2">2. MCP Server</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-step fs3">3. Reflection</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-step fs4">4. Import v2</div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-step fs5">5. Models + Hierarchy</div>
+</div>
+
+<!-- Project 1 -->
+<div class="project p1">
+  <div class="project-header">
+    <span class="project-num">Project 1</span>
+    <h3>Pool cleanup</h3>
+  </div>
+  <p class="project-goal">Remove the noise floor so every subsequent improvement has clean data to work with.</p>
+
+  <div class="project-section">
+    <div class="project-section-title">What</div>
+    <ul>
+      <li>Aggressive decay for session imports: source=session + never-recalled + importance=0.3 &rarr; decay to 0.1 after 14d, evict after 30d</li>
+      <li>Semantic near-duplicate detection: cluster by embedding similarity, merge or delete</li>
+      <li>Manual audit of surviving high-importance memories for accuracy</li>
+    </ul>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Why first</div>
+    <p>Every other project builds on the pool. Reflection on garbage produces garbage insights. Better extraction into a noisy pool just adds more noise. Clean first.</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Backing</div>
+    <p><span class="tag tag-research">Mem0</span> 97.8% junk finding <span class="tag tag-research">MemMachine</span> 80% token reduction <span class="tag tag-research">xMemory</span> token efficiency</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Measured by</div>
+    <p><span class="tag tag-metric">Pool size</span> reduction <span class="tag tag-metric">Domain eval</span> stability <span class="tag tag-metric">Never-recalled</span> ratio drop</p>
+  </div>
+</div>
+
+<!-- Project 2 -->
+<div class="project p2">
+  <div class="project-header">
+    <span class="project-num">Project 2</span>
+    <h3>MCP Server</h3>
+  </div>
+  <p class="project-goal">Memex as a standalone, always-on memory server. Cross-platform. Enables background processing.</p>
+
+  <div class="project-section">
+    <div class="project-section-title">What</div>
+    <ul>
+      <li>MCP server over stdio &mdash; 5 tools (recall/store/forget/dream/stats)</li>
+      <li>Shared SQLite DB between OpenClaw plugin and MCP server</li>
+      <li>Background dreaming timer (reflection runs on schedule in server process)</li>
+      <li>Claude Code integration via <code>.mcp.json</code></li>
+    </ul>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Why second &mdash; infrastructure, not a feature</div>
+    <p>The #1 gap with SOTA (Mastra, Letta) is no background processing. MCP server is a long-lived process that enables auto-dreaming, active conversation observation, and cross-platform memory (OpenClaw + Claude Code + Cursor). Also solves issue #8 (CLI hanging).</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Backing</div>
+    <p><span class="tag tag-research">Mastra</span> Observer+Reflector <span class="tag tag-research">Letta</span> sleep-time agents <span class="tag tag-research">MCP</span> universal agent integration</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Measured by</div>
+    <p><span class="tag tag-metric">Platforms</span> &ge; 2 <span class="tag tag-metric">Background dreaming</span> running <span class="tag tag-metric">Latency</span> &lt; 10ms overhead</p>
+  </div>
+</div>
+
+<!-- Project 3 -->
+<div class="project p3">
+  <div class="project-header">
+    <span class="project-num">Project 3</span>
+    <h3>Dreaming reflection</h3>
+  </div>
+  <p class="project-goal">LLM-driven knowledge synthesis &mdash; turn scattered facts into coherent learnings.</p>
+
+  <div class="project-section">
+    <div class="project-section-title">What</div>
+    <ul>
+      <li>Stanford-style question synthesis: threshold trigger &rarr; generate questions &rarr; retrieve per question &rarr; synthesize insight &rarr; store as learning</li>
+      <li>Contradiction detection: find semantically similar memories, check temporal consistency, mark contradictions with <code>superseded_by</code></li>
+      <li>Memory evolution: update stale memories with new context (A-MEM pattern)</li>
+      <li>Runs as part of MCP server's background dreaming cycle</li>
+    </ul>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Why third</div>
+    <p>After cleanup gives clean data and MCP server provides the runtime, reflection produces knowledge synthesis. The hierarchy emerges naturally from insights.</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Backing</div>
+    <p><span class="tag tag-research">Stanford</span> Generative Agents <span class="tag tag-research">Graphiti</span> bi-temporal contradiction <span class="tag tag-research">A-MEM</span> memory evolution <span class="tag tag-research">Letta</span> sleep-time validation</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Measured by</div>
+    <p><span class="tag tag-metric">Learnings</span> generated <span class="tag tag-metric">Contradictions</span> resolved <span class="tag tag-metric">Domain eval</span> improvement</p>
+  </div>
+</div>
+
+<!-- Project 4 -->
+<div class="project p4">
+  <div class="project-header">
+    <span class="project-num">Project 4</span>
+    <h3>Session import v2</h3>
+  </div>
+  <p class="project-goal">Replace the garbage session import pipeline with LLM extraction that produces high-quality atomic facts.</p>
+
+  <div class="project-section">
+    <div class="project-section-title">What</div>
+    <ul>
+      <li>Narrative chunking by topic boundaries (not fixed windows or bin-packing)</li>
+      <li>Frontier model extraction with custom prompt + few-shot examples + negative cases</li>
+      <li>Two-phase pipeline: extract &rarr; dedupe against existing store (Mem0 pattern, better prompt)</li>
+      <li>Provenance metadata (sessionKey, agentId, source)</li>
+      <li>Fact precision/recall measurement against human-labeled gold set</li>
+    </ul>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Why fourth</div>
+    <p>After cleanup and reflection establish what "good memory" looks like, the extraction pipeline has clear quality targets. Reflection provides contradiction detection for newly extracted facts.</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Backing</div>
+    <p><span class="tag tag-research">Hindsight</span> narrative chunking <span class="tag tag-research">Mem0</span> two-phase pipeline <span class="tag tag-research">Letta</span> hybrid approach</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Measured by</div>
+    <p><span class="tag tag-metric">Precision</span> no hallucinated facts <span class="tag tag-metric">Recall</span> no missed facts <span class="tag tag-metric">Pool quality</span> after re-import</p>
+  </div>
+</div>
+
+<!-- Project 5 -->
+<div class="project p4">
+  <div class="project-header">
+    <span class="project-num">Project 5</span>
+    <h3>Model bakeoff</h3>
+  </div>
+  <p class="project-goal">Evaluate whether newer models improve retrieval without architectural changes.</p>
+
+  <div class="project-section">
+    <div class="project-section-title">What</div>
+    <ul>
+      <li>EmbeddingGemma-300M &mdash; 10x smaller, MRL dimension truncation</li>
+      <li>Contextual AI Reranker v2 &mdash; instruction-following, +35% recency-awareness</li>
+      <li>Run through existing bakeoff harness (domain eval + fast benchmark + E2E)</li>
+    </ul>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Why fifth</div>
+    <p>Model improvements are incremental. Architecture improvements (projects 1&ndash;4) have higher leverage. Once data is clean, better models provide additional gains.</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Measured by</div>
+    <p><span class="tag tag-metric">Domain eval</span> <span class="tag tag-metric">LongMemEval</span> R@1/R@3/E2E <span class="tag tag-metric">Latency</span></p>
+  </div>
+</div>
+
+<!-- Project 6 -->
+<div class="project p5">
+  <div class="project-header">
+    <span class="project-num">Project 6</span>
+    <h3>Memory hierarchy</h3>
+  </div>
+  <p class="project-goal">Evolve from flat store to structured knowledge &mdash; topic &rarr; episode &rarr; fact.</p>
+
+  <div class="project-section">
+    <div class="project-section-title">What</div>
+    <ul>
+      <li>Reflection naturally produces higher-level memories (learnings, insights)</li>
+      <li>Cluster by topic, generate topic summaries</li>
+      <li>Coarse-to-fine retrieval: match topics first, drill into facts (HyperMem)</li>
+      <li>Uncertainty-gated expansion: abstracts first, detail on demand (xMemory)</li>
+    </ul>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Why last</div>
+    <p>Hierarchy emerges from reflection and clean data. Building hierarchy on a noisy flat store would be premature structure.</p>
+  </div>
+  <div class="project-section">
+    <div class="project-section-title">Backing</div>
+    <p><span class="tag tag-research">HyperMem</span> hypergraph <span class="tag tag-research">xMemory</span> 4-level hierarchy <span class="tag tag-research">MACLA</span> 15:1 compression</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>What we're NOT doing</h2>
+
+<table class="not-doing">
+  <thead>
+    <tr><th>Item</th><th>Why Not</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Entity boost / entity graph</td><td>Tried, measured, net-neutral. BM25 captures the same signal. Gated off.</td></tr>
+    <tr><td>Knowledge graph (Neo4j/Graphiti)</td><td>Overhead doesn't pay off at 2K entries. Graph shines at 100K+.</td></tr>
+    <tr><td>Small model extraction (&lt; 7B)</td><td>Not viable without fine-tuning. All production systems use frontier models.</td></tr>
+    <tr><td>Mastra-style no-RAG</td><td>Fundamentally different approach. Requires large context windows.</td></tr>
+    <tr><td>Full BEIR benchmark suite</td><td>Bakeoff harness covers the critical path.</td></tr>
+    <tr><td style="text-decoration: none; color: var(--accent2); font-style: normal;">MCP server &rarr; PROMOTED to Project 2</td><td style="color: var(--accent2);">Elevated from "nice to have" to infrastructure. Enables background processing (the #1 SOTA gap), cross-platform memory, and solves issue #8.</td></tr>
+    <tr><td>Procedural memory</td><td>New category, not a quality improvement. Future.</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>Success criteria</h2>
+
+<table class="criteria">
+  <thead>
+    <tr><th>Metric</th><th>Current</th><th>Target</th><th>Project</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Pool noise ratio</td><td>~79%</td><td>&lt; 20%</td><td>1 + 3</td></tr>
+    <tr><td>Never-recalled ratio</td><td>99%</td><td>&lt; 60%</td><td>1 + 2</td></tr>
+    <tr><td>Domain eval</td><td>12/15</td><td>&ge; 14/15</td><td>2 + 3</td></tr>
+    <tr><td>LongMemEval E2E</td><td>94%</td><td>&ge; 95%</td><td>2 + 3 + 4</td></tr>
+    <tr><td>Contradictions detected</td><td>Unknown</td><td>0 remaining</td><td>2</td></tr>
+    <tr><td>Learnings per cycle</td><td>0</td><td>10+</td><td>2</td></tr>
+  </tbody>
+</table>
+
+<footer>
+  Memex &mdash; April 2026 &mdash; Research: 15 SOTA iterations + data quality analysis
+</footer>
+
+</body>
+</html>

@@ -60,12 +60,10 @@
 
 ## Remaining
 
-| Step | Description | Effort |
-|---|---|---|
-| 7 | CLI (`memex log`, `dream --dry-run`, `dream --now`) | Small |
-| 8 | Reflection (LLM-driven learnings via subagent) | Large |
-| 9 | Backfill (hash existing entries, run initial sweep) | Small |
-| 10 | Telemetry (dream/dream_metrics/dream_cost events, OpenPanel) | Small |
+| Step | Description | Effort | Status |
+|---|---|---|---|
+| 8 | Reflection (LLM-driven learnings synthesis via subagent) | Large | Not started |
+| 10 | Telemetry (dream_cost events in OpenPanel) | Small | Partial — `track("dream")` and `track("dream_metrics")` fire, but no OpenPanel dashboard |
 
 ## Also Done This Session (pre-dreaming)
 

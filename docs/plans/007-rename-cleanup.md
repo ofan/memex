@@ -1,6 +1,6 @@
 # Rename & Cleanup: Remove Fork Artifacts
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: DONE.** `src/qmd/` flattened into `src/`. Fork-era naming removed.
 
 **Goal:** Flatten `src/qmd/` into `src/`, rename fork-era naming, update all imports and references. No logic changes.
 

@@ -1,6 +1,6 @@
 # Benchmark & Comparison Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: Superseded.** See 001 status note. Bakeoff harness + domain eval + fast-benchmark are sufficient.
 
 **Goal:** Build quality benchmarks (BEIR + LongMemEval + real data), usage simulation (4 scenarios), and feature comparison against SOTA memory systems. Produce actionable optimization recommendations.
 

@@ -1,6 +1,7 @@
 # SQLite Consolidation: Drop LanceDB, Unify Both Stores
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: DONE.** LanceDB dropped. Single SQLite DB with sqlite-vec + FTS5.
+> `loadLanceDB()` remains in `memory.ts` for migration scripts only.
 
 **Goal:** Replace LanceDB with SQLite + sqlite-vec + FTS5 for conversation memory, unifying both stores into a single database. Preserve all retriever/tool interfaces exactly.
 

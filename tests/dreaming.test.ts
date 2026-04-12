@@ -249,6 +249,59 @@ describe("deep sweep", () => {
     assert.ok(row.importance <= 0.1, `expected importance <= 0.1 for stale action log, got ${row.importance}`);
   });
 
+  it("aggressively decays session imports >14d to 0.1", async () => {
+    await seedMemory(store, "Session import fact about deployment configs", {
+      importance: 0.3,
+      timestamp: daysAgo(20),
+      metadata: '{"source":"session-import","sessionKey":"llm-extracted"}',
+    });
+
+    await deepSweep(store, logPath);
+
+    const row = store.db.prepare("SELECT importance FROM memories").get() as { importance: number };
+    assert.ok(row.importance <= 0.1, `expected importance <= 0.1, got ${row.importance}`);
+  });
+
+  it("evicts session imports >30d (importance set to 0.05)", async () => {
+    await seedMemory(store, "Old session import about ABP config", {
+      importance: 0.3,
+      timestamp: daysAgo(35),
+      metadata: '{"source":"session-import","sessionKey":"llm-extracted"}',
+    });
+
+    await deepSweep(store, logPath);
+
+    // Entry should be evicted (importance ≤ 0.05 triggers DELETE)
+    assert.equal(store.totalMemories, 0, "session import >30d should be evicted");
+  });
+
+  it("does NOT decay recalled session imports", async () => {
+    await seedMemory(store, "Recalled session import about Discord channel", {
+      importance: 0.3,
+      timestamp: daysAgo(20),
+      recallCount: 5,
+      metadata: '{"source":"session-import","sessionKey":"llm-extracted"}',
+    });
+
+    await deepSweep(store, logPath);
+
+    const row = store.db.prepare("SELECT importance FROM memories").get() as { importance: number };
+    assert.ok(row.importance >= 0.7, `recalled session import should be boosted, got ${row.importance}`);
+  });
+
+  it("does NOT aggressively decay non-session memories", async () => {
+    await seedMemory(store, "Agent-stored fact about servers", {
+      importance: 0.3,
+      timestamp: daysAgo(20),
+      // No session-import metadata
+    });
+
+    await deepSweep(store, logPath);
+
+    const row = store.db.prepare("SELECT importance FROM memories").get() as { importance: number };
+    assert.equal(row.importance, 0.3, "non-session memory at 20d should keep importance 0.3");
+  });
+
   it("is idempotent — decayed entries stay decayed", async () => {
     await seedMemory(store, "Old entry for idempotency test", {
       importance: 0.5,

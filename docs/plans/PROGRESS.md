@@ -1,61 +1,58 @@
 # Progress
 
-## Last Updated: 2026-04-10
+## Last Updated: 2026-04-12
 
-## Active Projects
-- **model-bakeoff** — scoped in brainstorm, design doc pending
-  - Goal: quick go/no-go (< 5 min) for any candidate reranker or embedder
-  - Motivation: the manual Qwen3-Reranker eval we just did (bake, swap, rerun, compare) should become a one-liner. Each future model upgrade currently costs an afternoon of manual coordination.
-  - Build after: any urgent quality work; this is infrastructure, not a quality win
-  - Design: `docs/design/model-bakeoff.md` (todo)
+## Current State
 
-## Recently Completed
-- **Autonomous loop, 2026-04-10 evening** — see `docs/plans/2026-04-10-loop-report.md` for the canonical session record. Highlights: shouldRerank gate bug fix; in-turn recall cache (refactored to `src/recall-cache.ts` with 11 unit tests); embed-lane crash root cause + `--parallel 1` fix in homeinfra; transient retry in embedder (`withTransientRetry`) handles residual crashes for free; runPipeline rerank gap fixed; longmemeval-benchmark `RERANK=1` support; `docs/design/model-bakeoff.md` v1 spec.
-- **Embedding lane crash fix** (2026-04-10) — `Qwen3-Embedding-4B-Q8_0` was crashing reproducibly (~28% rate) under memex auto-recall load due to upstream llama.cpp bugs (#15849, #6722, #5655) when `--embeddings` is combined with `--parallel N>1`. Fix: drop the embedding lane to `--parallel 1`. Verified: 7 crashes/probe → 0 crashes/probe; mean latency 2588ms → 1030ms; max 22421ms → 3834ms. Reranker lane unchanged (different code path, no crashes). Committed in homeinfra `4730f38`.
-- **Latency and correctness fixes on auto-recall path** (2026-04-10)
-  - `shouldRerank` gate fix: was dead code (compared weighted `score` max 0.55 vs threshold 0.88). Now uses `rawScore`. Gate fires for high-confidence queries, skipping ~1s rerank work.
-  - `before_prompt_build` auto-recall cache: single agent turn no longer produces N retrieves. Per-session dedup by recallQuery with 60s TTL.
-  - Regression test added for threshold-skip path.
-  - Quality unchanged on all benchmarks (domain 11/15, LongMemEval R@1 82%, R@3 90%).
-  - Full test suite: 646/646 pass.
-  - Latency probe committed at `tests/latency-probe.ts` for future A/B runs.
-- **Reranker upgrade: bge-reranker-v2-m3 → Qwen3-Reranker-0.6B-Q8_0** (2026-04-10)
-  - LongMemEval: R@1 78→82% (+2 queries), R@3 90% (0), **E2E 90→94% (+2 queries)** with GPT-4o reader
-  - Domain eval: 12/15→11/15 (−1 query; Qwen3 picks defensible-but-wrong alternatives on abstract queries)
-  - Net: strong win on the larger LongMemEval, small loss on domain eval, clear ship decision
-  - bge regression confirmed: bge was −2 R@1 on LongMemEval vs baseline
-  - Deployed: `~/homeinfra/hosts/the inference host/etc/llama-swap.yaml` + `~/.openclaw/openclaw.json` (`reranker.enabled: true`, model = `Qwen3-Reranker-0.6B-Q8_0`)
-  - Live verified via `openclaw agent main` call — /v1/rerank is hit
-  - Lower bound caveat: llama.cpp PR #20009 (instruction-aware rerank template) unmerged; scores should improve when merged
-  - Follow-up: memex made 10 rerank calls for one agent turn — investigate whether this is per-source batching or redundant calls; may impact auto-recall latency
-- Entity Extraction + Entity Graph: deployed, net-neutral on domain eval, validated the "research must trace mechanism through failing cases" process rule
-- Entity boost tuning: disabled (weight=0), domain eval 73% → 80%
-- Domain eval created: 15 entity-rich queries against live DB (80% baseline)
-- Temporal Queries — merged (regex date detection, timestamp filtering)
-- LongMemEval rebenchmarked with GPT-4o: R@1 78%, R@3 90%, E2E 90-92% (no rerank baseline)
-- Dreaming v1 merged (light + deep sweep + /dream command)
-- v0.5.12 released
+**Retrieval quality:** 94% E2E (LongMemEval, GPT-4o), 82% R@1, 90% R@3. Domain eval 12/15.
+**Test suite:** 690 tests, all passing.
+**Architecture:** Single SQLite DB (no LanceDB). Dual retriever: MemoryRetriever (tools) + UnifiedRetriever (auto-recall).
 
-## Key Insights This Session
-- **Entity boost / graph were net-neutral** on domain eval (both arcs shipped with zero improvement). Root cause: research cited SOTA mechanisms without walking them through our actual failing cases. Added `Research Rigor: Diagnose Before Scoping` section to methodology.
-- **Reranker is workload-dependent.** bge-reranker-v2-m3 hurt LongMemEval R@1 (historical finding confirmed). Qwen3-Reranker-0.6B wins LongMemEval (+2 R@1, +2 E2E) but loses domain eval (-1). Mechanistic reason: 32K context (vs bge's 8K) + sigmoid-calibrated scores.
-- **Secrets hygiene retooling:** 1Password fields renamed from generic (`LLAMA_SWAP_API_KEY`) to purpose-specific (`MEMEX_LLAMA_SWAP_API_KEY`, `MEMEX_BENCHMARK_OPENAI_API_KEY`, `MEMEX_LLAMA_SWAP_BASE_URL`).
+## Plan Status
 
-See `docs/plans/LEARNINGS.md` for full session retrospectives and `docs/research/embed-rerank-upgrade-brief.md` for the Qwen3-Reranker research trail.
+| Plan | Title | Status | Notes |
+|---|---|---|---|
+| 001 | Benchmarks design | **Superseded** | Bakeoff harness (`tests/bakeoff/`) covers the critical path. Full BEIR suite is academic overhead. |
+| 002 | Benchmarks impl | **Superseded** | Same as 001. Domain eval + fast-benchmark + bakeoff is sufficient. |
+| 003 | Session import v2 | **Open** | Not started. Highest-ROI quality project — 76% of memories are low-quality session imports. |
+| 004 | Retrieval quality fixes | **Done** | BM25 OR matching live (`search.ts:2442`). Adaptive fusion gate live (`search.ts:3355`). |
+| 005 | Chunk-level FTS | **Open** | Not started. Lower priority — depends on whether doc search quality is a bottleneck. |
+| 006 | SQLite consolidation | **Done** | LanceDB dropped. Single SQLite DB. `loadLanceDB()` remains in memory.ts for migration only. |
+| 007 | Rename cleanup | **Done** | `src/qmd/` flattened into `src/`. |
+| 008 | Lazy DB init | **Open** | Not started. Fixes CLI hanging (issue #8). Small scope. |
+| 009 | Unified retriever | **Done** | `src/unified-retriever.ts` implemented. 10-stage pipeline. Used by auto-recall. |
+| 010 | Chunked embed + sliding capture | **Partially done** | Chunked embedding + `filterAssistantText` + `capture-windows.ts` exist. Sliding window auto-capture not wired into production hook. |
+| 011 | Reranker modes + fallback | **Mostly done** | Qwen3-Reranker deployed. Fallback returns pool unchanged. Transient retry. Health checks. Remaining: rerank-failure cooldown to avoid per-query log spam. |
+| 012 | Dreaming | **Mostly done** | Light sweep ✅, deep sweep ✅, orchestrator ✅, CLI `/dream` ✅, intake guards ✅, recall tracking ✅, backfill ✅. Remaining: reflection phase (LLM-driven, large effort), telemetry events. |
 
-## Decisions Made
-- 2026-04-10: **Enable Qwen3-Reranker-0.6B-Q8_0** in memex runtime. Net LongMemEval win outweighs domain-eval noise.
-- 2026-04-10: Rename 1P fields to purpose-specific (`MEMEX_*` prefix).
-- 2026-04-10: Research rigor rule added to methodology (`01-methodology.md`): diagnose current failures before scoping a quality project; cite SOTA only after tracing mechanism through failing cases.
-- 2026-04-10: Next quality project is `model-bakeoff` (methodology infrastructure), not a specific model upgrade.
-- 2026-04-09: Entity boost weight=0 (disabled). BM25 is sufficient for keyword entities
-- 2026-04-09: Entity graph adjacency deployed; net-neutral; infrastructure retained for future use
-- 2026-04-09: Domain eval is primary metric (not LongMemEval)
+## Recently Completed (April 2026 session)
+
+- **Entity boost + entity graph gated off** — disabled by default via `entityBoost` / `entityGraph` config flags
+- **Rank-mode rerank scoring** — `rerankScoreMode: "rank"` transforms saturated reranker output into ordinal signal
+- **shouldRerank gate fix** — was dead code (compared weighted score max 0.55 vs threshold 0.88)
+- **In-turn recall cache** — `before_prompt_build` fires N+1 times per turn; cache dedupes
+- **Reranker upgrade** — bge → Qwen3-Reranker-0.6B-Q8_0 (+4pp E2E)
+- **Embed lane crash fix** — `--parallel 1` for embedding lane (upstream llama.cpp bug)
+- **Transient retry** — shared `withTransientRetry` for embed + rerank calls
+- **Rerank-failure fallback** — returns hybrid-fusion pool unchanged (was cosine re-rank)
+- **Model bakeoff harness** — two-stage gate for rapid model evaluation
+- **Dreaming v1** — light + deep sweep + CLI command
+- **Registration idempotency** — `_registered` guard, verified by test
+
+## Decisions
+
+- 2026-04-12: Entity boost + entity graph gated behind disabled-by-default config flags
+- 2026-04-10: Enable Qwen3-Reranker-0.6B-Q8_0 in runtime
+- 2026-04-10: Research rigor rule: diagnose failures before scoping quality projects
+- 2026-04-09: Domain eval is primary quality metric (not LongMemEval)
+- 2026-04-09: Entity boost weight=0 (disabled). BM25 sufficient for keyword entities
 - 2026-04-09: GPT-4o default for E2E benchmark
-- 2026-04-09: OpenAI key in 1Password `dev-claude` item
 
 ## Next Session Should
-1. Investigate the "10 rerank calls per agent turn" observation — is memex making redundant calls? latency impact?
-2. Draft `docs/design/model-bakeoff.md` — MVP scope: `bakeoff reranker <url> <model>` one-liner
-3. Optional: rebuild llama.cpp on the inference host when PR #20009 merges → rerun Qwen3-Reranker with instruction template → confirm further improvement
-4. Commit `~/homeinfra/hosts/the inference host/etc/llama-swap.yaml` if not already pushed
+
+1. Start **Project 1: Pool Cleanup** — begin with diagnosis step:
+   - Sample 50 random importance=0.3 session imports, classify as keep/delete
+   - Verify 0 of 1,669 session imports have ever been recalled
+   - Design aggressive decay rules based on findings
+2. Reference `02-projects.md` for full ACs and milestone structure
+3. Reference `ROADMAP.md` for strategic context and research backing
