@@ -240,16 +240,7 @@ async function main() {
   }
 
   const embedBaseURL = flagValue("--embed-endpoint") || process.env.MEMEX_EMBED_ENDPOINT || undefined;
-  let embedApiKey = flagValue("--embed-api-key") || process.env.MEMEX_EMBED_API_KEY || "";
-  if (!embedApiKey && embedBaseURL) {
-    try {
-      const { execFileSync } = await import("node:child_process");
-      embedApiKey = execFileSync("op", ["read", "op://dev-vm/dev-claude/MEMEX_LLAMA_SWAP_API_KEY"], { encoding: "utf-8", timeout: 5000 }).trim();
-      if (embedApiKey) console.error("memex-mcp: loaded embed API key from 1Password");
-    } catch {
-      console.error("memex-mcp: no embed API key (set MEMEX_EMBED_API_KEY or --embed-api-key)");
-    }
-  }
+  const embedApiKey = flagValue("--embed-api-key") || process.env.MEMEX_EMBED_API_KEY || "";
   const embedModel = flagValue("--embed-model") || process.env.MEMEX_EMBED_MODEL || "default";
   const embedDim = parseInt(flagValue("--embed-dim") || process.env.MEMEX_EMBED_DIM || "0", 10) || undefined;
   const noDream = args.includes("--no-dream");
