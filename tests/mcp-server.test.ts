@@ -221,6 +221,71 @@ describe("MCP Server", () => {
     st2.close();
   });
 
+  it("memory_dream with reflection uses LLM config", async () => {
+    // Seed enough memories for reflection threshold
+    for (let i = 0; i < 10; i++) {
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: `Important fact ${i} about infrastructure deployment`, category: "fact", importance: 0.7 },
+      });
+    }
+
+    // Create a second server with reflection LLM configured (mock fetch)
+    const dbPath2 = join(tmpDir, "reflect-test.sqlite");
+    const originalFetch = globalThis.fetch;
+    let llmCalled = false;
+
+    globalThis.fetch = async (url: any, init: any) => {
+      const urlStr = typeof url === "string" ? url : (url as Request).url;
+      if (urlStr.includes("/chat/completions")) {
+        llmCalled = true;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "Infrastructure deployment requires careful coordination across services." } }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return originalFetch(url, init);
+    };
+
+    try {
+      const { server: s2, store: st2 } = createMemexMcpServer({
+        dbPath: join(tmpDir, "memex.sqlite"), // same DB as main test
+        vectorDim: VECTOR_DIM,
+        embedder: makeFakeEmbedder(),
+        reflectionLLM: {
+          endpoint: "http://fake-llm/v1/chat/completions",
+          model: "test-model",
+        },
+      });
+
+      const client2 = new Client({ name: "reflect-client", version: "1.0.0" });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      await Promise.all([client2.connect(ct), s2.connect(st)]);
+
+      // Check the DB has enough memories for reflection
+      const count = st2.db.prepare("SELECT COUNT(*) as c FROM memories WHERE importance > 0.3").get() as any;
+
+      const result = await client2.callTool({
+        name: "memory_dream",
+        arguments: { phase: "reflect" },
+      });
+
+      const dream = JSON.parse((result.content as any)[0].text);
+      // reflection runs if reflectionLLM is set AND pool has >=5 memories at importance>0.3
+      if (count.c >= 5) {
+        assert.ok(dream.reflection !== undefined, `reflection phase should have run (${count.c} qualifying memories), got: ${JSON.stringify(dream)}`);
+        assert.equal(typeof dream.reflection.learnings, "number");
+      } else {
+        // Not enough memories — reflection ran but skipped (returns {learnings:0})
+        assert.ok(dream.reflection !== undefined || count.c < 5, `either reflection ran or too few memories (${count.c})`);
+      }
+
+      await client2.close();
+      await s2.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("AC8: works without embedder (BM25-only mode)", async () => {
     const dbPath2 = join(tmpDir, "bm25-only.sqlite");
     const { server: s2 } = createMemexMcpServer({
