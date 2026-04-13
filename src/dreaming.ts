@@ -226,13 +226,13 @@ export async function reflectionSweep(
   let learnings = 0;
   let contradictions = 0;
 
-  // Gather recent high-value memories for synthesis (importance > 0.3, limit 100)
+  // Gather recent high-value memories for synthesis (importance > 0.3, limit 50)
   const memories = db.prepare(`
     SELECT id, text, category, importance, timestamp
     FROM memories
     WHERE importance > 0.3
     ORDER BY timestamp DESC
-    LIMIT 100
+    LIMIT 50
   `).all() as Array<{
     id: string;
     text: string;
@@ -265,7 +265,7 @@ export async function reflectionSweep(
           { role: "user", content: memoryBlock },
         ],
         temperature: 0.3,
-        max_tokens: llmConfig.maxTokens ?? 2048,
+        max_tokens: llmConfig.maxTokens ?? 8192,
       }),
       signal: AbortSignal.timeout(llmConfig.timeout ?? 120_000),
     });
@@ -278,7 +278,10 @@ export async function reflectionSweep(
     }
 
     const data = await resp.json() as any;
-    const content = (data.choices?.[0]?.message?.content?.trim() || "") as string;
+    const msg = data.choices?.[0]?.message;
+    // Only use content field — reasoning_content is the model's thinking process, not output.
+    // If content is empty (reasoning model used all tokens on thinking), treat as no result.
+    const content = (msg?.content?.trim() || "") as string;
 
     if (content === "NONE" || !content) {
       log(logPath, "dream:reflect", { learnings: 0, contradictions: 0 });
