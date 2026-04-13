@@ -48,9 +48,18 @@
 - 2026-04-12: Server reads secrets via env vars, not hardcoded — op injection via `op run` in .mcp.json
 - 2026-04-12: Dreaming reflection uses Stanford Generative Agents pattern (threshold → questions → synthesis)
 
+## Recently Completed (continued)
+
+- **LLM config wired into MCP server** — MEMEX_LLM_ENDPOINT / MEMEX_LLM_MODEL, op injection for API key
+- **Reflection E2E tested** — 3 learnings synthesized, 2 contradictions detected from production DB
+- **Dry-run script** — scripts/dream-dry-run.ts simulates all 3 phases without modifying DB
+- **Dreaming docs** — docs/dreaming.html with decision tree, reflection flow, intake guards
+- **Navigation** — shared nav bar across all 5 doc pages
+- **Session import eviction** — 1,652 entries decayed to 0.1, will evict when crossing 30d threshold
+
 ## Next Session Should
 
-1. **Add LLM config to MCP server** — `MEMEX_LLM_ENDPOINT` / `MEMEX_LLM_MODEL` env vars, wire into reflection
-2. **Test reflection on production data** — run dream cycle with reflection, verify learnings are sensible
-3. **Focus on dreaming** — this is now the core feature. Reflection → contradiction detection → memory evolution
+1. **Verify session import eviction** — entries cross 30d on ~April 14, pool should shrink to ~463
+2. **Model bakeoff** — EmbeddingGemma-300M, Contextual AI Reranker v2
+3. **Dreaming refinement** — tune reflection prompt, test contradiction detection accuracy
 4. Reference `02-projects.md` for ACs, `ROADMAP.md` for strategic context
