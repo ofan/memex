@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memex — Dreaming</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2129; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e;
+    --blue: #58a6ff; --green: #7ee787; --purple: #d2a8ff; --orange: #ffa657;
+    --red: #ff7b72; --cyan: #79c0ff; --yellow: #e3b341;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); padding: 2rem;
+    max-width: 1100px; margin: 0 auto; line-height: 1.6;
+  }
+  h1 { font-size: 1.8rem; margin-bottom: 0.25rem; background: linear-gradient(135deg, var(--purple), var(--blue)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
+  h2 { font-size: 1.2rem; margin: 2.5rem 0 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+
+  /* Phase pipeline */
+  .pipeline {
+    display: flex; align-items: stretch; gap: 0; margin: 1.5rem 0; overflow-x: auto;
+  }
+  .phase {
+    flex: 1; min-width: 220px; padding: 1.25rem;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    position: relative; overflow: hidden;
+  }
+  .phase::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  }
+  .phase.light::before { background: var(--cyan); }
+  .phase.deep::before { background: var(--blue); }
+  .phase.reflect::before { background: var(--purple); }
+  .phase-arrow { display: flex; align-items: center; padding: 0 0.5rem; color: var(--muted); font-size: 1.4rem; }
+  .phase h3 { font-size: 0.9rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; }
+  .phase.light h3 { color: var(--cyan); }
+  .phase.deep h3 { color: var(--blue); }
+  .phase.reflect h3 { color: var(--purple); }
+  .phase .tag { font-size: 0.6rem; padding: 0.1rem 0.4rem; border-radius: 8px; font-weight: 600; }
+  .tag-nollm { background: rgba(126,231,135,0.15); color: var(--green); }
+  .tag-llm { background: rgba(210,168,255,0.15); color: var(--purple); }
+
+  /* Operation list */
+  .ops { list-style: none; padding: 0; margin: 0; }
+  .ops li {
+    font-size: 0.85rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-start; gap: 0.5rem;
+  }
+  .ops li:last-child { border-bottom: none; }
+  .op-icon { font-size: 0.75rem; margin-top: 0.15rem; flex-shrink: 0; width: 1.2rem; text-align: center; }
+  .op-text { color: var(--muted); }
+  .op-text strong { color: var(--text); font-weight: 600; }
+
+  /* Decision tree */
+  .tree { margin: 1.5rem 0; }
+  .tree-node {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.75rem 1rem; margin-bottom: 0.5rem; font-size: 0.85rem;
+    display: flex; align-items: center; gap: 0.75rem;
+  }
+  .tree-node.condition { border-left: 3px solid var(--yellow); }
+  .tree-node.action-boost { border-left: 3px solid var(--green); }
+  .tree-node.action-decay { border-left: 3px solid var(--red); }
+  .tree-node.action-evict { border-left: 3px solid var(--orange); }
+  .tree-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; width: 3rem; flex-shrink: 0; text-align: center; }
+  .tree-node.condition .tree-label { color: var(--yellow); }
+  .tree-node.action-boost .tree-label { color: var(--green); }
+  .tree-node.action-decay .tree-label { color: var(--red); }
+  .tree-node.action-evict .tree-label { color: var(--orange); }
+  .tree-detail { color: var(--muted); }
+  .tree-detail code { background: var(--surface2); padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.8rem; color: var(--text); }
+
+  /* Reflection detail */
+  .reflect-flow {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin: 1.5rem 0;
+  }
+  .rf-step {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; text-align: center; position: relative;
+  }
+  .rf-step .rf-num {
+    width: 1.5rem; height: 1.5rem; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 0.7rem; font-weight: 700; color: var(--purple);
+    position: absolute; top: -0.5rem; left: -0.5rem;
+  }
+  .rf-step h4 { font-size: 0.8rem; color: var(--purple); margin-bottom: 0.35rem; }
+  .rf-step p { font-size: 0.75rem; color: var(--muted); }
+  .rf-arrow { display: none; }
+
+  /* Intake guards */
+  .guards {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin: 1.5rem 0;
+  }
+  .guard {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; border-top: 3px solid var(--green);
+  }
+  .guard h4 { font-size: 0.8rem; color: var(--green); margin-bottom: 0.35rem; }
+  .guard p { font-size: 0.8rem; color: var(--muted); }
+
+  /* Schedule */
+  .schedule-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin: 1.5rem 0;
+  }
+  .sched-item {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; text-align: center;
+  }
+  .sched-item .sched-when { font-size: 1.1rem; font-weight: 700; color: var(--orange); margin-bottom: 0.25rem; }
+  .sched-item .sched-what { font-size: 0.8rem; color: var(--muted); }
+
+  /* Example output */
+  .example {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; font-family: monospace; font-size: 0.75rem; color: var(--muted);
+    margin: 1rem 0; overflow-x: auto; white-space: pre;
+  }
+  .example .ts { color: var(--muted); }
+  .example .tag-light { color: var(--cyan); }
+  .example .tag-deep { color: var(--blue); }
+  .example .tag-reflect { color: var(--purple); }
+  .example .num { color: var(--green); }
+  .example .warn { color: var(--yellow); }
+
+  /* Stats cards */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin: 1.5rem 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; text-align: center; }
+  .stat .val { font-size: 1.4rem; font-weight: 700; }
+  .stat .lbl { font-size: 0.7rem; color: var(--muted); margin-top: 0.15rem; }
+  .stat.good .val { color: var(--green); }
+  .stat.warn .val { color: var(--yellow); }
+  .stat.bad .val { color: var(--red); }
+  .stat.info .val { color: var(--blue); }
+
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.75rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Memex Dreaming</h1>
+<p class="subtitle">Memory consolidation system &mdash; three phases of autonomous knowledge maintenance</p>
+
+<!-- ===== Pipeline Overview ===== -->
+<h2>Three-Phase Pipeline</h2>
+<div class="pipeline">
+  <div class="phase light">
+    <h3>Light Sweep <span class="tag tag-nollm">no LLM</span></h3>
+    <ul class="ops">
+      <li><span class="op-icon" style="color:var(--red)">x</span><span class="op-text"><strong>Exact dedup</strong> &mdash; group by text, keep newest</span></li>
+      <li><span class="op-icon" style="color:var(--red)">x</span><span class="op-text"><strong>Fragment purge</strong> &mdash; single-turn [user]/[assistant] entries</span></li>
+      <li><span class="op-icon" style="color:var(--red)">x</span><span class="op-text"><strong>Noise scan</strong> &mdash; isNoise() on all entries ("ok", "got it")</span></li>
+    </ul>
+  </div>
+  <div class="phase-arrow">&rarr;</div>
+  <div class="phase deep">
+    <h3>Deep Sweep <span class="tag tag-nollm">no LLM</span></h3>
+    <ul class="ops">
+      <li><span class="op-icon" style="color:var(--green)">&uarr;</span><span class="op-text"><strong>Recall boost</strong> &mdash; recalled 5+ &rarr; importance &ge; 0.7</span></li>
+      <li><span class="op-icon" style="color:var(--red)">&darr;</span><span class="op-text"><strong>Age decay</strong> &mdash; never recalled &gt;30d &rarr; &le; 0.3</span></li>
+      <li><span class="op-icon" style="color:var(--orange)">&darr;</span><span class="op-text"><strong>Session decay</strong> &mdash; imports &gt;14d &rarr; 0.1, &gt;30d &rarr; evict</span></li>
+      <li><span class="op-icon" style="color:var(--red)">&darr;</span><span class="op-text"><strong>Ephemeral decay</strong> &mdash; "was committed/pushed" &gt;30d &rarr; 0.1</span></li>
+      <li><span class="op-icon" style="color:var(--orange)">x</span><span class="op-text"><strong>Eviction</strong> &mdash; importance &le; 0.05 deleted</span></li>
+    </ul>
+  </div>
+  <div class="phase-arrow">&rarr;</div>
+  <div class="phase reflect">
+    <h3>Reflection <span class="tag tag-llm">needs LLM</span></h3>
+    <ul class="ops">
+      <li><span class="op-icon" style="color:var(--purple)">?</span><span class="op-text"><strong>Gather</strong> &mdash; top 50 memories (importance &gt; 0.3)</span></li>
+      <li><span class="op-icon" style="color:var(--purple)">&rarr;</span><span class="op-text"><strong>Synthesize</strong> &mdash; LLM produces 3 learnings</span></li>
+      <li><span class="op-icon" style="color:var(--yellow)">!</span><span class="op-text"><strong>Contradictions</strong> &mdash; SUPERSEDED markers demote old</span></li>
+      <li><span class="op-icon" style="color:var(--green)">+</span><span class="op-text"><strong>Store</strong> &mdash; learnings at category=learning, importance=0.85</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== Deep Sweep Decision Tree ===== -->
+<h2>Deep Sweep &mdash; Importance Scoring Rules</h2>
+<div class="tree">
+  <div class="tree-node condition">
+    <span class="tree-label">if</span>
+    <span class="tree-detail"><code>recall_count &ge; 5</code> &mdash; frequently recalled, proven valuable</span>
+  </div>
+  <div class="tree-node action-boost">
+    <span class="tree-label">boost</span>
+    <span class="tree-detail">importance &rarr; max(current, <code>0.7</code>)</span>
+  </div>
+
+  <div class="tree-node condition">
+    <span class="tree-label">if</span>
+    <span class="tree-detail"><code>recall_count 1-4</code> &mdash; recalled at least once</span>
+  </div>
+  <div class="tree-node action-boost">
+    <span class="tree-label">boost</span>
+    <span class="tree-detail">importance &rarr; max(current, <code>0.5</code>)</span>
+  </div>
+
+  <div class="tree-node condition">
+    <span class="tree-label">if</span>
+    <span class="tree-detail"><code>recall_count = 0</code> + <code>age &gt; 90d</code> &mdash; old, never useful</span>
+  </div>
+  <div class="tree-node action-decay">
+    <span class="tree-label">decay</span>
+    <span class="tree-detail">importance &rarr; min(current, <code>0.1</code>)</span>
+  </div>
+
+  <div class="tree-node condition">
+    <span class="tree-label">if</span>
+    <span class="tree-detail"><code>recall_count = 0</code> + <code>age &gt; 30d</code> &mdash; aging, unproven</span>
+  </div>
+  <div class="tree-node action-decay">
+    <span class="tree-label">decay</span>
+    <span class="tree-detail">importance &rarr; min(current, <code>0.3</code>)</span>
+  </div>
+
+  <div class="tree-node condition">
+    <span class="tree-label">if</span>
+    <span class="tree-detail"><code>source = session-import</code> + <code>recall = 0</code> + <code>imp &le; 0.3</code> + <code>age &gt; 30d</code></span>
+  </div>
+  <div class="tree-node action-evict">
+    <span class="tree-label">evict</span>
+    <span class="tree-detail">importance &rarr; <code>0.05</code> (triggers deletion)</span>
+  </div>
+
+  <div class="tree-node condition">
+    <span class="tree-label">if</span>
+    <span class="tree-detail"><code>source = session-import</code> + <code>recall = 0</code> + <code>imp &le; 0.3</code> + <code>age &gt; 14d</code></span>
+  </div>
+  <div class="tree-node action-decay">
+    <span class="tree-label">decay</span>
+    <span class="tree-detail">importance &rarr; min(current, <code>0.1</code>)</span>
+  </div>
+
+  <div class="tree-node condition">
+    <span class="tree-label">if</span>
+    <span class="tree-detail">matches ephemeral pattern ("was committed/pushed/deleted") + <code>age &gt; 30d</code> + <code>imp &lt; 0.5</code></span>
+  </div>
+  <div class="tree-node action-decay">
+    <span class="tree-label">decay</span>
+    <span class="tree-detail">importance &rarr; min(current, <code>0.1</code>)</span>
+  </div>
+</div>
+
+<!-- ===== Reflection Detail ===== -->
+<h2>Reflection &mdash; LLM Knowledge Synthesis</h2>
+<div class="reflect-flow">
+  <div class="rf-step">
+    <div class="rf-num">1</div>
+    <h4>Gather</h4>
+    <p>Select top 50 memories with importance &gt; 0.3, ordered by timestamp DESC</p>
+  </div>
+  <div class="rf-step">
+    <div class="rf-num">2</div>
+    <h4>Prompt LLM</h4>
+    <p>Send memories as <code>[id] [category] text</code> with system prompt asking for 3 themes + contradictions</p>
+  </div>
+  <div class="rf-step">
+    <div class="rf-num">3</div>
+    <h4>Parse Output</h4>
+    <p>Extract learnings (plain lines &ge;20 chars) and SUPERSEDED markers (<code>old_id|new_id|reason</code>)</p>
+  </div>
+  <div class="rf-step">
+    <div class="rf-num">4</div>
+    <h4>Store &amp; Demote</h4>
+    <p>Learnings &rarr; <code>category: "learning"</code> at 0.85 importance. Contradicted memories &rarr; demoted to 0.1</p>
+  </div>
+</div>
+
+<p style="font-size:0.85rem;color:var(--muted);margin-top:0.5rem">
+  <strong>Idempotent:</strong> learnings are deduped via SHA-256 text hash. Running reflection twice produces the same result.
+  <strong>Graceful skip:</strong> if &lt;5 qualifying memories or no LLM configured, reflection returns immediately.
+</p>
+
+<!-- ===== Intake Guards ===== -->
+<h2>Intake Guards (Write-Time Prevention)</h2>
+<div class="guards">
+  <div class="guard">
+    <h4>Text Hash Dedup</h4>
+    <p>SHA-256 hash checked before embedding. Exact duplicates silently rejected. Zero cost &mdash; index lookup only.</p>
+  </div>
+  <div class="guard">
+    <h4>Fragment Rejection</h4>
+    <p>Entries starting with <code>[user]</code> or <code>[assistant]</code> blocked at store(). Raw dialogue is not distilled knowledge.</p>
+  </div>
+  <div class="guard">
+    <h4>Noise Filter</h4>
+    <p><code>isNoise()</code> rejects filler ("ok", "got it", "thanks"). Prevents low-quality entries from ever entering the pool.</p>
+  </div>
+</div>
+
+<!-- ===== Schedule ===== -->
+<h2>Scheduling</h2>
+<div class="schedule-grid">
+  <div class="sched-item">
+    <div class="sched-when">T+5min</div>
+    <div class="sched-what">First dream cycle after<br>MCP server startup</div>
+  </div>
+  <div class="sched-item">
+    <div class="sched-when">Every 24h</div>
+    <div class="sched-what">Recurring schedule<br>(configurable via MEMEX_DREAM_INTERVAL)</div>
+  </div>
+  <div class="sched-item">
+    <div class="sched-when">On demand</div>
+    <div class="sched-what"><code>memory_dream</code> tool<br>phase: light | deep | reflect | all</div>
+  </div>
+</div>
+
+<!-- ===== Production Results ===== -->
+<h2>Production Results (April 2026)</h2>
+<div class="stats">
+  <div class="stat info"><div class="val">2,112</div><div class="lbl">memories in pool</div></div>
+  <div class="stat good"><div class="val">3</div><div class="lbl">learnings synthesized</div></div>
+  <div class="stat good"><div class="val">2</div><div class="lbl">contradictions detected</div></div>
+  <div class="stat warn"><div class="val">108ms</div><div class="lbl">light+deep duration</div></div>
+</div>
+
+<h3 style="font-size:0.9rem;margin:1rem 0 0.5rem;color:var(--purple)">Sample Learnings (from real production data)</h3>
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1rem;font-size:0.85rem;">
+  <div style="padding:0.4rem 0;border-bottom:1px solid var(--border)">
+    <span style="color:var(--purple);font-weight:600">Learning 1:</span>
+    <span style="color:var(--text)">Virgil's local inference prioritizes stability with Qwen3.5-27B-dense as the primary model and requires streaming enabled across all lanes to prevent timeouts.</span>
+  </div>
+  <div style="padding:0.4rem 0;border-bottom:1px solid var(--border)">
+    <span style="color:var(--purple);font-weight:600">Learning 2:</span>
+    <span style="color:var(--text)">OpenClaw configuration reliability depends on verifying live runtime state against tracked files and explicitly sourcing secrets from the 'OpenClaw' 1Password vault.</span>
+  </div>
+  <div style="padding:0.4rem 0">
+    <span style="color:var(--purple);font-weight:600">Learning 3:</span>
+    <span style="color:var(--text)">Alerting infrastructure is consolidated into Discord via relay adapters for Changedetection and Gatus, eliminating direct webhooks and WhatsApp.</span>
+  </div>
+</div>
+
+<!-- ===== Log Output ===== -->
+<h2>Log Output</h2>
+<div class="example"><span class="ts">2026-04-12T18:30:00.000Z</span> [<span class="tag-light">dream:light</span>] deduped=<span class="num">0</span> noise_removed=<span class="num">0</span> fragments_removed=<span class="num">0</span>
+<span class="ts">2026-04-12T18:30:00.108Z</span> [<span class="tag-deep">dream:deep</span>] rescored=<span class="num">0</span> decayed=<span class="num">1650</span> evicted=<span class="num">0</span>
+<span class="ts">2026-04-12T18:30:45.231Z</span> [<span class="tag-reflect">dream:reflect</span>] learnings=<span class="num">3</span> contradictions=<span class="num">2</span> errors=<span class="num">0</span>
+<span class="ts">2026-04-12T18:30:45.232Z</span> [dream:cycle] summary=light(...) deep(...) reflect(...) duration_ms=<span class="num">45232</span></div>
+
+<footer>Memex Dreaming &mdash; April 2026 &mdash; 27 tests</footer>
+
+<script src="/nav.js"></script>
+</body>
+</html>
