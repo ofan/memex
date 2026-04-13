@@ -42,7 +42,17 @@ export function createMemexMcpServer(options: McpServerOptions) {
 
   const server = new McpServer(
     { name: "memex", version: "0.6.0" },
-    { capabilities: { tools: {} } },
+    {
+      capabilities: { tools: {} },
+      instructions: [
+        "You have access to a long-term memory system (memex).",
+        "At the START of each conversation, call memory_recall with a query based on the user's first message to load relevant context.",
+        "When you learn a new preference, fact, decision, or important insight, call memory_store to save it for future conversations.",
+        "Do NOT store: ephemeral file paths, temporary debugging state, or information already in the current conversation context.",
+        "DO store: user preferences, architectural decisions, project conventions, lessons learned, infrastructure details.",
+        "Memory is shared across all your sessions — what you store now will be recalled in future conversations.",
+      ].join(" "),
+    },
   );
 
   // ── memory_store ──────────────────────────────────────────────────────────
