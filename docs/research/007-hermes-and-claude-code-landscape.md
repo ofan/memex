@@ -107,10 +107,107 @@ Memories never referenced in N sessions auto-demote. Similar to memex's recall-c
 
 Think: **SQLite vs PostgreSQL**. Both are databases. One is zero-config and everywhere. The other is powerful and requires setup. Both have their market.
 
-## 7. Open Questions (updated)
+## 7. Deep Dive: hermes-memory Architecture
 
-1. Should memex offer a **BM25-only zero-config mode** as the default, with embeddings as an upgrade? (Currently the opposite — embeddings expected, BM25 as fallback.)
-2. Should memex adopt the **hot/cold tier** pattern for context injection? (Small always-in-context summary + deeper recall on demand.)
-3. Should memex add **write-time contradiction detection** as a lightweight alternative to full dreaming reflection?
-4. Is per-project DB the right default, or should memex default to **global with project scoping**?
-5. Should memex **generate MEMORY.md** sections that Claude Code's built-in system can use? (Complement the built-in, don't compete with it.)
+### Hot/Cold Tier
+- **Hot**: ~150 tokens injected at session start. Deliberately tiny — under 180 tokens regardless of memory size.
+- **Cold**: SQLite + FTS5, unlimited, queried on demand. Max 20 results per search.
+- **Pressure relief**: 70% → merge duplicates. 85% → archive closed scopes. 95% → LLM consolidation or evict oldest.
+
+### MEMORY_SPEC Notation
+Typed prefixes: `C[target]` constraint, `D[target]` decision, `V[target]` value, `?[target]` unknown, `~[target]` obsolete.
+Example: `D[auth]: JWT 7j refresh 6j`. 65-78% compression vs prose.
+
+### Scope Lifecycle
+Scope = unit of work (feature, bug). Opens on first write. Closes on signals ("merged", "deployed"), 6 idle turns, or 3 turns on different scope. Closed → cold automatically.
+
+### Key insight
+hermes-memory is NOT a retrieval system. It's a **structured fact store with lifecycle semantics**. Very different from memex's RAG approach. No embeddings, no semantic search — just typed facts with automatic tiering.
+
+## 8. Deep Dive: Claude Code Built-in Auto Memory
+
+### How it works
+- Stored at `~/.claude/projects/<project>/memory/`
+- MEMORY.md is a concise index (target: 200 lines / 25KB)
+- When details accumulate, Claude creates topic files (`debugging.md`, `api-conventions.md`)
+- Topic files NOT auto-loaded — read on demand via file tools
+- **Auto Dream** (background sub-agent) consolidates after 24+ hours and 5+ sessions
+
+### Triggers
+- Automatic: Claude writes when it learns build commands, style prefs, architecture decisions
+- Explicit: "remember that we use pnpm", "save to memory"
+- Background: Auto Dream reorganizes between sessions
+
+### Known limitations (user complaints)
+- **Silent truncation** — entries past 200 lines silently lost (#39811, #40210)
+- **No semantic search** — flat file loading, no meaning-based recall
+- **Newest lost first** — append-at-bottom + truncate-from-bottom = recent context discarded
+- **No line-count feedback** — Claude never reports proximity to limit
+- **No extension API** — `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` disables but no hooks to extend
+
+### Implication for memex
+Claude Code's memory is project-scoped (`~/.claude/projects/<project>/`), plain markdown, has a background consolidation agent, but has hard capacity limits and no semantic search. The truncation bug is a real pain point memex could solve.
+
+## 9. Deep Dive: Mature Competitors
+
+### mcp-memory-service (doobidoo) — the established choice
+- **1,300 stars**, 180+ releases, v10.25.1
+- SQLite-vec or ChromaDB backend. Sentence-transformers embeddings. Hybrid retrieval.
+- **24 MCP tools** + REST API + HTTP dashboard
+- Heavy: Python, PyTorch optional, ~150MB minimum
+- LongMemEval ~86% R@5 with session storage
+- Setup: Docker (2 min) or pip install
+
+### agentmemory (rohitg00) — the new contender
+- **736 stars**, 2 months old, Apache-2.0
+- BM25 + vector + knowledge graph fusion (triple-hybrid)
+- **43 MCP tools**, 12 auto-capture hooks, real-time viewer
+- One command: `npx @agentmemory/agentmemory`
+- Cross-agent by default — shared memory across all clients
+- Young, API may shift
+
+### Neither approaches memex's quality
+- doobidoo: ~86% R@5 vs memex 96% R@5
+- agentmemory: unverified claims
+- Neither has dreaming/reflection
+
+## 10. Competitive Landscape Summary
+
+| System | Approach | Embeddings | Capacity | Search | Dreaming | Setup |
+|---|---|---|---|---|---|---|
+| **Claude built-in** | MEMORY.md files | No | 200 lines | No search | Auto Dream | Zero |
+| **hermes-memory** | Typed facts, hot/cold | No | Unlimited cold | FTS5 | No | `pip install` |
+| **doobidoo** | Vector DB | Yes (sentence-transformers) | Unlimited | Hybrid | No | Docker/pip |
+| **agentmemory** | Triple-hybrid | Yes (local) | Unlimited | BM25+vec+graph | No | `npx` |
+| **Memex** | SQLite + sqlite-vec | Yes (configurable) | Unlimited | Hybrid + rerank | **Yes (3-phase)** | MCP config |
+
+## 11. Strategic Recommendations
+
+### What memex should do for Claude Code
+
+**Don't compete with built-in Auto Memory on basic persistence.** Claude already does that. Instead:
+
+1. **Semantic recall** — Claude's memory has no search. Memex has 94% E2E retrieval. This is the killer feature.
+
+2. **Dreaming/reflection** — No competitor has offline consolidation. Learnings, contradiction detection, memory evolution. Unique differentiator.
+
+3. **Unlimited capacity** — Claude's 200-line cap with silent truncation is a real pain point. Memex has no cap.
+
+4. **Complement MEMORY.md, don't replace it** — Use Claude's built-in for static project rules. Memex for dynamic knowledge that grows beyond 200 lines.
+
+5. **BM25-only as viable default** — Not everyone has an embedding server. hermes-memory proves FTS5-only is useful. Make BM25 the zero-config path, embeddings the upgrade.
+
+### What memex should NOT do
+
+1. Don't try to be zero-config simpler than `pip install hermes-memory`
+2. Don't add 43 tools (agentmemory) — keep the 5-tool surface area
+3. Don't build a dashboard or REST API — stay focused on memory quality
+4. Don't try to replace CLAUDE.md — it's version-controlled and team-shared
+
+### Open Questions
+
+1. **Should memex generate a `memories.md` file** that Claude's Auto Dream can discover and incorporate?
+2. **Should the hot/cold tier pattern** be adopted? (Small injected summary + deep recall on demand)
+3. **Should BM25-only be the default** with embeddings as opt-in?
+4. **Per-project or global?** Claude Code is project-scoped. Memex is currently global. Should it match?
+5. **Write-time contradiction detection** — lightweight cosine check before dreaming, or keep it batch-only?
