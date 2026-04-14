@@ -1,65 +1,68 @@
 # Progress
 
-## Last Updated: 2026-04-12
+## Last Updated: 2026-04-13
 
 ## Current State
 
 **Retrieval quality:** 94% E2E (LongMemEval, GPT-4o), 82% R@1, 90% R@3. Domain eval 12/15.
-**Test suite:** 709 tests, all passing.
-**Architecture:** Single SQLite DB. Dual retriever: MemoryRetriever (tools) + UnifiedRetriever (auto-recall). MCP server for cross-platform access.
+**Test suite:** 710 tests, all passing.
+**Architecture:** Single SQLite DB. Dual retriever: MemoryRetriever (tools) + UnifiedRetriever (auto-recall). MCP server for cross-platform access. Background dreaming with LLM reflection.
 
 ## Roadmap Status
 
 | # | Project | Status |
 |---|---|---|
-| 1 | Pool Cleanup | **Done** — session import decay (>14d → 0.1, >30d → evict), entity boost/graph gated off |
-| 2 | MCP Server | **Done** — 5 tools (recall/store/forget/dream/stats), stdio transport, env-driven config, op injection, BM25-only fallback, background dreaming. 10 tests. E2E verified against production DB. |
-| 3 | Dreaming Reflection | **Done** — Stanford question synthesis, contradiction detection via SUPERSEDED markers, idempotent learning storage. 5 tests. Not yet tested on production data. |
+| 1 | Pool Cleanup | **Done** — session import decay, entity gating, 1,652 entries at 0.1 pending eviction |
+| 2 | MCP Server | **Done** — 5 tools, stdio, env config, op injection, BM25 fallback, background dreaming, server instructions. 11 tests. Live in Claude Code. |
+| 3 | Dreaming Reflection | **Done** — Stanford question synthesis, contradiction detection, LLM wiring, E2E verified (3 learnings, 2 contradictions from production). 27 dreaming tests. |
 | ~~4~~ | ~~Session Import v2~~ | **Killed** — real-time capture via `memory_store` replaces batch import |
 | 4 | Model Bakeoff | Queued — EmbeddingGemma-300M, Contextual AI Reranker v2 |
-| 5 | Memory Hierarchy | Future — topic → episode → fact structure |
+| 5 | Memory Hierarchy | Future |
+| **NEW** | Claude Code Integration | **Research needed** — design doc at `docs/design/claude-code-integration.md` |
 
-## Commits This Session (2026-04-12)
+## Commits This Session (2026-04-12 to 2026-04-13)
 
 | Commit | What |
 |---|---|
 | `aa37247` | Pool cleanup: session import decay + entity feature gating |
 | `56b52f2` | MCP server: 5 tools, stdio, background dreaming |
 | `f384b01` | Dreaming reflection: LLM synthesis + contradiction detection |
-| `165aabb` | MCP: shared DB test, BM25-only mode, .mcp.json |
+| `165aabb` | MCP: shared DB, BM25-only mode |
 | `7bebad9` | Gitignore .mcp.json, env var for API key |
 | `cc58895` | .mcp.json: jiti loader, absolute paths |
-| `9315017` | MCP: full env-driven config, op for API key, base URL |
-| `01201ed` | Remove hardcoded op call from server code |
+| `9315017` | MCP: full env-driven config, op for API key |
+| `01201ed` | Remove hardcoded op call from server |
+| `eacef48` | Kill session import v2, dreaming is core feature |
+| `85c212a` | Wire LLM config into MCP server for reflection |
+| `a65e0b0` | Fix: reflection handles reasoning models, max_tokens 8192 |
+| `e064b65` | Configurable background dreaming schedule |
+| `4720c17` | Dreaming dry-run script + docs visualization |
+| `0543cfe` | Progress update |
+| `84decae` | MCP server instructions — auto-recall and auto-store |
 
-## Pool State
+## Key Decisions
 
-- 2,112 memories total
-- 1,666 session imports (importance 0.3, from March 14 batch) — will be evicted when >30 days old
-- 263 agent-stored memories (importance 0.6-0.95)
-- 21 memories ever recalled (recall tracking added April 8; 254 agent memories predate it)
-- After cleanup: pool will shrink to ~450 memories
+- 2026-04-13: MCP server instructions inject auto-recall/auto-store prompting via protocol (more reliable than CLAUDE.md)
+- 2026-04-13: Session import v2 killed — real-time capture replaces batch import
+- 2026-04-13: Dreaming is the core feature — the memory lifecycle
+- 2026-04-13: Claude Code integration needs product design research (use cases, DB strategy, embedding strategy)
+- 2026-04-12: MCP server is infrastructure, not just adoption
+- 2026-04-12: Entity boost + entity graph gated off (net-neutral on quality)
+- 2026-04-12: Session import decay rules (>14d → 0.1, >30d → evict)
+- 2026-04-12: op injection via `op run` in .mcp.json for secrets
 
-## Key Decisions This Session
+## Open Questions (Claude Code Integration)
 
-- 2026-04-12: MCP server is infrastructure (enables background processing), not just adoption
-- 2026-04-12: Entity boost + entity graph gated behind disabled-by-default config flags
-- 2026-04-12: Session import decay: source=session + never-recalled + imp≤0.3 → 0.1 after 14d, evict after 30d
-- 2026-04-12: Server reads secrets via env vars, not hardcoded — op injection via `op run` in .mcp.json
-- 2026-04-12: Dreaming reflection uses Stanford Generative Agents pattern (threshold → questions → synthesis)
+1. **DB scope:** Global pool (shared with OpenClaw) vs per-project vs layered?
+2. **Embedding strategy:** Zero-config BM25-only vs bundled local model vs cloud API?
+3. **CLAUDE.md relationship:** Complement (static rules vs dynamic memory) vs generate sections?
+4. **Document search:** Needed in Claude Code (which has file access) or OpenClaw-only?
+5. **Standalone product:** Should memex work for users without OpenClaw?
 
-## Recently Completed (continued)
-
-- **LLM config wired into MCP server** — MEMEX_LLM_ENDPOINT / MEMEX_LLM_MODEL, op injection for API key
-- **Reflection E2E tested** — 3 learnings synthesized, 2 contradictions detected from production DB
-- **Dry-run script** — scripts/dream-dry-run.ts simulates all 3 phases without modifying DB
-- **Dreaming docs** — docs/dreaming.html with decision tree, reflection flow, intake guards
-- **Navigation** — shared nav bar across all 5 doc pages
-- **Session import eviction** — 1,652 entries decayed to 0.1, will evict when crossing 30d threshold
+Design doc: `docs/design/claude-code-integration.md`
 
 ## Next Session Should
 
-1. **Verify session import eviction** — entries cross 30d on ~April 14, pool should shrink to ~463
-2. **Model bakeoff** — EmbeddingGemma-300M, Contextual AI Reranker v2
-3. **Dreaming refinement** — tune reflection prompt, test contradiction detection accuracy
-4. Reference `02-projects.md` for ACs, `ROADMAP.md` for strategic context
+1. **Research Claude Code integration** — study how other MCP memory servers handle DB scope, embedding, project context
+2. **Verify session import eviction** — entries cross 30d on ~April 14
+3. **Decide on Claude Code product direction** based on research
