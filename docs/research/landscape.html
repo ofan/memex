@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memex — Competitive Landscape</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2129; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e;
+    --blue: #58a6ff; --green: #7ee787; --purple: #d2a8ff; --orange: #ffa657;
+    --red: #ff7b72; --cyan: #79c0ff; --yellow: #e3b341;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); padding: 2rem;
+    max-width: 1200px; margin: 0 auto; line-height: 1.6;
+  }
+  h1 { font-size: 1.8rem; margin-bottom: 0.25rem; background: linear-gradient(135deg, var(--orange), var(--yellow)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
+  h2 { font-size: 1.2rem; margin: 2.5rem 0 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1rem; margin: 1.5rem 0 0.5rem; }
+
+  /* Comparison table */
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+  th { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 2px solid var(--border); color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: var(--surface); }
+  .yes { color: var(--green); font-weight: 600; }
+  .no { color: var(--muted); }
+  .partial { color: var(--yellow); }
+  .best { color: var(--green); font-weight: 700; }
+  .memex-row td { background: rgba(88,166,255,0.05); }
+  .memex-row td:first-child { color: var(--blue); font-weight: 700; }
+
+  /* System cards */
+  .systems { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .sys-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; position: relative; overflow: hidden; }
+  .sys-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .sys-card.hermes::before { background: var(--orange); }
+  .sys-card.builtin::before { background: var(--cyan); }
+  .sys-card.doobidoo::before { background: var(--green); }
+  .sys-card.agentmem::before { background: var(--purple); }
+  .sys-card.memex-card::before { background: linear-gradient(90deg, var(--blue), var(--purple)); }
+  .sys-card h3 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+  .sys-card.hermes h3 { color: var(--orange); }
+  .sys-card.builtin h3 { color: var(--cyan); }
+  .sys-card.doobidoo h3 { color: var(--green); }
+  .sys-card.agentmem h3 { color: var(--purple); }
+  .sys-card.memex-card h3 { color: var(--blue); }
+  .sys-meta { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.75rem; }
+  .sys-features { list-style: none; padding: 0; }
+  .sys-features li { font-size: 0.8rem; padding: 0.2rem 0; color: var(--muted); padding-left: 1rem; position: relative; }
+  .sys-features li::before { content: '·'; position: absolute; left: 0; color: var(--border); font-weight: 700; }
+  .sys-features strong { color: var(--text); }
+
+  /* Insight box */
+  .insight { background: var(--surface); border-left: 3px solid var(--purple); padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; margin: 1.5rem 0; }
+  .insight .label { color: var(--purple); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+  .insight p { font-size: 0.85rem; color: var(--muted); }
+  .insight strong { color: var(--text); }
+
+  /* Pain points */
+  .pain { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+  .pain-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; border-left: 3px solid var(--red); }
+  .pain-item h4 { font-size: 0.8rem; color: var(--red); margin-bottom: 0.25rem; }
+  .pain-item p { font-size: 0.8rem; color: var(--muted); margin: 0; }
+
+  /* Strategy cards */
+  .strategy { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+  .strat-do { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; border-top: 3px solid var(--green); }
+  .strat-dont { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; border-top: 3px solid var(--red); }
+  .strat-do h4 { font-size: 0.8rem; color: var(--green); margin-bottom: 0.4rem; }
+  .strat-dont h4 { font-size: 0.8rem; color: var(--red); margin-bottom: 0.4rem; }
+  .strat-do p, .strat-dont p { font-size: 0.8rem; color: var(--muted); margin: 0; }
+
+  /* Questions */
+  .questions { list-style: none; counter-reset: q; padding: 0; margin: 1rem 0; }
+  .questions li { counter-increment: q; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem 0.75rem 3rem; margin-bottom: 0.5rem; font-size: 0.85rem; position: relative; }
+  .questions li::before { content: counter(q); position: absolute; left: 0.75rem; top: 0.75rem; width: 1.5rem; height: 1.5rem; background: var(--surface2); border: 1px solid var(--border); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 700; color: var(--yellow); }
+
+  /* Stats row */
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; margin: 1.5rem 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; text-align: center; }
+  .stat .val { font-size: 1.3rem; font-weight: 700; }
+  .stat .lbl { font-size: 0.65rem; color: var(--muted); margin-top: 0.15rem; text-transform: uppercase; }
+
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.75rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Competitive Landscape</h1>
+<p class="subtitle">Claude Code memory ecosystem &mdash; April 2026</p>
+
+<!-- ===== Market Stats ===== -->
+<div class="stats">
+  <div class="stat"><div class="val" style="color:var(--blue)">94%</div><div class="lbl">Memex E2E</div></div>
+  <div class="stat"><div class="val" style="color:var(--green)">86%</div><div class="lbl">doobidoo R@5</div></div>
+  <div class="stat"><div class="val" style="color:var(--orange)">0%</div><div class="lbl">hermes-memory (no embeddings)</div></div>
+  <div class="stat"><div class="val" style="color:var(--cyan)">200</div><div class="lbl">Claude built-in line cap</div></div>
+  <div class="stat"><div class="val" style="color:var(--purple)">7+</div><div class="lbl">MCP memory servers</div></div>
+</div>
+
+<!-- ===== Systems ===== -->
+<h2>The Players</h2>
+<div class="systems">
+  <div class="sys-card builtin">
+    <h3>Claude Code Built-in</h3>
+    <div class="sys-meta">Auto Memory + CLAUDE.md &mdash; zero config, every user has it</div>
+    <ul class="sys-features">
+      <li><strong>MEMORY.md</strong> — auto-maintained, 200 lines / 25KB cap</li>
+      <li><strong>Topic files</strong> — overflow into debugging.md, api-conventions.md etc.</li>
+      <li><strong>Auto Dream</strong> — background sub-agent consolidates after 24h + 5 sessions</li>
+      <li><strong>No search</strong> — flat file loading, no semantic recall</li>
+      <li><strong>Project-scoped</strong> — ~/.claude/projects/&lt;project&gt;/memory/</li>
+    </ul>
+  </div>
+
+  <div class="sys-card hermes">
+    <h3>hermes-memory</h3>
+    <div class="sys-meta">Standalone MCP &mdash; pip install, zero infra, FTS5-only</div>
+    <ul class="sys-features">
+      <li><strong>Hot/cold tiers</strong> — 150 tokens injected always, unlimited cold storage</li>
+      <li><strong>MEMORY_SPEC</strong> — typed facts: C[target] D[target] V[target], 65% compression</li>
+      <li><strong>Scope lifecycle</strong> — auto-close after 6 idle turns, migrate to cold</li>
+      <li><strong>Pressure relief</strong> — 70/85/95% triggers dedup → archive → consolidate</li>
+      <li><strong>7 MCP tools</strong> — write, search, tick, status, reflect, export, purge</li>
+    </ul>
+  </div>
+
+  <div class="sys-card doobidoo">
+    <h3>mcp-memory-service</h3>
+    <div class="sys-meta">1,300 stars &mdash; 180+ releases, most mature option</div>
+    <ul class="sys-features">
+      <li><strong>Embeddings</strong> — sentence-transformers + SQLite-vec or ChromaDB</li>
+      <li><strong>24 MCP tools</strong> + REST API + HTTP dashboard</li>
+      <li><strong>~86% R@5</strong> on LongMemEval with session storage</li>
+      <li><strong>Heavy setup</strong> — Python, PyTorch optional, ~150MB minimum</li>
+      <li><strong>Docker or pip</strong> — multiple install paths</li>
+    </ul>
+  </div>
+
+  <div class="sys-card agentmem">
+    <h3>agentmemory</h3>
+    <div class="sys-meta">736 stars &mdash; 2 months old, cross-agent focus</div>
+    <ul class="sys-features">
+      <li><strong>Triple-hybrid</strong> — BM25 + vector + knowledge graph fusion</li>
+      <li><strong>43 MCP tools</strong>, 12 auto-capture hooks, real-time viewer</li>
+      <li><strong>One command</strong> — npx @agentmemory/agentmemory</li>
+      <li><strong>Cross-agent</strong> — shared memory: Claude Code + Cursor + Gemini CLI</li>
+      <li><strong>Young</strong> — API may shift, 5 contributors</li>
+    </ul>
+  </div>
+
+  <div class="sys-card memex-card">
+    <h3>Memex</h3>
+    <div class="sys-meta">Hybrid retrieval + autonomous dreaming &mdash; benchmark-validated quality</div>
+    <ul class="sys-features">
+      <li><strong>94% E2E, 96% R@5</strong> — highest retrieval quality (LongMemEval)</li>
+      <li><strong>3-phase dreaming</strong> — light + deep + LLM reflection (unique)</li>
+      <li><strong>Hybrid retrieval</strong> — BM25 + vector + z-score fusion + reranking</li>
+      <li><strong>5 MCP tools</strong> — focused surface area</li>
+      <li><strong>Dual platform</strong> — OpenClaw plugin + MCP server</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== Comparison Table ===== -->
+<h2>Feature Comparison</h2>
+<table>
+  <thead>
+    <tr><th>Capability</th><th>Claude Built-in</th><th>hermes-memory</th><th>doobidoo</th><th>agentmemory</th><th>Memex</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Embeddings</td>
+      <td class="no">No</td><td class="no">No (FTS5)</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="best">Yes + reranking</td>
+    </tr>
+    <tr>
+      <td>Semantic search</td>
+      <td class="no">No</td><td class="no">Keyword only</td><td class="yes">Hybrid</td><td class="yes">Triple-hybrid</td><td class="best">Hybrid + rerank</td>
+    </tr>
+    <tr>
+      <td>Capacity</td>
+      <td class="no">200 lines</td><td class="partial">150t hot / unlimited cold</td><td class="yes">Unlimited</td><td class="yes">Unlimited</td><td class="best">Unlimited</td>
+    </tr>
+    <tr>
+      <td>Dreaming / reflection</td>
+      <td class="partial">Auto Dream (basic)</td><td class="no">No</td><td class="no">No</td><td class="no">No</td><td class="best">3-phase + LLM</td>
+    </tr>
+    <tr>
+      <td>Contradiction detection</td>
+      <td class="no">No</td><td class="partial">Write-time check</td><td class="no">No</td><td class="no">No</td><td class="best">SUPERSEDED markers</td>
+    </tr>
+    <tr>
+      <td>Benchmark validated</td>
+      <td class="no">No</td><td class="no">No</td><td class="partial">86% R@5</td><td class="no">Unverified</td><td class="best">94% E2E, 96% R@5</td>
+    </tr>
+    <tr>
+      <td>Setup complexity</td>
+      <td class="best">Zero</td><td class="yes">pip install</td><td class="partial">Docker / pip</td><td class="yes">npx</td><td class="partial">MCP config + optional embed</td>
+    </tr>
+    <tr>
+      <td>Project scoping</td>
+      <td class="yes">Per-project</td><td class="partial">Scopes (manual)</td><td class="no">Global</td><td class="no">Global</td><td class="partial">Configurable DB path</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ===== Claude Code Pain Points ===== -->
+<h2>Claude Code Memory Pain Points</h2>
+<p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem">Real problems from GitHub issues that memex can solve:</p>
+<div class="pain">
+  <div class="pain-item">
+    <h4>Silent truncation (#39811)</h4>
+    <p>New entries appended past 200 lines are silently lost. No warning, no feedback. Users discover data loss after the fact.</p>
+  </div>
+  <div class="pain-item">
+    <h4>Newest lost first (#40210)</h4>
+    <p>Append-at-bottom + truncate-from-bottom means the most recent context is discarded while stale entries survive.</p>
+  </div>
+  <div class="pain-item">
+    <h4>No semantic search</h4>
+    <p>Flat file loading — Claude reads MEMORY.md top-to-bottom. No way to search by meaning. Irrelevant memories waste context.</p>
+  </div>
+  <div class="pain-item">
+    <h4>No extension API</h4>
+    <p>Can disable Auto Memory but can't extend it. No hooks, no custom storage backends, no programmatic access.</p>
+  </div>
+</div>
+
+<!-- ===== hermes-memory Architecture ===== -->
+<h2>hermes-memory: Hot/Cold Architecture</h2>
+<div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:0;align-items:start;margin:1.5rem 0">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1.25rem;border-top:3px solid var(--orange)">
+    <h3 style="color:var(--orange);font-size:0.9rem;margin:0 0 0.5rem">Hot Tier (~150 tokens)</h3>
+    <ul class="sys-features">
+      <li>Always in context at session start</li>
+      <li>MEMORY_SPEC notation: <code>D[auth]: JWT 7j</code></li>
+      <li>65-78% compression vs prose</li>
+      <li>Typed: C=constraint, D=decision, V=value</li>
+    </ul>
+    <div style="margin-top:0.75rem;font-size:0.75rem;color:var(--muted)">
+      <strong style="color:var(--yellow)">Pressure triggers:</strong><br>
+      70% &rarr; merge duplicates<br>
+      85% &rarr; archive closed scopes<br>
+      95% &rarr; LLM consolidation
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:1.2rem">&harr;</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1.25rem;border-top:3px solid var(--cyan)">
+    <h3 style="color:var(--cyan);font-size:0.9rem;margin:0 0 0.5rem">Cold Tier (unlimited)</h3>
+    <ul class="sys-features">
+      <li>SQLite + FTS5, queried on demand</li>
+      <li>Max 20 results per search</li>
+      <li>Zero idle token cost</li>
+      <li>Scopes auto-migrate on close</li>
+    </ul>
+    <div style="margin-top:0.75rem;font-size:0.75rem;color:var(--muted)">
+      <strong style="color:var(--cyan)">Scope lifecycle:</strong><br>
+      Opens on first write<br>
+      Closes: 6 idle turns, "merged"/"deployed"<br>
+      Closed &rarr; cold automatically
+    </div>
+  </div>
+</div>
+
+<!-- ===== Strategy ===== -->
+<h2>Strategic Positioning</h2>
+
+<div class="insight">
+  <div class="label">Core insight</div>
+  <p><strong>hermes-memory is SQLite. Memex is PostgreSQL.</strong> One is zero-config and everywhere. The other is powerful and requires setup. Both have their market. Don't try to out-simple hermes-memory. Win on quality and intelligence.</p>
+</div>
+
+<h3>What memex should do</h3>
+<div class="strategy">
+  <div class="strat-do">
+    <h4>Semantic recall</h4>
+    <p>Claude's memory has no search. Memex has 94% E2E retrieval. The killer feature — find the right memory from thousands.</p>
+  </div>
+  <div class="strat-do">
+    <h4>Autonomous dreaming</h4>
+    <p>No competitor has offline consolidation. Learnings, contradiction detection, memory evolution. Unique differentiator.</p>
+  </div>
+  <div class="strat-do">
+    <h4>Unlimited capacity</h4>
+    <p>Claude's 200-line cap with silent truncation is a real pain point. Memex has no cap — store everything, find what matters.</p>
+  </div>
+  <div class="strat-do">
+    <h4>Complement MEMORY.md</h4>
+    <p>Use Claude's built-in for static project rules. Memex for dynamic knowledge that grows beyond 200 lines.</p>
+  </div>
+  <div class="strat-do">
+    <h4>BM25-only default</h4>
+    <p>hermes-memory proves FTS5-only is useful. Make BM25 the zero-config path. Embeddings as opt-in upgrade.</p>
+  </div>
+</div>
+
+<h3>What memex should NOT do</h3>
+<div class="strategy">
+  <div class="strat-dont">
+    <h4>Don't out-simple hermes</h4>
+    <p>pip install hermes-memory is unbeatable for zero-config. Don't compete there.</p>
+  </div>
+  <div class="strat-dont">
+    <h4>Don't add 43 tools</h4>
+    <p>agentmemory's 43 tools bloat context. Keep the 5-tool surface area focused.</p>
+  </div>
+  <div class="strat-dont">
+    <h4>Don't build a dashboard</h4>
+    <p>Stay focused on memory quality. Dashboards and REST APIs are distractions.</p>
+  </div>
+  <div class="strat-dont">
+    <h4>Don't replace CLAUDE.md</h4>
+    <p>It's version-controlled and team-shared. Memex is dynamic and personal. Different jobs.</p>
+  </div>
+</div>
+
+<!-- ===== Open Questions ===== -->
+<h2>Open Product Questions</h2>
+<ol class="questions">
+  <li><strong>Should memex generate a <code>memories.md</code></strong> file that Claude's Auto Dream can discover and incorporate? Complement rather than compete.</li>
+  <li><strong>Should the hot/cold tier pattern be adopted?</strong> Small injected summary (~150 tokens) + deep recall on demand. Currently memex injects full text.</li>
+  <li><strong>Should BM25-only be the default</strong> with embeddings as opt-in? Zero-config for basic use, full power for users with infrastructure.</li>
+  <li><strong>Per-project or global?</strong> Claude Code is project-scoped. Memex is currently global. Should it match Claude's model?</li>
+  <li><strong>Write-time contradiction detection</strong> — lightweight cosine check on store(), or keep it batch-only in dreaming?</li>
+</ol>
+
+<footer>
+  Memex Competitive Landscape &mdash; April 2026 &mdash; Sources: Hermes Agent docs, Claude Code docs, GitHub, PyPI
+</footer>
+
+<script src="/nav.js"></script>
+</body>
+</html>

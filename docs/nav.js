@@ -6,7 +6,8 @@
     { href: '/dreaming.html', label: 'Dreaming' },
     { href: '/flow.html', label: 'Flow' },
     { href: '/plans/roadmap.html', label: 'Roadmap' },
-    { href: '/research/agent-memory-sota-2026.html', label: 'Research' },
+    { href: '/research/landscape.html', label: 'Landscape' },
+    { href: '/research/agent-memory-sota-2026.html', label: 'SOTA Research' },
   ];
 
   var current = location.pathname;
