@@ -105,7 +105,7 @@ Memories never referenced in N sessions auto-demote. Similar to memex's recall-c
 **hermes-memory** = lightweight, zero-infra, good enough for most users.
 **Memex** = high-quality, embedding-powered, with autonomous dreaming — for users who want the best retrieval and active knowledge management.
 
-Think: **SQLite vs PostgreSQL**. Both are databases. One is zero-config and everywhere. The other is powerful and requires setup. Both have their market.
+These are **different approaches, not different complexity levels**. hermes-memory bets on small, curated, always-in-context facts — a structured fact store with lifecycle semantics. Memex bets on large pools with intelligent search — a semantic retrieval system with autonomous consolidation. hermes-memory keeps 150 tokens perfect. Memex finds the right memory from thousands.
 
 ## 7. Deep Dive: hermes-memory Architecture
 
