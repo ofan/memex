@@ -32,7 +32,9 @@ function makeFakeEmbedder() {
   return {
     dimensions: VECTOR_DIM,
     embedQuery: async (t: string) => embed(t),
-    embedDocument: async (t: string) => embed(t),
+    embedPassage: async (t: string) => embed(t),
+    embed: async (t: string) => embed(t),
+    embedBatch: async (ts: string[]) => ts.map(embed),
     embedBatchQuery: async (ts: string[]) => ts.map(embed),
     embedBatchPassage: async (ts: string[]) => ts.map(embed),
   } as any;
