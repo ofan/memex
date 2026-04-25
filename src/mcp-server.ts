@@ -292,13 +292,15 @@ async function main() {
     console.error(`memex-mcp: reflection enabled (model: ${llmModel})`);
   }
 
-  const { server, store } = createMemexMcpServer({
+  // Factory creates a fresh McpServer per HTTP session. For stdio, used once.
+  const sharedOptions = {
     dbPath,
     embedder,
     reflectionLLM,
     dreamIntervalMs: dreamInterval,
     noDream,
-  });
+  };
+  const { server, store } = createMemexMcpServer(sharedOptions);
 
   // Background dreaming — periodic schedule
   if (!noDream) {
@@ -334,7 +336,10 @@ async function main() {
   const authToken = flagValue("--auth-token") || process.env.MEMEX_AUTH_TOKEN || "";
 
   if (httpPort > 0) {
-    await startHttpServer(server, { port: httpPort, host: httpHost, authToken });
+    // For HTTP, each session gets its own McpServer instance (stateful sessions).
+    // The first one constructed above is used for the dreaming timer; HTTP creates fresh.
+    const factory = () => createMemexMcpServer(sharedOptions).server;
+    await startHttpServer(factory, { port: httpPort, host: httpHost, authToken });
   } else {
     const transport = new StdioServerTransport();
     await server.connect(transport);
@@ -342,18 +347,14 @@ async function main() {
 }
 
 async function startHttpServer(
-  server: McpServer,
+  serverFactory: () => McpServer,
   opts: { port: number; host: string; authToken: string },
 ): Promise<void> {
   const { port, host, authToken } = opts;
+  const { randomUUID } = await import("node:crypto");
 
-  // Stateless mode: each request is independent, no session persistence.
-  // Single transport instance handles all connections.
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  await server.connect(transport);
+  // Per-session transports. Each MCP client gets its own session and transport.
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
 
   const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     // Auth: bearer token via Authorization header
@@ -367,23 +368,53 @@ async function startHttpServer(
       }
     }
 
-    // Health endpoint (no MCP, no auth check above for /health if no token)
+    // Health endpoint
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, version: "0.6.0" }));
+      res.end(JSON.stringify({ ok: true, version: "0.6.0", sessions: sessions.size }));
       return;
     }
 
-    // MCP endpoint: /mcp (default Streamable HTTP path)
+    // MCP endpoint: /mcp
     if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
       try {
-        // Parse JSON body for POST
         let parsedBody: unknown;
         if (req.method === "POST") {
           parsedBody = await readJsonBody(req);
         }
-        await transport.handleRequest(req, res, parsedBody);
+
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        let transport: StreamableHTTPServerTransport | undefined;
+
+        if (sessionId && sessions.has(sessionId)) {
+          // Existing session — route to its transport
+          transport = sessions.get(sessionId);
+        } else if (!sessionId && isInitializeRequest(parsedBody)) {
+          // New session — create transport + dedicated server instance
+          const newId = randomUUID();
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => newId,
+            enableJsonResponse: true,
+            onsessioninitialized: (id: string) => sessions.set(id, transport!),
+          });
+          transport.onclose = () => {
+            if (transport!.sessionId) sessions.delete(transport!.sessionId);
+          };
+          const sessionServer = serverFactory();
+          await sessionServer.connect(transport);
+        } else {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Bad Request: provide Mcp-Session-Id, or initialize first" },
+            id: null,
+          }));
+          return;
+        }
+
+        await transport!.handleRequest(req, res, parsedBody);
       } catch (err) {
+        console.error("memex-mcp: HTTP request error:", err);
         if (!res.writableEnded) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : "internal error" }));
@@ -404,6 +435,12 @@ async function startHttpServer(
   if (!authToken) {
     console.error(`memex-mcp: WARNING — no --auth-token set, daemon is open to anyone on ${host}`);
   }
+}
+
+function isInitializeRequest(body: unknown): boolean {
+  if (Array.isArray(body)) return body.some(isInitializeRequest);
+  return typeof body === "object" && body !== null
+    && (body as { method?: unknown }).method === "initialize";
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
