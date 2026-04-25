@@ -18,19 +18,23 @@ Loop is bounded but flexible: angles can be reordered, deepened, or redirected b
 ### Initial angles
 - [x] **F1**: AI agent memory consolidation (Letta, Mastra, A-MEM, Mem0, MemOS, MemMachine, HyperMem, xMemory) — **COMPLETE** (8 systems, comparative table)
 - [ ] **F2**: Stanford Generative Agents reflection — full mechanism
-- [ ] **F3**: Neuroscience — hippocampal consolidation, sleep replay, complementary learning systems
+- [x] **F3**: Neuroscience — **COMPLETE** (CLS theory, sleep replay, schema integration, active forgetting)
 - [ ] **F4**: Cognitive architectures — ACT-R, SOAR, EPIC, CLARION
 - [ ] **F5**: Memory categorization — declarative/procedural, episodic/semantic, schemas
 - [ ] **F6**: RAG advances 2025-2026 — query expansion, late interaction, hybrid
 - [ ] **F7**: Temporal reasoning — bi-temporal models, recency vs validity
-- [ ] **F8**: Active learning / selective storage — what to remember
-- [ ] **F9**: Concept synthesis / abstraction — how higher-order concepts emerge
+- [x] **F8**: Active learning / selective storage — **COMPLETE** (info gain, AL methods, forgetting, quality gates, Mem0 #4573 detector table)
+- [x] **F9**: Concept synthesis / abstraction — **COMPLETE** (Bayesian + topic models + KG + GenAgents + fuzzy-trace, convergent 6-step recipe)
 - [ ] **F10**: Provenance and trust — source weighting, contradiction handling
 
 ### Hypotheses (added as research surfaces them)
 - [x] **H1**: RAG-based recall less efficient than observation-log → **partially refuted** (depends on dataset)
 - [x] **H2**: Hierarchical organization beats flat at scale → uncertain, possibly beneficial
 - [x] **H3**: SKIP/REJECT verb prevents feedback-loop amplification → **confirmed** by Mem0 production data
+- [x] **H4**: Add question-generation step before synthesis (Generative Agents pattern) → strongly suggested, low-cost A/B test
+- [x] **H5**: Memex's facts/learnings split is structurally CLS — make replay explicit → strong theoretical grounding, defer until pool grows
+- [x] **H6**: Schema-consistent fast path / inconsistent slow path (Tse 2007) → novel, needs cost-benefit
+- [x] **H7**: NLL-based info gain check is the cheapest defense against feedback loops → **should be the first quality gate added**
 
 ### Process log
 - [x] 2026-04-25: Loop initialized. F1 launched with 3 parallel sub-agents (Letta+Mastra, A-MEM+Mem0+MemOS, hierarchical systems).
@@ -221,7 +225,73 @@ Failure modes by frequency:
 
 ## Section F3: Neuroscience
 
-*(not yet started)*
+### F3.1 — Complementary Learning Systems (CLS)
+
+**Marr 1971; McClelland-McNaughton-O'Reilly 1995** — the foundational two-tier theory:
+
+| | Hippocampus | Neocortex |
+|---|---|---|
+| Representation | Sparse, pattern-separated | Distributed, overlapping |
+| Learning rate | High — one-shot encoding | Low — gradual statistical extraction |
+| Role | Buffer for episodes | Schemas, generalizations |
+
+**The catastrophic interference argument**: a single-system network trained sequentially overwrites old patterns when new ones arrive (McCloskey & Cohen 1989). The cortex CAN'T learn fast without destroying its structured representations — so a separate fast store (hippocampus) holds new items and **interleaves them into cortex via repeated reactivation**.
+
+**2013 update (McClelland)**: cortex CAN learn quickly *if* new info is consistent with existing structure. **Schema-consistent material bypasses the slow path.**
+
+**Memex computational analog**: facts (fast, episodic, hippocampus-like) + learnings (slow, structured, cortex-like). Replay = dreaming. The two-tier split is canonical.
+
+### F3.2 — Sleep replay
+
+**Wilson & McNaughton 1994** (*Science* 265:676): hippocampal place cells with overlapping fields show elevated co-firing in post-task SWS vs pre-task. Direct evidence of experience-dependent reactivation. Effect decays over ~30 min.
+
+**Skaggs & McNaughton 1996**: replayed sequences preserve waking firing order, **time-compressed ~20×**, riding on sharp-wave ripples (SWRs, 150-250 Hz).
+
+**SWS vs REM division of labor (Diekelmann & Born 2010)**:
+- **SWS**: SWRs broadcast compressed sequences to neocortex. System-level redistribution. Disrupting ripples impairs memory (Girardeau 2009).
+- **REM**: synaptic-level stabilization. Favors procedural/emotional. Sequential model: SWS reorganizes, REM stabilizes.
+
+**Memex computational analog**: experience replay (Mnih 2015 DQN), prioritized replay, "dream" cycles that re-process recent traces in compressed form. Memex's dreaming = SWS analog.
+
+### F3.3 — Schema integration
+
+**Tse et al. 2007** (*Science* 316:76) — the breakthrough: rats learned flavor-place pairs over weeks until a schema formed. **New pairs taught in a single trial against this schema became hippocampus-independent within 48 hours** — vs the standard weeks-long consolidation in naive animals.
+
+**vmPFC role (Ghosh & Gilboa 2014; Gilboa & Marlatte 2017)**: ventromedial prefrontal cortex binds multimodal cortical representations once memories are no longer episodic. "Semanticization hub." Lesion → fail schema-consistency judgments. Damage to subgenual BA24/25 → confabulation, endorse schema-inappropriate items.
+
+**Bottom line**: integration speed depends on schema match.
+- Schema-consistent → fast (vmPFC-mediated)
+- Schema-inconsistent → slow (weeks, hippocampus-dependent)
+
+**Memex computational analog**: facts matching existing learnings should integrate cheaply (slot fill in existing schema). Facts contradicting or extending existing learnings need a more expensive path (full synthesis). KG schemas as the binding structure; vmPFC ≈ schema selector that routes encoding.
+
+### F3.4 — Forgetting as feature
+
+**Hardt, Nader & Wang 2013** (*TiCS* 17:111) — "Decay happens": forgetting is an **active process**, not passive loss. Mechanism: time-dependent endocytosis of GluA2-containing AMPA receptors.
+
+**Migues et al. 2016**: blocking AMPA-receptor removal with GluA23Y peptide in dorsal hippocampus **prevented normal forgetting** of object-location memories without affecting acquisition. Forgetting has a molecular off-switch — it's regulated, not accidental.
+
+**Anderson, Bjork & Bjork 1994** — retrieval-induced forgetting (RIF): retrieving "orange" from category "fruit" *suppresses* access to "banana." Inhibitory mechanism, not associative interference. Acts on retrieval strength, not storage strength — adaptive because it resolves selection conflicts without erasing data.
+
+**Bjork 1994** — "desirable difficulties": spacing, interleaving, retrieval practice introduce difficulty that **enhances** long-term retention. Easy encoding → fragile traces; effortful retrieval → consolidates.
+
+**Why forgetting is functional**:
+1. Prevents interference between similar items
+2. Prioritizes relevant material at retrieval
+3. Enables generalization (irrelevant specifics decay → abstract structure dominates)
+4. Reduces retrieval-time competition
+
+**Memex computational analog**: TTL/decay (existing in deep sweep), importance-weighted eviction (existing), contrastive negative sampling at retrieval (would be new), reranking that suppresses near-duplicates (existing via diversity penalty), spaced retrieval = `recall_count` reinforcement (existing).
+
+Sources:
+- McClelland-McNaughton-O'Reilly 1995, *Psychological Review*
+- Kumaran, Hassabis & McClelland 2016 CLS update: pubmed/27315762
+- Wilson & McNaughton 1994 *Science* 265:676
+- Diekelmann & Born 2010 *Nat Rev Neurosci*: nrn2762
+- Buzsáki 2015 SWR review: PMC4648295
+- Tse et al. 2007 *Science* 316:76
+- Hardt, Nader & Wang 2013 *TiCS* 17:111
+- Anderson, Bjork & Bjork 1994 *JEP:LMC* 20:1063
 
 ---
 
@@ -251,13 +321,144 @@ Failure modes by frequency:
 
 ## Section F8: Active Learning / Selective Storage
 
-*(not yet started)*
+### F8.1 — Information gain measures
+
+**Bayesian surprise** = `KL(posterior || prior)`. High-surprise observations warrant storage because they shift beliefs. Equivalent to mutual information / "epistemic value" in Friston's active inference.
+
+**Shannon surprise** = `-log p(obs)`. Rare events score high regardless of belief shift.
+
+**LLM proxy via NLL**: `surprise(fact) = -log p_LM(fact | retrieved_top_k)`. If candidate is highly probable under existing memory → NOOP/REJECT (it adds no information).
+
+**The anti-amplification mechanism**: recalled facts have NLL ≈ 0 against the top-k retrieval (because they ARE in the top-k). NLL-based filtering naturally rejects feedback loops.
+
+### F8.2 — Active learning families applied to memory writes
+
+| Method | Technique | Memory analogue |
+|---|---|---|
+| **Query-by-Committee** (Freund 1997) | Vote-entropy across N temperatures | Re-extract same fact at T={0, 0.7, 1.0}; agreement → store |
+| **Expected Model Change** (Cai 2013) | `||∇L||` after adding example | "Would future answers differ if this fact were in context?" |
+| **Coresets** (Sener & Savarese 2018) | Pick points whose removal degrades coverage | Reject if cosine > 0.92 to existing centroid (theoretical de-dup guarantee) |
+
+**Cheapest wins**: cosine-distance coreset rejection + cross-temperature consistency check.
+
+### F8.3 — Forgetting strategies
+
+| Pattern | Formula | Memex use |
+|---|---|---|
+| **ACT-R activation** | `A_i = ln Σ_j t_j^{-d}` + spreading + noise | Activation-based recall |
+| **Ebbinghaus / MemoryBank** | `R = exp(-t/S)`; on recall S+=1, t:=0 | Existing recall-count boost |
+| **Stochastic forgetting** (Hardt) | drop with prob `p ∝ 1/A_i` | Smoother than hard cutoffs |
+| **Bio-inspired** (Mazzaglia 2025) | τ ≈ 1.69 days power-law decay | Default decay constant |
+
+Memex's existing pattern: `activation = importance · exp(-λ_eff · age) · (1 + 0.2·recall_count)` with `λ_eff = 0.16·(1 - 0.8·importance)` aligns with the literature.
+
+### F8.4 — Quality gates in production LLM systems
+
+The dominant pattern is LLM-as-judge (Mem0's ADD/UPDATE/DELETE/NOOP). Robust gates layer additional filters:
+
+1. **Negative few-shot**: explicitly demonstrate skips in the prompt
+2. **Confidence scoring**: store iff judge logprob > τ
+3. **Contradiction check**: ADD only if no contradiction OR new fact dominates by recency+source
+4. **Anti-amplification tag**: mark retrieved-into-context facts with `recalled=true`; extractor instructed "never re-extract recalled content"
+5. **Identity disambiguation**: tag turns by speaker role; reject extractions attributing system content as user facts
+6. **Harvard D3 finding**: filter-before-store gives ~10% downstream gain; **indiscriminate storage is worse than no memory**
+
+### F8.5 — Mem0 #4573 failure modes → write-time detectors (CRITICAL)
+
+| Failure mode | Detector | Action |
+|---|---|---|
+| System-prompt restatement | Levenshtein/embedding sim ≥ 0.85 to system prompt; or token overlap > 0.6 with role=system span | REJECT(`system_echo`) |
+| Feedback-loop amplification | Provenance flag `from_recall=true`; or NLL(fact \| memory) < 0.3 | REJECT(`recall_loop`) |
+| Hallucinated identity | Cross-temperature QbC: re-extract at T={0,0.7,1.0}; if name/age/location disagree → ungrounded | REJECT(`ungrounded_identity`) |
+| Architecture/tool dumps | Detect schema-shaped strings (JSON with `tools`, `function_call`, `parameters`); >3 code-fence blocks | REJECT(`schema_blob`) |
+| Raw system-state capture | Speaker-role gate: extractor refuses turns where role ≠ user/assistant | REJECT(`role_violation`) |
+
+Implementation: a **5th verb REJECT** with structured reason codes. Cheap deterministic filter (regex + cosine + role-tag) BEFORE the LLM judge — saves tokens, surfaces dashboard data.
+
+Sources:
+- Mem0 #4573 production audit
+- MemoryBank (Zhong 2023) arXiv:2305.10250
+- Memory-R1 RL-trained memory manager arXiv:2508.19828
+- Memory Bear (ACT-R + Ebbinghaus) arXiv:2512.20651
+- Active Inference / Bayesian surprise (Friston)
+- Sener & Savarese 2018 Core-Set arXiv:1708.00489
+- LLM-Agents-Memory survey arXiv:2603.07670
 
 ---
 
 ## Section F9: Concept Synthesis / Abstraction
 
-*(not yet started)*
+### F9.1 — Bayesian schema induction (Tenenbaum/Kemp/Griffiths)
+
+**Mechanism**: hierarchical Bayesian inference over structured hypothesis spaces (trees, grids, partitions). Score `P(concept | data) ∝ P(data | concept) · P(concept)`. **Prior favors short descriptions (MDL)** — simpler concepts win unless data demands complexity.
+
+**Rules vs similarity unification (Goodman et al. 2008)**: short rules get high prior; soft likelihoods recover similarity behavior. Both extreme positions emerge as limits of the same Bayesian model.
+
+### F9.2 — Topic models (LDA, BERTopic)
+
+**LDA**: each document = mixture over K topics; each topic = distribution over words. Topics are *gist*, not facts. A topic is a **distribution**, not a proposition.
+
+**BERTopic** (Grootendorst 2022): sentence-BERT → UMAP → HDBSCAN → c-TF-IDF labeling. Better for short texts than vanilla LDA.
+
+**When useful**: navigation, summarization, drift detection over hundreds+ of documents.
+**When harmful**: short texts (memex's domain), unstable across re-runs (no topic identity).
+
+**Memex applicability**: *coarse index*, not the synthesis layer. Cluster IDs as filter, not as content.
+
+### F9.3 — Knowledge graphs
+
+**OpenIE / REBEL pipeline**: NER → coreference → relation extraction → triples `(h, r, t)`.
+
+**The gap**: triples give you entities and relations, but **concepts (categories, generalizations) don't emerge** without a separate synthesis step. KG answers "what do I know about X?" but not "what kind of thing keeps happening?"
+
+**Memex applicability**: KG layer is good for entity-grounded recall (memex already extracts entities), but insufficient for learnings/insights — which need explicit LLM synthesis.
+
+### F9.4 — LLM-driven concept synthesis (Generative Agents pattern)
+
+**Stanford Generative Agents reflection (Park et al. 2023)**:
+1. Trigger: importance score sum > 150
+2. Ask LLM: "What 3 high-level questions can we ask about these memories?"
+3. Per question: retrieve top-N memories
+4. Ask LLM: "What 5 high-level insights can you infer from these memories?"
+5. Insights become first-class memories with citations → **reflection tree**
+
+**Mastra Reflector** = productionized version: scans recent working memory, emits preferences/decisions/summaries written back to persistent store.
+
+**Tree of Thoughts (Yao 2023)**: deliberate exploration of multiple candidate abstractions with self-evaluation pruning.
+
+**Memex applicability**: this is the closest match for memex's "learnings" layer. Memex's current dreaming.ts uses a simplified version: threshold → top-50 memories → LLM synthesizes 3 learnings. **Missing the question generation step.**
+
+### F9.5 — Schema theory (cognitive psychology)
+
+**Bartlett 1932**: schemas predict missing slots and compress repeated structure (restaurant script — Schank & Abelson 1977).
+
+**Fuzzy-trace theory (Brainerd & Reyna)**: two parallel traces.
+- **Verbatim** — literal, decays fast. Best for exact recall.
+- **Gist** — semantic, decays slow. Drives most reasoning, generalization, transfer.
+
+**False memories** arise from gist overgeneralizing. Cost-benefit:
+- Gist BETTER for: prediction, planning, preferences, transfer, recall under load
+- Gist WORSE for: exact details (legal, debugging)
+
+**Memex applicability**: store BOTH layers — facts (verbatim) and learnings (gist). Recall should prefer gist for planning/preference queries and verbatim for factual lookup.
+
+### F9 Convergent recipe (across 5 literatures)
+
+A concept-synthesis layer should:
+
+1. **Trigger** — importance accumulator, cluster size, or time
+2. **Cluster/group** evidence — soft (BERTopic) or hard (KG entity neighborhoods)
+3. **Hypothesize** candidate abstractions — Bayesian short-MDL OR LLM ToT-style multiple drafts
+4. **Score** by likelihood × simplicity prior — unifies rules and similarity
+5. **Materialize** as gist-layer memory with provenance edges (reflection tree)
+6. **Decay/revise** when contradicted — schema accommodation, correction chains
+
+Sources:
+- Tenenbaum et al. 2011 *Science* 331:1279 "How to grow a mind"
+- Park et al. 2023 UIST arXiv:2304.03442
+- Yao et al. 2023 NeurIPS arXiv:2305.10601
+- Brainerd & Reyna 2002 fuzzy-trace overview
+- Grootendorst 2022 BERTopic arXiv:2203.05794
 
 ---
 
@@ -349,6 +550,56 @@ Failure modes by frequency:
 
 ---
 
+### H4: Memex's reflection should add a "question generation" step before synthesis.
+
+**Statement**: Memex's current reflection (in `src/dreaming.ts`) does threshold → top-50 memories → LLM synthesizes 3 learnings. The Stanford Generative Agents pattern adds a **question generation step** in between: threshold → "what 3 questions can we ask?" → retrieve per question → synthesize. This produces more focused, better-grounded learnings.
+
+**Rationale**:
+- Generative Agents' reflection tree shows that "ask questions first, retrieve per question" produces insights with explicit evidence citations (provenance)
+- Mastra Reflector and other productionized variants follow the same pattern
+- Without question generation, the LLM is asked to summarize a heterogeneous batch — output tends toward generic, low-specificity learnings
+- With question generation, each insight is grounded in a specific evidence cluster
+
+**Predicted outcome for memex**:
+- Better learnings — more specific, more actionable
+- Provenance edges from learning back to source memories (already supported by `metadata`)
+- Reflection becomes interpretable: "this learning was synthesized to answer question X from memories Y, Z, W"
+
+**Comparing memex's current reflection to the Generative Agents pattern**:
+
+| Step | Generative Agents | Memex (current) | Gap |
+|---|---|---|---|
+| 1. Trigger | Importance accumulator > 150 | Threshold of 5+ memories | Same idea |
+| 2. Cluster | Implicit via questions | None — sends top-50 raw | **Missing** |
+| 3. Hypothesize | "What 3 questions?" → retrieve per Q | Direct synthesis from raw | **Missing** |
+| 4. Score | Implicit (LLM judges) | Implicit | Same |
+| 5. Materialize | Insights with citations | Stored as `category: "learning"` | Memex stores but no citations |
+| 6. Decay/revise | Reflection tree updates | SUPERSEDED markers | Memex has this |
+
+**Boundary conditions**:
+- Two LLM calls instead of one — doubles reflection cost
+- Question generation may produce uninteresting questions on small/homogeneous pools
+- Cost-benefit only worth it once memex has >100 useful memories per reflection cycle
+
+**Evidence to collect**:
+- [x] Confirmed: Generative Agents pattern is reproducibly used in production (Mastra, Letta sleep-time)
+- [ ] Open: A/B compare memex's current 1-step reflection vs 2-step (question + synthesis) on production data
+- [ ] Open: does question generation help when pool is small (<20 useful memories)?
+
+**Verdict**: *strongly suggested by literature, low implementation cost, worth A/B testing*
+
+**Implementation sketch**:
+```typescript
+// In src/dreaming.ts reflectionSweep:
+// 1. Threshold: pool has ≥ N un-reflected memories (existing)
+// 2. NEW: ask LLM "what 3 questions could be answered from these memories?"
+// 3. NEW: for each question, retrieve top-K memories (use existing retriever)
+// 4. NEW: ask LLM "synthesize an insight to answer this question, cite sources"
+// 5. Store insight with provenance: { category: "learning", metadata: { sources: [id1, id2, ...], question: "..." } }
+```
+
+---
+
 ### H3: An explicit SKIP/REJECT verb in the store-time pipeline is the single most important defense against feedback-loop amplification and system-prompt pollution.
 
 **Statement**: Without a quality-gate verb, an LLM-driven memory store pipeline produces feedback loops where recalled memories get re-extracted and re-stored. Mem0's 97.8% junk rate is the production proof. Memex must have an explicit reject path.
@@ -375,11 +626,108 @@ Failure modes by frequency:
 
 **Verdict**: *confirmed by Mem0 production data — needs memex-specific design*
 
-**Implications**:
-- Add a REJECT path to memex's store pipeline, especially when LLM-driven extraction lands
-- Detect: text similar to recently-recalled memories → reject as feedback loop
-- Detect: text matches system prompt fragments → reject as identity confusion
-- Detect: text contains hallucinated identity tokens (the "John Doe" pattern) → reject
+**Implementation (concrete, from F8.5)**:
+- 5-verb pipeline: ADD / UPDATE / DELETE / NOOP / **REJECT(reason)**
+- Pre-LLM cheap filters cascade into LLM judge:
+  1. Embedding cosine to system prompt > 0.85 → REJECT(`system_echo`)
+  2. NLL(candidate \| top-3 recall) < 0.3 → REJECT(`recall_loop`)
+  3. Cross-temperature QbC disagreement on identity tokens → REJECT(`ungrounded_identity`)
+  4. JSON-shaped or >3 code fences → REJECT(`schema_blob`)
+  5. Role tag = system/tool → REJECT(`role_violation`)
+- Reason codes feed dream-loop dashboard for ops visibility
+
+---
+
+### H5: Memex's existing facts/learnings split is structurally a CLS architecture — and replay should be made explicit.
+
+**Statement**: The Complementary Learning Systems theory (McClelland 1995) maps exactly onto memex's architecture: facts (hippocampus-like fast episodic store) + learnings (cortex-like slow distilled store). The neuroscience says replay is the *transfer mechanism* between the two — not just background cleanup.
+
+**Rationale**:
+- Hippocampus = sparse pattern-separated, high learning rate, one-shot encoding → memex's `memories` table
+- Neocortex = distributed, slow learning, schema-extracting → memex's `category: "learning"` entries
+- Sleep replay (Wilson & McNaughton 1994) shows time-compressed sequence replay during SWS
+- McClelland's catastrophic-interference argument: cortex CAN'T learn fast without destroying structure → must use interleaved replay from hippocampus
+
+**Predicted for memex**:
+- The split into facts vs learnings is correct (CLS theory validates it)
+- Memex's dreaming reflection ≈ SWS replay
+- **Missing piece**: explicit *interleaved replay* of older facts during reflection. Currently reflection only sees the top-50 recent memories. CLS says it should sample from both recent AND old to prevent older learnings from drifting.
+
+**Boundary conditions**:
+- Memex's pool is small (465 memories) — interleaving may be unnecessary at this scale
+- Real value emerges when learnings start contradicting facts (years later)
+
+**Evidence to collect**:
+- [x] Confirmed: CLS theory validated across 30 years of neuroscience and ML
+- [x] Confirmed: experience replay (DQN, Mnih 2015) is the canonical computational analog
+- [ ] Open: at what corpus size does memex need interleaved replay?
+
+**Verdict**: *strong theoretical grounding, low-cost implementation (sample old memories during reflection), defer until pool size demands it*
+
+---
+
+### H6: Schema-consistent memories should integrate via a fast path; schema-inconsistent ones via a slow path.
+
+**Statement**: Tse et al. 2007 showed schema-consistent material consolidates fast (single trial sufficient, vmPFC-mediated) while schema-inconsistent material consolidates slowly (weeks, hippocampus-dependent). For memex, this implies a routing decision at store time: does the new memory match an existing learning?
+
+**Rationale**:
+- Schema-match → cheap path: just store the fact, optionally bump the learning's recall count (it just got reinforced)
+- Schema-conflict → expensive path: trigger a reflection cycle to update the learning, mark contradicted memories with `superseded_by`
+- Schema-novel → reflection cycle eventually, but no immediate update
+
+**Predicted for memex**:
+- Most stores will be schema-match (cheap path) — fast operation
+- Schema-conflict triggers immediate reflection — surfaces contradictions before they accumulate
+- Schema-novel accumulates until threshold triggers next dream cycle
+
+**Routing algorithm sketch**:
+```
+on store(fact):
+  related_learnings = retrieve(fact, where category='learning', limit=3)
+  if related_learnings is empty: schema-novel → just store
+  else:
+    consistency = LLM_judge(fact, related_learnings)
+    if consistency == 'consistent': fast path → store, bump learning recall_count
+    elif consistency == 'conflict': slow path → store + trigger reflection
+    elif consistency == 'extends': fast path → store + mark learning for re-synthesis
+```
+
+**Boundary conditions**:
+- Adds an LLM call per store — must be fast (cheap model)
+- Worth it only when the cost of inconsistent memories is high
+
+**Evidence to collect**:
+- [x] Confirmed: Tse et al. 2007 schema-dependent consolidation
+- [ ] Open: how often does memex see schema-conflict in practice? Need production data.
+
+**Verdict**: *novel proposal, theoretically grounded, needs cost-benefit analysis*
+
+---
+
+### H7: NLL-based information gain is the cheapest, most principled defense against feedback-loop amplification.
+
+**Statement**: Of all the proposed defenses against the Mem0 #4573 failure modes, the cheapest and most principled is computing `NLL(candidate | top-3 recall)`. Recalled facts have NLL ≈ 0 by construction. This single check eliminates feedback-loop amplification without any prompt engineering or speaker-role tagging.
+
+**Rationale**:
+- NLL is information-theoretically correct: low NLL means the fact is already implied by what's in memory → no information gain → no point storing
+- Computable cheaply via embedding distance proxy (cosine to top-3 retrieval)
+- Doesn't require LLM-as-judge — can be a deterministic filter
+- Naturally generalizes the dedup pattern memex already has (text_hash) to a semantic version
+
+**Predicted for memex**:
+- A single cosine-distance check before store catches ~80% of feedback loops
+- Cost: one extra retrieval per store call (~50ms)
+- Implementation: in `mcp-server.ts memory_store`, before calling `store.store()`, run `retrieve(text, limit=3)`. If max similarity > 0.95 → REJECT(`recall_loop`)
+
+**Boundary conditions**:
+- False positive: legitimate updates to existing memories ("user changed their mind") will have low NLL too. Need a way to distinguish "this is a duplicate" from "this is a correction."
+- Solution: if low NLL, check whether the recalled fact is OLD (>30 days) → if so, treat as correction; if recent → treat as duplicate.
+
+**Evidence to collect**:
+- [x] Confirmed: NLL-based redundancy detection is standard in active learning
+- [ ] Open: how to distinguish duplicate from correction in practice — need empirical study
+
+**Verdict**: *low cost, high impact, should be the FIRST quality gate added*
 
 ---
 
