@@ -1057,15 +1057,220 @@ async function shouldRecall(query: string, context: ConversationContext): Promis
 
 ---
 
-## Synthesis (final iteration)
+## Synthesis
 
-*Cross-cutting patterns across findings. Written once 6+ findings sections are complete.*
+After 4 iterations across 7 angles producing 10 hypotheses, three cross-cutting patterns have emerged. They are stable — every angle that touched them confirmed them, no angle refuted them.
+
+### Pattern A: Two-tier architecture is canonical, not optional
+
+**Independent fields converge**:
+
+| Field | Evidence |
+|---|---|
+| Production AI (F1) | Mastra Observer/Reflector, Letta primary/sleep-time, Mem0 fact/graph |
+| Neuroscience (F3) | CLS theory (McClelland 1995): hippocampus + neocortex |
+| Cognitive psych (F9) | Fuzzy-trace theory: gist + verbatim parallel traces |
+| Memory categorization (F5) | Tulving's episodic vs semantic |
+| Selective storage (F8) | Mem0 #4573 fails when both layers aren't distinguished |
+
+**The pattern**: a fast episodic store (write-heavy, low compression, short retention) plus a slow distilled store (write-light, abstracted, long retention). Reflection is the *transfer mechanism* between them.
+
+**Memex today**: `memories` table = episodic, `category: "learning"` = distilled. The structure is right. **The gap is making the transfer mechanism (reflection) more explicit and richer.**
+
+### Pattern B: Forgetting and rejection are first-class operations
+
+**Independent fields converge**:
+
+| Field | Evidence |
+|---|---|
+| Neuroscience (F3) | Hardt 2013 "Decay happens" — molecular off-switch for forgetting |
+| Active learning (F8) | Mem0 #4573: 97.8% junk rate without REJECT verb |
+| Cognitive psych (F3) | Anderson 1994 retrieval-induced forgetting (inhibitory mechanism) |
+| RAG advances (F6) | Self-RAG / Adaptive-RAG: ~40% retrievals can be skipped |
+
+**The pattern**: memory systems that can't actively reject and forget pollute themselves. Mechanical decay (memex has this) handles the easy case. Active rejection (memex doesn't have this fully) handles the hard case — feedback loops, hallucinated identity, system-prompt leakage.
+
+**Memex today**: text_hash dedup + fragment rejection (intake guards). Decay-based forgetting in deep sweep. **The gap is semantic rejection at write time** — H7's NLL check.
+
+### Pattern C: Time matters in three different ways, not one
+
+**Independent fields converge**:
+
+| Field | Evidence |
+|---|---|
+| Databases (F7) | Bi-temporal: valid time vs transaction time |
+| Mastra (F7) | Three dates: observation, referenced, relative |
+| Neuroscience (F3) | Recency vs validity dissociated; durable old facts vs ephemeral new |
+| Generative Agents (F9) | Importance × recency × relevance — three-axis scoring |
+
+**The pattern**: simple "newer wins" is wrong. Old durable facts ("I'm allergic to X") should outrank recent ephemeral ones ("running late today"). Memory systems need:
+1. **When recorded** (transaction time / `timestamp`)
+2. **When valid** (referenced date in text, validity windows)
+3. **How relevant now** (recency decay weighted by importance/category)
+
+**Memex today**: only #1 is captured. Decay applied to #1 directly. **The gap is #2 (referenced_date) and #3 (importance-weighted decay).**
+
+### What the patterns rule out
+
+By converging on these three patterns, the research also rules out approaches:
+
+- **Pure retrieval upgrades** (better embeddings, better rerankers, late interaction) — memex is current here. Marginal gains.
+- **Hierarchical schema explosion** (4-7 levels) — diminishing returns past 2-3 levels for memex's scale.
+- **Mastra-style "no retrieval"** — works at small scale but breaks past context limits. Memex has 465 memories, would break in 6 months at current write rate.
+- **Knowledge-graph-first design** (Mem0g, Graphiti) — overhead doesn't pay off at memex's scale.
 
 ---
 
 ## Recommendations for Memex
 
-*Concrete design proposals based on confirmed hypotheses. Written last.*
+Ten hypotheses ranked by **(implementation cost) × (expected impact) × (independence from other changes)**.
+
+### Tier 1 — Ship soon (high impact, low cost, independent)
+
+#### R1: Add NLL-based store-time rejection (H7)
+
+**Problem**: feedback loops, system-prompt restatement, near-duplicate inserts.
+**Mechanism**: before `store.store()`, retrieve top-3 by query=text. If max cosine > 0.95 → REJECT(`recall_loop`). Reason codes feed dream-loop dashboard.
+**Cost**: ~50ms per store call (one extra retrieval). ~30 lines of code.
+**Impact**: prevents the Mem0 #4573 class of failures (97.8% junk in production). Most of memex's intake guards already block other failure modes; this fills the semantic-duplicate gap.
+**Where**: `src/mcp-server.ts:81` (memory_store handler), or in the new `src/service/memex-service.ts` once layered.
+**Dependency**: none — works today against the current MCP server.
+
+#### R2: Add `concept` as a 7th memory category (H9)
+
+**Problem**: gist-level definitional content (vocabulary, mental models) doesn't fit existing categories.
+**Mechanism**: extend the `MEMORY_CATEGORIES` enum in `src/tools.ts`. Update auto-capture prompt with examples. Update reflection prompt to emit `concept` outputs alongside `learning`.
+**Cost**: 1 enum addition + prompt updates + tests. Few hours.
+**Impact**: better recall format, cleaner reflection outputs, fills real taxonomic gap.
+**Where**: `src/tools.ts`, auto-capture instruction, reflection prompt.
+**Dependency**: none.
+
+#### R3: Extract `referenced_date` at store time (H8)
+
+**Problem**: temporal queries fail (memex has only transaction time).
+**Mechanism**: at `memory_store`, run a regex date extractor over text (cheap, deterministic). LLM fallback only when regex misses obvious-looking dates. Store as `metadata.referencedDate`.
+**Cost**: regex extractor + metadata field + tests. ~half day.
+**Impact**: enables Mastra-style temporal filtering (95.5% temporal reasoning when fully implemented). On its own, just storing the field is no-op; the win is when retrieval uses it (R7 below).
+**Where**: new `src/temporal.ts` for extractor; `src/service/memex-service.ts` for capture.
+**Dependency**: none for storage; pairs with R7.
+
+### Tier 2 — Foundation work (depends on architecture migration from earlier plan)
+
+These need the service layer (from `docs/plans/two-problems-architecture.md`) to land first.
+
+#### R4: 5-verb store pipeline with structured REJECT codes (H3)
+
+**Problem**: Mem0 #4573 failure modes — system-prompt restatement, feedback loops, hallucinated identity, schema dumps, role violations.
+**Mechanism**: implement REJECT with reason codes (`recall_loop`, `system_echo`, `ungrounded_identity`, `schema_blob`, `role_violation`). Cheap deterministic filters cascade into the LLM judge. R1 (H7) is the first reason code; this generalizes to all 5.
+**Cost**: ~1 day per detector. Total: 1 week.
+**Impact**: prevents the full 97.8% junk class.
+**Dependency**: service layer (so detectors live in one place, not duplicated across MCP and OpenClaw paths).
+
+#### R5: "Should I retrieve?" gate (H10)
+
+**Problem**: every turn auto-recalls 3 memories even when none are relevant.
+**Mechanism**: heuristic gate (query length, greeting patterns, in-flight context size, top-1 score threshold). Self-RAG / Adaptive-RAG patterns.
+**Cost**: ~2 days. Heuristics first, classifier later.
+**Impact**: 30-50% reduction in auto-recall calls, less context pollution, lower token cost per turn.
+**Dependency**: best done after the OpenClaw plugin shell is thinned (so the gate is in the service layer, not duplicated).
+
+#### R6: Question-generation step before reflection synthesis (H4)
+
+**Problem**: current reflection produces generic learnings from heterogeneous batches.
+**Mechanism**: Stanford Generative Agents 2-step pattern. (1) "What 3 questions can we ask?" (2) Retrieve per question, synthesize per question with citations.
+**Cost**: ~2 days. Mostly prompt engineering + provenance metadata.
+**Impact**: more specific, more actionable learnings; provenance edges back to source memories enable future audit.
+**Dependency**: existing `reflectionSweep` in `src/dreaming.ts` is the right home; pairs well with adding `concept` category (R2).
+
+#### R7: Date-range filtering at retrieval (H8 part 2)
+
+**Problem**: memex captures `referencedDate` (R3) but doesn't use it.
+**Mechanism**: at recall time, parse temporal phrases in query ("last Tuesday", "in March", "yesterday"). If found, add `WHERE json_extract(metadata, '$.referencedDate') BETWEEN ? AND ?` to the SQL retrieval.
+**Cost**: temporal parser (existing libraries: chrono-node) + SQL filter wiring. ~1 day.
+**Impact**: temporal-reasoning queries succeed where they currently fail.
+**Dependency**: R3 (referenced_date capture) must be live first.
+
+### Tier 3 — Defer until evidence demands
+
+These are theoretically grounded but lack memex-specific evidence yet.
+
+#### R8: Schema-match routing (H6)
+
+**Problem**: schema-consistent and schema-inconsistent memories should follow different consolidation paths (Tse 2007).
+**Mechanism**: at store time, retrieve related learnings, ask "consistent / conflict / extends?", route accordingly.
+**Cost**: 1 LLM call per store. Real money.
+**Why defer**: memex's pool is small (465 memories). Schema-conflict frequency is low. Cost-benefit unclear without production data.
+**Trigger**: when contradiction detection becomes a measurable problem.
+
+#### R9: Explicit interleaved replay (H5)
+
+**Problem**: dreaming reflection only sees recent top-50 memories. CLS theory says interleaved sampling of older memories prevents drift.
+**Mechanism**: instead of `ORDER BY timestamp DESC LIMIT 50`, sample a mix: 30 recent + 20 random from older.
+**Cost**: query tweak. Trivial.
+**Why defer**: at 465 memories, all old memories ≈ all recent memories. The split only matters when "old" is months/years away from "new." Re-evaluate at >5K memories.
+
+#### R10: Hierarchical organization (H2)
+
+**Problem**: flat memory pools may not scale.
+**Why defer**: HyperMem/xMemory hierarchies pay off at 1K+ memories. Memex is at 465. Add when scale forces it; the layered service architecture from `docs/plans/two-problems-architecture.md` makes adding hierarchy later cheap.
+
+---
+
+## The Reflection v2 Design (concrete proposal from this research)
+
+Based on the synthesis, memex's reflection should evolve through three additive steps:
+
+### Step 1: Add provenance + question step (R6, ~3 days)
+
+Modify `reflectionSweep` in `src/dreaming.ts`:
+```typescript
+// 1. Threshold trigger (existing)
+// 2. Sample memories: 30 recent (importance > 0.3) + 20 older random (R9, optional)
+// 3. NEW: ask LLM "what 3 questions could be answered?"
+// 4. NEW: per question, retrieve top-K with existing retriever
+// 5. Synthesize per question with provenance
+// 6. Store as category="learning" or "concept" (R2), metadata.sources=[id1,id2,...]
+```
+
+### Step 2: Add NLL gate (R1, ~1 day)
+
+In `memory_store` handler, before storing:
+```typescript
+const top = await retriever.retrieve({query: text, limit: 3});
+if (top[0]?.score > 0.95) {
+  return reject({reason: 'recall_loop', similar_to: top[0].entry.id});
+}
+```
+
+### Step 3: Add temporal capture + filter (R3 + R7, ~2 days)
+
+```typescript
+// At store: extract referencedDate from text (regex first, LLM fallback)
+metadata.referencedDate = extractReferencedDate(text);
+
+// At recall: parse temporal phrases in query
+const range = parseTemporalQuery(query);
+if (range) scopeFilter += ` AND json_extract(metadata, '$.referencedDate') BETWEEN ? AND ?`;
+```
+
+**Total effort**: ~6 days for Reflection v2 covering R1, R2 (concept), R3, R6, R7. R4, R5 deferred to post-architecture-migration.
+
+**Expected impact**:
+- R1: prevents Mem0-class failure (97.8% junk avoided)
+- R2: cleaner taxonomy
+- R3+R7: temporal queries go from failing to working (Mastra hit 95.5% with this)
+- R6: more specific learnings with provenance
+
+---
+
+## Process log (final)
+
+- 2026-04-25: Research initialized; loop bounded but flexible.
+- 2026-04-25: F1 (consolidation systems) complete. H1 partially refuted on first contact with MemMachine. H3 confirmed by Mem0 production data.
+- 2026-04-25: F3 (neuroscience), F8 (selective storage), F9 (concept synthesis) complete. CLS theory validates two-tier architecture; Mem0 #4573 detector table makes H3 concrete; Generative Agents pattern produces H4; NLL info gain produces H7.
+- 2026-04-25: F5 (categorization), F6 (RAG advances), F7 (temporal) complete. `concept` category recommended (H9). Memex's RAG mechanics confirmed current — gaps are calibration (H10) and temporal filtering (H8). Mastra three-date model produces H8.
+- 2026-04-25: Synthesis pass — three cross-cutting patterns identified (two-tier canonical, forgetting first-class, time has three dimensions). 10 hypotheses ranked into 3 tiers. Reflection v2 proposed as ~6-day project.
+- **Status: research complete enough to act on. F2 (Stanford detail), F4 (cognitive arch), F10 (provenance) covered indirectly through other angles. No further data-gathering iterations needed unless a specific hypothesis needs validation.**
 
 ---
 
