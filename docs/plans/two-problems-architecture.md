@@ -57,22 +57,57 @@ Memex needs to serve memory requests from multiple devices (laptop, dev VM, Mac 
 - **Pattern B**: single daemon on Mac mini-1, all platforms connect via Tailscale HTTP — matches user's vision
 - **Pattern C-lite**: Pattern B + small read-only local cache for offline — additive, can defer
 
+### Sub-problem 1.1: Plugin vs MCP vs REST (protocol/integration layer)
+
+User's reframe: *"OpenClaw should just have a very thin plug-in and that calls MCP because the plug-in is needed for the hooks. Same applies to Claude Code. I wonder if MCP is even absolutely necessary because once you have these plugins then you can basically just use any API endpoints like a REST API."*
+
+**Key fact**: MCP has no agent lifecycle hooks (no `before_prompt_build` equivalent). Plugins are required for hooks regardless of backend protocol.
+
+**The real question**: what protocol do plugins use to talk to the memex backend?
+
+| Protocol | Pros | Cons |
+|---|---|---|
+| **MCP over stdio** | Built into Claude Code, OpenClaw plugin SDK | Per-machine only |
+| **MCP over HTTP** | Cross-machine, agents without plugins use directly | Mostly redundant when plugin already exists |
+| **Plain REST/JSON** | Simple, fast, hot-path friendly | Loses cross-agent tool exposure |
+| **Both MCP + REST** | MCP for plugin-less agents; REST for plugin hot path | Two surface areas |
+
+**Per-platform investigation needed:**
+
+| Platform | Has plugins/hooks? | Built-in memory? | Does MCP add value? |
+|---|---|---|---|
+| OpenClaw | ✅ `before_prompt_build`, `registerTool`, full plugin SDK | No | Marginal — plugin already handles tools |
+| Claude Code | ✅ settings.json hooks (SessionStart, PreToolUse, PostToolUse, Stop) + plugins | ✅ MEMORY.md (200 line cap) | Yes today (live), redundant if we ship a plugin |
+| Cursor | Has extension model (TBD details) | Limited | Yes — until we write a Cursor extension |
+| Zed | Has extensions | Limited | Yes — until we write a Zed extension |
+| Cline / others | Varies | Varies | Yes — universal fallback |
+
+**Working hypothesis**: MCP earns its keep specifically for agents *without* a memex plugin. For platforms where we ship a plugin, the plugin can call the backend via any protocol.
+
+**Implication for design**: backend should expose **both MCP-over-HTTP and a stable JSON API**. Same logic, two surfaces. The "MCP server" and the "memex backend" become two layers — backend has the logic, MCP is one of its frontends.
+
 ### Open questions for user
 
 1. Is **fail-closed when host unreachable** acceptable, or do you need offline reads?
 2. Where should the daemon live by default? Mac mini-1?
 3. Auto-start on boot via launchd, or manual?
 4. Should the local OpenClaw plugin **embed an MCP client** that connects to remote daemon, or run its own subprocess that proxies?
+5. **(1.1)** Backend exposes MCP-over-HTTP only, REST only, or both?
+6. **(1.1)** Which platforms get a memex plugin (vs use MCP directly)?
 
 ### Progress
 
 - [x] Identify three patterns (A, B, C) and trade-offs
 - [x] Confirm SQLite WAL handles correctness (only "duplicate work" is a real issue)
 - [x] User signals preference for Pattern B (single daemon, cross-device pool)
+- [x] **(1.1)** Recognize MCP has no hooks — plugins are required for lifecycle integration
+- [x] **(1.1)** Distinguish two layers: memex backend (logic) vs MCP frontend (protocol)
 - [ ] Decide on host machine for daemon
 - [ ] Decide on offline behavior
 - [ ] Decide on lifecycle (manual vs auto-start)
 - [ ] Decide on auth model
+- [ ] **(1.1)** Per-platform plugin investigation (Claude Code first)
+- [ ] **(1.1)** Decide MCP-only vs REST-only vs both for backend
 - [ ] Implementation plan
 
 ---
