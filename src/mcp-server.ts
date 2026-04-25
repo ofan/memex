@@ -78,7 +78,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
     }
 
     const resolvedCategory = category || detectCategory(text);
-    const vector = embedder ? await embedder.embedDocument(text) : new Array(dim).fill(0);
+    const vector = embedder ? await embedder.embedPassage(text) : new Array(dim).fill(0);
     const entry = await store.store({
       text,
       vector,
