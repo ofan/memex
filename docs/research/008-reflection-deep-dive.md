@@ -20,9 +20,9 @@ Loop is bounded but flexible: angles can be reordered, deepened, or redirected b
 - [ ] **F2**: Stanford Generative Agents reflection — full mechanism
 - [x] **F3**: Neuroscience — **COMPLETE** (CLS theory, sleep replay, schema integration, active forgetting)
 - [ ] **F4**: Cognitive architectures — ACT-R, SOAR, EPIC, CLARION
-- [ ] **F5**: Memory categorization — declarative/procedural, episodic/semantic, schemas
-- [ ] **F6**: RAG advances 2025-2026 — query expansion, late interaction, hybrid
-- [ ] **F7**: Temporal reasoning — bi-temporal models, recency vs validity
+- [x] **F5**: Memory categorization — **COMPLETE** (Tulving/Squire/FTT + AI taxonomies, recommend `concept` as 7th category)
+- [x] **F6**: RAG advances 2025-2026 — **COMPLETE** (memex is current; gaps are calibrated retrieval + instruction-following rerank)
+- [x] **F7**: Temporal reasoning — **COMPLETE** (bi-temporal, Mastra three-date model, episodic anchoring)
 - [x] **F8**: Active learning / selective storage — **COMPLETE** (info gain, AL methods, forgetting, quality gates, Mem0 #4573 detector table)
 - [x] **F9**: Concept synthesis / abstraction — **COMPLETE** (Bayesian + topic models + KG + GenAgents + fuzzy-trace, convergent 6-step recipe)
 - [ ] **F10**: Provenance and trust — source weighting, contradiction handling
@@ -35,6 +35,9 @@ Loop is bounded but flexible: angles can be reordered, deepened, or redirected b
 - [x] **H5**: Memex's facts/learnings split is structurally CLS — make replay explicit → strong theoretical grounding, defer until pool grows
 - [x] **H6**: Schema-consistent fast path / inconsistent slow path (Tse 2007) → novel, needs cost-benefit
 - [x] **H7**: NLL-based info gain check is the cheapest defense against feedback loops → **should be the first quality gate added**
+- [x] **H8**: Mastra three-date model (referenced_date) → highest-ROI temporal upgrade
+- [x] **H9**: Add `concept` as 7th category → fills real taxonomic gap, ship
+- [x] **H10**: "Should I retrieve?" gate → biggest practical RAG win (~40% recall savings)
 
 ### Process log
 - [x] 2026-04-25: Loop initialized. F1 launched with 3 parallel sub-agents (Letta+Mastra, A-MEM+Mem0+MemOS, hierarchical systems).
@@ -309,13 +312,220 @@ Sources:
 
 ## Section F6: RAG Advances 2025-2026
 
-*(not yet started)*
+### F6.1 — Late interaction (ColBERT-family)
+
+**ColBERTv2, PLAID, ConstBERT, JaColBERT** — token-level late interaction.
+
+**Wins when**: long documents, OOD queries, fine-grained matching.
+**Loses on**: storage (50-100x dense size).
+
+**Memex applicability**: **NO**. Memex stores chunk-level dense vectors. Memory chunks are already token-sized (atomic facts ~100 tokens). Late interaction's per-token granularity is overkill.
+
+### F6.2 — Query expansion / rewriting
+
+| Method | Gains | When |
+|---|---|---|
+| **HyDE** (Gao 2023) | +5-15 nDCG unsupervised; +1-3 with strong retriever | Cold start, vague queries |
+| **Query2Doc** (Wang 2023) | +15% MRR on BM25; +1-3% on dense | BM25 routes |
+| **Step-Back** (Zheng 2024) | +7% TimeQA, +27% MuSiQue | Multi-hop |
+| **GAR / MILL** | Multi-query fusion | High-value queries |
+
+**When it hurts**: short factual queries with strong reranker (memex's situation).
+
+**Memex applicability**: PARTIAL. Strong reranker eats most gains. Optional: **conditional HyDE** when top-1 score < threshold.
+
+### F6.3 — Reranker advances (memex's reranker is current)
+
+| Reranker | nDCG / latency | Notes |
+|---|---|---|
+| **Qwen3-Reranker-8B** | ~62 BEIR avg, current SOTA-tier | Memex uses this |
+| **Contextual AI Reranker v2** | +3 nDCG vs Cohere 3.5 | **Instruction-following** ("prefer recent") |
+| **Voyage rerank-2.5** | 1.4x latency, +2 nDCG | |
+| **ZeroEntropy zerank-2** | Claimed SOTA, <50ms p95 | New, watch |
+
+**Memex applicability**: COMPETITIVE. Qwen3-Reranker still SOTA-tier in 2026. **Instruction-following rerankers (Contextual v2) are interesting for memory** — could say "prefer recent" or "prefer corrections" per query.
+
+### F6.4 — Hybrid retrieval scoring
+
+| Method | Comparison |
+|---|---|
+| **RRF** (Cormack 2009) | k=60. Robust, no calibration. Industry default. |
+| **Z-score fusion** (memex) | Sensitive to score distribution. Works when ~Gaussian. |
+| **Learned convex** (`α·BM25 + (1-α)·dense`) | +1-2 nDCG in-domain, RRF wins OOD. |
+
+**Memex applicability**: DEFENSIBLE. Z-score is fine. RRF marginally more robust. **Don't expect >1 nDCG improvement from a swap.**
+
+### F6.5 — Contextual compression / abstractive retrieval
+
+- **RECOMP** (ICLR 2024): 6x token reduction, <2% QA drop
+- **LongLLMLingua**: 4x compression, +21% NaturalQuestions
+- **Memex's dreaming/reflection** = abstractive retrieval applied to memory. Memex is **ahead of curve** here for memory specifically.
+
+### F6.6 — Calibrated retrieval (THE gap)
+
+| Method | Mechanism |
+|---|---|
+| **Self-RAG** (Asai 2024) | [Retrieve]/[No Retrieve] tokens, +6% PopQA |
+| **Adaptive-RAG** (Jeong 2024) | Classifier picks no-retrieve / single / multi-hop. Saves ~40% retrievals. |
+| **CRAG** (Yan 2024) | Retrieval evaluator triggers web fallback on low confidence |
+| **SKR** (Wang 2023) | Model self-judges if it knows |
+
+**Memex applicability**: **HIGH GAP**. Memex auto-recalls every turn for main agent. A "should I retrieve?" gate could cut noise + latency. Particularly relevant since `autoRecallLimit=3` sometimes injects irrelevant context.
+
+### F6 Verdict
+
+**Memex's RAG mechanics are 2026-current.** Two real gaps:
+
+1. **Calibrated retrieval** (Self-RAG / Adaptive-RAG) — biggest practical win for noise reduction
+2. **Instruction-following rerank** (Contextual v2) — natural fit for memory queries
+
+**Skip**: late interaction, RRF swap, full HyDE.
+
+Sources:
+- ColBERTv2 arXiv:2112.01488; ConstBERT arXiv:2505.19419
+- HyDE arXiv:2212.10496; Query2Doc arXiv:2303.07678; Step-Back arXiv:2310.06117
+- Self-RAG arXiv:2310.11511; Adaptive-RAG arXiv:2403.14403; CRAG arXiv:2401.15884
+- Contextual AI Reranker v2 (Oct 2025); ZeroEntropy zerank-2 (2026)
 
 ---
 
 ## Section F7: Temporal Reasoning
 
-*(not yet started)*
+### F7.1 — Bi-temporal models (databases)
+
+**Snodgrass 1999** canonical formulation:
+- **Valid time** `[VT_start, VT_end)` — when fact is true *in the modeled world*
+- **Transaction time** `[TT_start, TT_end)` — when system *recorded/knew* the fact
+
+**SQL:2011** introduced `PERIOD FOR`, system-versioned tables, `FOR SYSTEM_TIME AS OF` queries.
+
+**Why distinguish?** Audit/compliance ("what did we *believe* on date X vs what was *true* on date X?"). Retroactive corrections.
+
+**Memex applicability**: today only transaction time (`timestamp`). Adding `valid_from`/`valid_to` enables "what was true last Tuesday" vs "what did I record last Tuesday."
+
+### F7.2 — Mastra's three-date model (the practical winner)
+
+- **Observation date** = `timestamp` (when written)
+- **Referenced date** = explicit date *in the text* ("last Tuesday I…"), normalized to absolute at write time
+- **Relative date** = computed offset (`reference - observation`)
+
+**Retrieval for "what did I do last Tuesday?"**: query-time normalization computes absolute date → filter `referenced_date BETWEEN day_start AND day_end` → vector search WITHIN filter.
+
+**This separates temporal filter from semantic match** — that's why Mastra hits 95.5% on temporal reasoning while dense-only systems sit 30-50%.
+
+**Memex applicability**: **highest-ROI temporal addition**. Extract `referenced_date` at capture. Add date-range filter to retriever. Existing `metadata` JSON column can hold this.
+
+### F7.3 — Temporal knowledge graphs
+
+**Graphiti / Zep** (arXiv:2501.13956): every edge carries `t_valid` and `t_invalid`. Contradicting facts *invalidate* (set t_invalid) rather than overwrite — preserves history. LLM-driven contradiction detection at ingestion.
+
+**Embedding methods**: TTransE, HyTE, TA-TransE, T-GCN — additive vectors or hyperplane projections of time.
+
+**Memex applicability**: no edges today. If/when relations introduced, Graphiti's invalidation-not-deletion is the cleanest design. Already aligned with memex's `superseded_by` concept.
+
+### F7.4 — Temporal benchmarks
+
+- **LongMemEval temporal-reasoning**: multi-session dialogues, ordering/duration/since-when. GPT-4o full-context ~36-47%. Mastra OM hits 95.5%.
+- **TempReason** (ACL 2023): L1 time-time, L2 event-time, L3 event-event. LLMs fail most on L3.
+- **TimeQA** (NeurIPS 2021): "easy" (explicit dates) vs "hard" (implicit). T5/GPT-3 drop ~25 pts on hard.
+
+### F7.5 — Recency vs validity
+
+**Newer-wins fails**:
+- Durable old facts ("allergic to penicillin" from 2022) outrank ephemeral new ones ("running late today")
+- Temporary task expires but is still "recent"
+
+**Detection of expiry**:
+- Explicit invalidation via contradiction LLM (Graphiti)
+- TTL tags by content class (calendar item, todo, preference)
+- Temporal scoping cues at ingest ("today", "this week" → short TTL)
+
+**Decay formulas**:
+- Exponential: `score = base · exp(-λΔt)`, half-life `t½ = ln 2 / λ`
+- Ebbinghaus: `R = exp(-Δt/S)`, strength `S` boosted on rehearsal (memex has this)
+- Power law: `score = base · (1 + Δt)^(-α)` (heavier tail; better for long-lived facts)
+
+### F7.6 — Time-aware retrieval
+
+**Recency boost**: `final = sim · exp(-λ · age)` (memex has this in retriever)
+
+**Time-windowed filter**: pre-filter to `[t-Δ, t+Δ]` then rank semantically (Mastra's approach)
+
+**Episodic anchoring** ("what did I learn around the time of X?"): two-stage — resolve "X" to memory `m_x` with timestamp `t_x` → retrieve neighbors in `[t_x ± Δ]`. Tulving-grounded.
+
+Sources:
+- Snodgrass 1999 *Developing Time-Oriented Database Applications in SQL*
+- SQL:2011 spec / Kulkarni & Michels SIGMOD Record 41(3) 2012
+- Graphiti/Zep arXiv:2501.13956
+- LongMemEval arXiv:2410.10813
+- TempReason ACL 2023, TimeQA NeurIPS 2021
+- Mastra docs (mastra.ai/docs/memory/semantic-recall)
+
+---
+
+## Section F5: Memory Categorization
+
+### F5.1 — Cognitive psychology foundations
+
+**Tulving 1972, 1985**: episodic vs semantic
+- **Episodic**: time/place-tagged events ("I met Anna in Paris last June") — autonoetic consciousness
+- **Semantic**: decontextualized knowledge ("Paris is in France")
+
+**Squire 1992**: declarative (episodic + semantic) vs **non-declarative/procedural** (skills, habits, priming).
+
+**Brainerd & Reyna FTT**: gist (semantic, generalized) vs verbatim (literal, surface).
+
+**Johnson et al. 1993 source monitoring**: source memory (where/when/from-whom) ≠ item memory (what).
+
+### F5.2 — Production AI category systems
+
+| System | Categories | Notes |
+|---|---|---|
+| **Mem0** | Flat (no formal taxonomy) | Implicit via metadata tags |
+| **Letta/MemGPT** | persona, human (core blocks) | Roles, not content types |
+| **Hindsight** | world, bank, opinion, observation | 4 networks — closest cognitive analog |
+| **Mastra** | event, preference, decision (kind) | Almost identical to memex |
+| **LangGraph** | namespaces (e.g. `(user_id, "preferences")`) | Categories emerge from naming |
+| **Generative Agents** | None | Single stream + importance/recency/relevance |
+
+### F5.3 — The "concept" gap
+
+The agent surfaced a real gap in memex's taxonomy:
+
+| Category | Example | Memex today |
+|---|---|---|
+| **fact** | "User's wife is Anna" | ✅ |
+| **learning** | "Avoid `rm -rf` without `--dry-run`" | ✅ — but implies correction |
+| **concept** | "User uses 'sprint' to mean 3-day cycle, not 2-week scrum" | ❌ no clean home |
+
+Concepts are **definitional/relational schemas** — vocabulary, mental models, recurring frames. Without a category they get squashed into `fact` (loses generality) or `learning` (implies a mistake).
+
+Hindsight's `opinion` is closest analog but conflates belief with abstraction.
+
+### F5.4 — Procedural memory
+
+**PRAXIS** stores action sequences indexed by goal. **Voyager** maintains skill library (code-level). **Reflexion** stores trajectory critiques (≈ memex `learning`).
+
+Pure how-to ("to deploy: run `make ship` then verify staging") doesn't fit `fact` or `learning` cleanly. **Defer `procedure` category** until telemetry shows miscategorization.
+
+### F5.5 — Recommended memex categories
+
+**Add**: `concept` — definitional/schema content (user vocabulary, mental models, domain abstractions). Cognitive-psych grounded (Tulving semantic + FTT gist).
+
+**Defer**: `procedure` — spike first per project methodology.
+
+**Final list**: `preference, fact, concept, decision, entity, learning, other`
+
+**Use at retrieval**: soft boosts + format hints (NOT hard filters). Preserves recall while letting concepts surface in definitional queries.
+
+Sources:
+- Tulving 1972 *Organization of Memory*; Tulving 1985 *Memory and Consciousness*
+- Squire 1992 *J. Cog. Neurosci*
+- Brainerd & Reyna 2002 *Current Directions Psych Sci*
+- Johnson, Hashtroudi & Lindsay 1993 *Psych Bulletin*
+- Park et al. 2023 (Generative Agents)
+- Packer et al. 2023 (MemGPT/Letta)
+- Hindsight LLM-Agent papers
 
 ---
 
@@ -728,6 +938,122 @@ on store(fact):
 - [ ] Open: how to distinguish duplicate from correction in practice — need empirical study
 
 **Verdict**: *low cost, high impact, should be the FIRST quality gate added*
+
+---
+
+### H8: Mastra's three-date temporal model is the highest-ROI temporal upgrade for memex.
+
+**Statement**: Adding a `referenced_date` field (extracted from text at write time) plus query-time date filtering would close memex's biggest temporal gap. Mastra OM scored 95.5% on LongMemEval temporal-reasoning vs ~30-50% for dense-only systems.
+
+**Rationale**:
+- Memex today has only `timestamp` (transaction time)
+- Queries like "what did I do last Tuesday?" require either matching the date in text or filtering by referenced date
+- Vector search over date phrases is unreliable; explicit filtering wins
+- The mechanism is well-defined: extract at write time, normalize to absolute date, filter at query time before semantic ranking
+
+**Predicted for memex**:
+- Temporal queries that currently fail (e.g., "what did we discuss about deployment last month") would succeed
+- Implementation cost: regex/LLM date extractor + new metadata field + query-time filter — modest
+- No core retrieval changes needed; date filter applied as an additional `WHERE` clause
+
+**Implementation sketch**:
+```typescript
+// At store time:
+const refDate = extractReferencedDate(text); // regex first, LLM fallback
+metadata.referencedDate = refDate?.toISOString();
+
+// At query time:
+const queryRange = parseTemporalQuery(query); // "last Tuesday" → [date, date+1d]
+if (queryRange) {
+  scopeFilter += ` AND json_extract(metadata, '$.referencedDate') BETWEEN ? AND ?`;
+}
+```
+
+**Boundary conditions**:
+- Date extraction quality matters — false negatives (missed dates) = no harm, false positives (wrong dates) = wrong filter
+- Use a confidence threshold; only add `referencedDate` when extractor is confident
+
+**Evidence to collect**:
+- [x] Confirmed: Mastra OM 95.5% temporal score
+- [ ] Open: how often do memex's actual queries reference dates? Production data needed
+
+**Verdict**: *concrete and actionable, moderate cost, high temporal-reasoning ROI*
+
+---
+
+### H9: Add `concept` as a 7th memory category — gist-level definitional content.
+
+**Statement**: Memex's existing categories (preference, fact, decision, entity, learning, other) leave a real gap: **gist-level definitional/schema content** like vocabulary, mental models, recurring frames. Cognitive psychology grounds this clearly (Tulving semantic + Brainerd-Reyna gist).
+
+**Rationale**:
+- "User uses 'sprint' to mean 3-day cycle, not 2-week scrum" doesn't fit:
+  - `fact` (too literal/atomic)
+  - `learning` (implies a mistake/correction)
+  - `preference` (it's not a preference, it's a vocabulary mapping)
+- Hindsight's `opinion` network is closest analog but conflates belief with abstraction
+- Adding `concept` lets agent emit definitional content cleanly AND lets reflection synthesize concepts as outputs
+
+**Predicted for memex**:
+- Better recall format: `[concept] User vocabulary: "sprint" = 3-day cycle` is more legible than the same as `fact`
+- Reflection can produce `category: "concept"` outputs distinct from `category: "learning"`
+- Categories used at retrieval as soft boosts + format hints (NOT hard filters)
+
+**Boundary conditions**:
+- LLM might miscategorize in early days — needs a few-shot prompt with examples
+- Risk: category proliferation. Resist adding more (procedure, etc.) until data demands it.
+
+**Evidence to collect**:
+- [x] Confirmed: cognitive psychology distinguishes gist (concept) from verbatim (fact)
+- [x] Confirmed: existing AI systems (Hindsight) have opinion/observation analog
+- [ ] Open: how often does memex's auto-capture surface concept-shaped content? Need to check production data
+
+**Verdict**: *low cost, fills real taxonomic gap, ship*
+
+**Defer**: `procedure` category. Spike first per project methodology — don't add until telemetry shows miscategorization.
+
+---
+
+### H10: A "should I retrieve?" gate would be memex's biggest practical RAG upgrade.
+
+**Statement**: Memex auto-recalls every turn for the `main` agent. Many turns don't need recall (greetings, simple operations, in-progress tasks where the LLM has full context). Self-RAG / Adaptive-RAG show ~40% retrievals can be skipped without quality loss. This is memex's biggest mechanical RAG gap.
+
+**Rationale**:
+- Self-RAG (Asai 2024): +6% on PopQA over vanilla RAG by gating
+- Adaptive-RAG (Jeong 2024): saves ~40% retrievals
+- Memex's `autoRecallLimit=3` injects 3 memories per turn even when none are relevant — token waste, occasional misdirection
+- A simple gate could be: "is the user's query likely to benefit from memory?"
+
+**Predicted for memex**:
+- 30-50% reduction in auto-recall calls = 30-50% reduction in token cost for memory injection
+- Quality stays the same or improves (less irrelevant context)
+- Implementation: cheap classifier or score threshold on top-1 result
+
+**Implementation sketch**:
+```typescript
+// In before_prompt_build hook:
+async function shouldRecall(query: string, context: ConversationContext): Promise<boolean> {
+  // Heuristic 1: query length — very short queries rarely benefit
+  if (query.length < 20) return false;
+  // Heuristic 2: is it a greeting/confirmation?
+  if (/^(ok|thanks|got it|done|cool|sure)\b/i.test(query.trim())) return false;
+  // Heuristic 3: in-flight task — LLM already has full context
+  if (context.activeTaskTokens > 4000) return false;
+  // Heuristic 4: check top-1 score before injecting
+  const top1 = await retriever.peek(query);
+  return top1.score > 0.4; // threshold tunable
+}
+```
+
+**Boundary conditions**:
+- False negatives (skipped recall when it would have helped) are silent failures
+- Add metrics: track how often the gate skips, sample skipped queries to validate
+
+**Evidence to collect**:
+- [x] Confirmed: Self-RAG and Adaptive-RAG show real wins
+- [ ] Open: how often does memex's auto-recall produce useful injections? Need prod telemetry
+- [ ] Open: is the retrieval-skip gate cheap enough not to add per-turn latency?
+
+**Verdict**: *high practical value, moderate implementation cost, easy to A/B test*
 
 ---
 
