@@ -8,6 +8,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createServer as createHttpServer, IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { MemoryStore } from "./memory.js";
 import { createRetriever } from "./retriever.js";
@@ -326,8 +328,98 @@ async function main() {
     console.error(`memex-mcp: dreaming scheduled (first in 5m, then every ${Math.round(dreamInterval / 3600_000)}h)`);
   }
 
-  const transport = new StdioServerTransport();
+  // Choose transport: HTTP daemon mode (--http <port>) or stdio (default)
+  const httpPort = parseInt(flagValue("--http") || process.env.MEMEX_HTTP_PORT || "0", 10);
+  const httpHost = flagValue("--http-host") || process.env.MEMEX_HTTP_HOST || "127.0.0.1";
+  const authToken = flagValue("--auth-token") || process.env.MEMEX_AUTH_TOKEN || "";
+
+  if (httpPort > 0) {
+    await startHttpServer(server, { port: httpPort, host: httpHost, authToken });
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
+}
+
+async function startHttpServer(
+  server: McpServer,
+  opts: { port: number; host: string; authToken: string },
+): Promise<void> {
+  const { port, host, authToken } = opts;
+
+  // Stateless mode: each request is independent, no session persistence.
+  // Single transport instance handles all connections.
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
   await server.connect(transport);
+
+  const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
+    // Auth: bearer token via Authorization header
+    if (authToken) {
+      const auth = req.headers["authorization"];
+      const expected = `Bearer ${authToken}`;
+      if (auth !== expected) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+    }
+
+    // Health endpoint (no MCP, no auth check above for /health if no token)
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, version: "0.6.0" }));
+      return;
+    }
+
+    // MCP endpoint: /mcp (default Streamable HTTP path)
+    if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
+      try {
+        // Parse JSON body for POST
+        let parsedBody: unknown;
+        if (req.method === "POST") {
+          parsedBody = await readJsonBody(req);
+        }
+        await transport.handleRequest(req, res, parsedBody);
+      } catch (err) {
+        if (!res.writableEnded) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : "internal error" }));
+        }
+      }
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(port, host, () => resolve());
+  });
+
+  console.error(`memex-mcp: HTTP transport listening on http://${host}:${port}/mcp`);
+  if (!authToken) {
+    console.error(`memex-mcp: WARNING — no --auth-token set, daemon is open to anyone on ${host}`);
+  }
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk as Buffer));
+    req.on("end", () => {
+      try {
+        const body = Buffer.concat(chunks).toString("utf-8");
+        resolve(body.length > 0 ? JSON.parse(body) : undefined);
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on("error", reject);
+  });
 }
 
 // Run if executed directly
