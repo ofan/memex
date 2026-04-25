@@ -1,0 +1,5 @@
+{
+  "name": "memex",
+  "description": "Hooks that nudge the LLM to use the memex MCP server for cross-session memory. Requires the user to install the memex MCP server separately (e.g. via .mcp.json or claude mcp add).",
+  "version": "0.1.0"
+}
