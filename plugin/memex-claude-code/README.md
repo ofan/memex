@@ -1,16 +1,12 @@
 # Memex — Claude Code plugin
 
 Cross-session memory for Claude Code. Bundles:
-- **MCP server config** — points at a memex daemon (HTTP) or local subprocess
+- **MCP server config** — points at a memex daemon (HTTP) via env-var references
 - **Hooks** — `SessionStart`, `UserPromptSubmit`, `Stop` nudge the LLM to use memory tools
 
 ## Installation
 
-```sh
-claude plugin install /path/to/memex/plugin/memex-claude-code
-```
-
-Or symlink for development:
+Symlink for development:
 
 ```sh
 ln -s /path/to/memex/plugin/memex-claude-code ~/.claude/plugins/local/memex
@@ -18,23 +14,38 @@ ln -s /path/to/memex/plugin/memex-claude-code ~/.claude/plugins/local/memex
 
 ## Configuration
 
-The plugin's `.mcp.json` references two environment variables. Set them in your shell profile (or per-project `.env`):
+`.mcp.json` references `${MEMEX_ENDPOINT}` and `${MEMEX_AUTH_TOKEN}`. Set them
+in Claude Code's `settings.json` `env` block — no shell exports needed:
 
-```sh
-# For an HTTP daemon (recommended — cross-device shared pool)
-export MEMEX_ENDPOINT="http://memex-host.tailff9ac.ts.net:7878/mcp"
-export MEMEX_AUTH_TOKEN="$(op read 'op://homelab/memex-daemon/memex-daemon-token')"
+`~/.claude/settings.json` (user-global) or `.claude/settings.json` (per-project):
+
+```json
+{
+  "env": {
+    "MEMEX_ENDPOINT": "http://100.117.49.20:7878/mcp",
+    "MEMEX_AUTH_TOKEN": "PASTE_YOUR_TOKEN_HERE"
+  }
+}
 ```
 
-Or, if you want a local stdio subprocess instead of the HTTP daemon, replace `.mcp.json` with:
+Pull the token from 1Password once and paste:
+
+```sh
+op read 'op://homelab/memex-daemon/memex-daemon-token'
+```
+
+`settings.json` is git-ignored by Claude Code by default; safe place for the literal token.
+
+### Local stdio fallback
+
+If you don't want to run the daemon and prefer a per-session subprocess:
 
 ```json
 {
   "mcpServers": {
     "memex": {
       "command": "op",
-      "args": ["run", "--", "node", "/path/to/memex/node_modules/.bin/jiti", "/path/to/memex/src/mcp-server.ts"],
-      "env": { "MEMEX_DB_PATH": "...", "MEMEX_EMBED_ENDPOINT": "...", ... }
+      "args": ["run", "--", "node", "/path/to/memex/node_modules/.bin/jiti", "/path/to/memex/src/mcp-server.ts"]
     }
   }
 }
@@ -57,11 +68,11 @@ Hooks emit `additionalContext` text — they don't directly call MCP tools. The 
 
 ## Verifying
 
-After installing, run `claude` in any project. On the first user message, you should see:
+After installing, restart Claude Code. On the first user message, you should see:
 - Auto-recall: the LLM calls `mcp__memex__memory_recall` to load context
 - Auto-store: at the end of each turn, the LLM may call `mcp__memex__memory_store` for new facts
 
-Check the daemon's logs for activity:
+Daemon logs show activity:
 
 ```sh
 journalctl --user -u memex.service -f

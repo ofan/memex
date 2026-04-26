@@ -282,14 +282,16 @@ async function main() {
   const llmBaseURL = flagValue("--llm-endpoint") || process.env.MEMEX_LLM_ENDPOINT || undefined;
   const llmModel = flagValue("--llm-model") || process.env.MEMEX_LLM_MODEL || "";
   const llmApiKey = flagValue("--llm-api-key") || process.env.MEMEX_LLM_API_KEY || embedApiKey;
+  const llmTimeout = parseInt(flagValue("--llm-timeout") || process.env.MEMEX_LLM_TIMEOUT || "0", 10) || undefined;
   const llmURL = llmBaseURL?.endsWith("/v1") ? llmBaseURL : llmBaseURL ? `${llmBaseURL}/v1` : undefined;
   const reflectionLLM = llmURL && llmModel ? {
     endpoint: `${llmURL}/chat/completions`,
     model: llmModel,
     apiKey: llmApiKey,
+    ...(llmTimeout ? { timeout: llmTimeout } : {}),
   } : undefined;
   if (reflectionLLM) {
-    console.error(`memex-mcp: reflection enabled (model: ${llmModel})`);
+    console.error(`memex-mcp: reflection enabled (model: ${llmModel}${llmTimeout ? `, timeout: ${llmTimeout}ms` : ""})`);
   }
 
   // Factory creates a fresh McpServer per HTTP session. For stdio, used once.
