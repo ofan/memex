@@ -2,6 +2,46 @@
 
 Notable user-facing and infrastructure changes. Format based on [Keep a Changelog](https://keepachangelog.com/), though past releases were not tracked formally — this file starts with the 2026-04-10/11 autonomous-loop work.
 
+## [0.6.0] — 2026-04-29
+
+**Theme: cross-device memory with provenance and scope, not "better recall."**
+
+The 2026 research consensus (see [`docs/research/003-memory-retrieval-sota.md`](./docs/research/003-memory-retrieval-sota.md)) is that long-context LLMs already win on raw recall accuracy by 33–35pp on standard benchmarks; vendor benchmark numbers are unreliable (Mem0 has been reported at 49% / 93.4% / 29.07% on the same LongMemEval depending on harness); and memory tools fail on causally-dependent agentic tasks (MemoryArena, MEMTRACK, AMA-Bench all converge on long-context winning).
+
+memex's actual win condition is *cost + governance + cross-device pool*, not accuracy. v0.6 commits to that framing.
+
+### Headlines
+
+- **Standalone MCP server with HTTP transport.** memex can now run as a daemon, serving multiple devices and platforms (OpenClaw, Claude Code, future MCP clients) from a single shared SQLite pool. stdio for local subprocess; HTTP with per-session transports + bearer auth for cross-device. Configurable via env (`MEMEX_HTTP_PORT`, `MEMEX_AUTH_TOKEN`, `MEMEX_LLM_TIMEOUT`, etc.).
+- **Claude Code plugin** at `plugin/memex-claude-code/` — bundled `SessionStart` / `UserPromptSubmit` / `Stop` hooks plus MCP config. Deterministic per-turn injection that MCP `instructions` alone cannot deliver.
+- **Dreaming consolidation.** Scheduled light sweep + deep sweep + LLM reflection (DeepSeek v4-pro by default). Turns raw conversation history into reusable learnings — the Storage → Reflection → Experience pattern named in the 2026 surveys, implemented as `/dream` slash command (replaces timer-based scheduler).
+- **Citation-anchored recall.** Recalled memories are now rendered with stable anchors (`[mem:abc12345]`); the LLM is instructed to cite by anchor in reasoning. Reference: ENGRAM-R (`arXiv:2511.12987`) reports −85% input / −75% reasoning tokens with this pattern at maintained accuracy.
+- **Multi-signal retrieval as a coherent system.** Vector + BM25 + entity graph + temporal query detection + reranker + in-turn cache. This is the same family as Mem0's April 2026 update which jumped from 49% → 93.4% on LongMemEval by adopting parallel multi-signal fusion. memex landed this independently.
+- **Reranker upgrade: Qwen3-Reranker-0.6B-Q8_0** replaces bge-reranker-v2-m3-Q8_0. R@1 78% → 82%, E2E 90% → 94% on `LongMemEval_s` N=50. Mechanistic reason: Qwen3 has 32K context vs bge's 8K-truncation on long chunked sessions.
+- **Pool quality discipline.** Intake guards (text-hash dedup, conversation-fragment rejection), aggressive session-import decay, link-backfill on startup, recall-frequency tracking persisted in DB.
+
+### Why no leaderboard table this release
+
+Earlier README versions led with a "memex is #2 on LongMemEval" table. As of April 2026, that framing is misleading:
+- LongMemEval / LoCoMo top-k defaults exceed candidate-pool size — retrieval doesn't meaningfully filter
+- Scoring functions have reproducible defects on 23% of items
+- Vendor-self-reported numbers vary ±20pp across independent re-runs
+
+memex still publishes its own LongMemEval numbers (94% E2E with GPT-4o; reproducible from this repo) but no longer claims a position on a leaderboard the field has discredited. The "Benchmarks (with caveats)" section in `README.md` documents this stance.
+
+### What v0.6 does *not* do
+
+- **No ensemble retrieval.** Supermemory ASMR's 99% requires 8–12 parallel specialist calls — fatal for production P99 SLOs. memex stays single-pass with a gated reranker.
+- **No graph database.** Mem0 itself dropped its graph variant; the gains came from multi-signal fusion, not graph traversal. memex stays SQLite.
+- **No RL-trained memory ops.** Reward models (MemoryRewardBench, `arXiv:2601.11969`) degrade abruptly beyond 64K tokens, capping RL-memory's reliable supervision range. Heuristic dreaming is the right tool for now.
+- **No selective-forgetting solution.** The field's `MemoryAgentBench` shows all methods cap at ~7% on multi-hop selective forgetting. memex doesn't claim to solve this.
+
+### Open positioning
+
+memex's design center — cross-device pool, scope-aware retrieval, provenance metadata, dreaming consolidation — maps to research lines that don't yet have a clean public benchmark: `arXiv:2603.10062` names "multi-agent memory consistency" as the most pressing open challenge; the `mnemonic sovereignty` survey (`arXiv:2604.16548`) frames governance as the next axis of competition. memex sits in this lane intentionally.
+
+---
+
 ## [Unreleased]
 
 ### Added
