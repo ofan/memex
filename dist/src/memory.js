@@ -110,6 +110,7 @@ export function validateStoragePath(dbPath) {
 // Memory Store
 // ============================================================================
 export class MemoryStore {
+    /** Underlying better-sqlite3 handle. Public so callers (cli, mcp-server, dreaming, retriever, etc.) can run their own queries against the shared DB. */
     db;
     config;
     _sqliteVecAvailable = false;
