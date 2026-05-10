@@ -48,7 +48,13 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.7"
+    },
+    "build": {
+      "openclawVersion": "2026.5.7"
+    }
   },
   "scripts": {
     "test": "node --import jiti/register --test tests/*.test.ts"
