@@ -1,30 +1,43 @@
 #!/bin/bash
-# Pre-commit hook: block secrets and infra references
+# Pre-commit hook: block secrets and infra references.
 #
 # Install: git config core.hooksPath .githooks
+#
+# Patterns live in .githooks/secret-patterns.local (gitignored, copy from
+# .githooks/secret-patterns.example to bootstrap). The actual patterns are
+# themselves operational fingerprints, so they aren't checked in.
 
-PATTERNS=(
+PATTERNS_FILE=".githooks/secret-patterns.local"
+
+# Always block real-secret prefixes — these are universal, not env-specific.
+BUILTIN_PATTERNS=(
   'sk-proj-'
   'sk-SiusJ'
   'rl_7Hz'
   'ops_eyJ'
-  '100\.122\.104'
-  '\.lab\.tf'
-  'mlab42'
-  'mac-mini-[12][^0-9]'
-  'mbp-1[^0-9]'
+  'ghp_[A-Za-z0-9]{20,}'
 )
 
+# Load environment-specific patterns if the file exists.
+LOCAL_PATTERNS=()
+if [ -f "$PATTERNS_FILE" ]; then
+  while IFS= read -r line; do
+    # Skip blank lines and comments
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    LOCAL_PATTERNS+=("$line")
+  done < "$PATTERNS_FILE"
+fi
+
+PATTERNS=("${BUILTIN_PATTERNS[@]}" "${LOCAL_PATTERNS[@]}")
+
 # Files exempt from checking
-SKIP_FILES="\.githooks/pre-commit"
+SKIP_FILES="\.githooks/(pre-commit|secret-patterns)"
 
 ERRORS=0
 
-# Get list of staged files (added, copied, modified, renamed)
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
 
 for file in $STAGED_FILES; do
-  # Skip exempt files
   if echo "$file" | grep -qE "$SKIP_FILES"; then
     continue
   fi
@@ -42,7 +55,8 @@ done
 
 if [ $ERRORS -gt 0 ]; then
   echo "Commit blocked: $ERRORS sensitive pattern(s) detected."
-  echo "Use env vars instead of hardcoded values."
+  echo "Use env vars / 1Password refs instead of hardcoded values."
+  echo "Edit $PATTERNS_FILE to adjust environment-specific patterns."
   echo "To bypass (emergency): git commit --no-verify"
   exit 1
 fi
