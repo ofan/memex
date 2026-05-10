@@ -13,5 +13,7 @@ tests/fixtures/longmemeval-cache/chunk-checkpoint.json
 # Local MCP config — contains infra hostnames / 1P refs
 .mcp.json
 
-# Compiled output (built at publish time)
-dist/
+# dist/ is intentionally tracked — clawhub validates against the
+# tagged GitHub commit, not the local publish payload, so the compiled
+# output must be present in the source tree at tag time.
+# Built via `npm run build` (also runs in prepublishOnly).
