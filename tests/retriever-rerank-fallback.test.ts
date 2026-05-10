@@ -6,7 +6,7 @@
  * fell through to the cosine-similarity fallback pass, which aggressively
  * re-ranked the pool based on raw vector cosine similarity. That displaced
  * the fusion winners and hurt domain-eval quality (observed 2026-04-11 on
- * the `mbp1-model` and `gemma4-stability` queries — both lost a top-3 hit
+ * the `host-a-model` and `gemma4-stability` queries — both lost a top-3 hit
  * to cosine fallback when the reranker timed out under concurrent load).
  *
  * Fixed behavior:
@@ -59,7 +59,7 @@ describe("MemoryRetriever rerank-failure fallback", () => {
     const memories = [
       "User prefers dark mode and high contrast themes for all their interfaces",
       "The deployment uses PostgreSQL 15 on a dedicated host",
-      "Ryan banned the word sorry from assistant responses",
+      "Alex banned the word sorry from assistant responses",
       "Weather in San Francisco today is foggy with light winds",
       "Kubernetes cluster runs on three control-plane nodes",
     ];

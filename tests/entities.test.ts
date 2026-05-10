@@ -7,12 +7,12 @@ import { extractEntities, entityOverlap } from "../src/entities.js";
 
 describe("extractEntities", () => {
   it("extracts people names", () => {
-    const entities = extractEntities("Ryan deployed the model yesterday");
-    assert.ok(entities.some(e => e.includes("ryan")), `should find "ryan" in ${entities}`);
+    const entities = extractEntities("Alex deployed the model yesterday");
+    assert.ok(entities.some(e => e.includes("alex")), `should find "alex" in ${entities}`);
   });
 
   it("extracts proper nouns (capitalized terms)", () => {
-    const entities = extractEntities("Gemma 4 was deployed on Mac Mini");
+    const entities = extractEntities("Gemma 4 was deployed on Host B");
     assert.ok(entities.length > 0, "should extract capitalized terms");
   });
 
@@ -33,14 +33,14 @@ describe("extractEntities", () => {
   });
 
   it("deduplicates entities", () => {
-    const entities = extractEntities("Ryan told Ryan about Ryan's deployment");
-    // Exact "ryan" should appear at most once (Set dedup)
-    const exactRyan = entities.filter(e => e === "ryan").length;
-    assert.ok(exactRyan <= 1, `exact "ryan" should appear at most once, got ${exactRyan} in ${entities}`);
+    const entities = extractEntities("Alex told Alex about Alex's deployment");
+    // Exact "alex" should appear at most once (Set dedup)
+    const exactAlex = entities.filter(e => e === "alex").length;
+    assert.ok(exactAlex <= 1, `exact "alex" should appear at most once, got ${exactAlex} in ${entities}`);
   });
 
   it("lowercases all entities", () => {
-    const entities = extractEntities("Ryan deployed Gemma on Mac Mini");
+    const entities = extractEntities("Alex deployed Gemma on Host B");
     for (const e of entities) {
       assert.equal(e, e.toLowerCase(), `entity "${e}" should be lowercase`);
     }
@@ -55,23 +55,23 @@ describe("extractEntities", () => {
 
 describe("entityOverlap", () => {
   it("returns count of shared entities", () => {
-    const overlap = entityOverlap(["ryan", "mbp-1", "gemma"], ["ryan", "qwen", "mbp-1"]);
+    const overlap = entityOverlap(["alex", "host-a", "gemma"], ["alex", "qwen", "host-a"]);
     assert.equal(overlap, 2);
   });
 
   it("is case-insensitive", () => {
-    const overlap = entityOverlap(["Ryan"], ["ryan"]);
+    const overlap = entityOverlap(["Alex"], ["alex"]);
     assert.equal(overlap, 1);
   });
 
   it("returns 0 for disjoint sets", () => {
-    const overlap = entityOverlap(["ryan", "mbp-1"], ["gemma", "qwen"]);
+    const overlap = entityOverlap(["alex", "host-a"], ["gemma", "qwen"]);
     assert.equal(overlap, 0);
   });
 
   it("returns 0 for empty arrays", () => {
-    assert.equal(entityOverlap([], ["ryan"]), 0);
-    assert.equal(entityOverlap(["ryan"], []), 0);
+    assert.equal(entityOverlap([], ["alex"]), 0);
+    assert.equal(entityOverlap(["alex"], []), 0);
     assert.equal(entityOverlap([], []), 0);
   });
 });

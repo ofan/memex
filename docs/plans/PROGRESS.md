@@ -6,7 +6,7 @@
 
 **Two open architectural problems** are being formalized — see `docs/plans/two-problems-architecture.md`:
 
-1. **MCP Process Architecture** — single daemon vs subprocess-per-platform; user wants cross-device pool (Pattern B, single daemon on Mac mini-1 via Tailscale)
+1. **MCP Process Architecture** — single daemon vs subprocess-per-platform; user wants cross-device pool (Pattern B, single daemon on Host B via Tailscale)
 2. **Memory Scoping** — provenance metadata (device × project × agent), classification on store, recall policy, judgment layer
 
 Both problems are in **understanding phase**. Do not collapse into a single plan. Reasonable order: Problem 2 first (data model), Problem 1 second (deployment).

@@ -10,21 +10,21 @@ const DOMAIN_EVAL_OUTPUT_PASS = `
 Pool: 2105 memories
 Reranker: ENABLED (Qwen3-Reranker-0.6B-Q8_0)  Pool: 30
 
-  HIT  [person] ryan-ban-sorry (0.782, entities: ryan,cabbie)
-  HIT  [person] ryan-response-style (0.877, entities: ebay,ryan)
-  HIT  [person] ryan-grafana (0.841, entities: ryan,grafana)
+  HIT  [person] alex-ban-sorry (0.782, entities: alex,cabbie)
+  HIT  [person] alex-response-style (0.877, entities: ebay,alex)
+  HIT  [person] alex-grafana (0.841, entities: alex,grafana)
   MISS  [system] host-A-model (0.886, entities: none)
        query: "What model is running on host-A?"
        expected: qwen, host-A
        got: "host-A oMLX installed"
-  HIT  [system] host-A-user (0.852, entities: ryan)
-  HIT  [system] server-config (0.911, entities: ryan)
+  HIT  [system] host-A-user (0.852, entities: alex)
+  HIT  [system] server-config (0.911, entities: alex)
   MISS  [model] gemma4-stability (0.912, entities: gemma)
   HIT  [model] virgil-streaming (0.941, entities: virgil)
   HIT  [model] virgil-reasoning (0.932, entities: virgil)
-  HIT  [multi-entity] ryan-host-A-deployment (0.912, entities: host-A)
+  HIT  [multi-entity] alex-host-A-deployment (0.912, entities: host-A)
   MISS  [multi-entity] virgil-qwen (0.941, entities: virgil)
-  MISS  [multi-entity] ryan-cabbie-behavior (0.810, entities: cabbie)
+  MISS  [multi-entity] alex-cabbie-behavior (0.810, entities: cabbie)
   HIT  [temporal] recent-deployments (0.822, entities: gemma)
   HIT  [rule] homebrew-rule (0.838, entities: homebrew)
   HIT  [rule] private-repos (0.734, entities: github)
