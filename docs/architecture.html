@@ -435,10 +435,10 @@
 <span class="key">MEMEX_EMBED_ENDPOINT</span> = <span class="val">http://&lt;embed-host&gt;:8090</span>  <span style="color:var(--muted)">← /v1 appended auto</span><br>
 <span class="key">MEMEX_EMBED_MODEL</span>    = <span class="val">Qwen3-Embedding-4B-Q8_0</span><br>
 <span class="key">MEMEX_EMBED_DIM</span>      = <span class="val">2560</span><br>
-<span class="key">MEMEX_EMBED_API_KEY</span>  = <span class="secret">op://dev-vm/dev-claude/...</span>  <span style="color:var(--muted)">← resolved by op run</span><br>
+<span class="key">MEMEX_EMBED_API_KEY</span>  = <span class="secret">op://<vault>/<item>/...</span>  <span style="color:var(--muted)">← resolved by op run</span><br>
 <span class="key">MEMEX_LLM_ENDPOINT</span>   = <span class="val">http://&lt;llm-host&gt;:1234</span><br>
 <span class="key">MEMEX_LLM_MODEL</span>      = <span class="val">qwen3.5-27b-...</span><br>
-<span class="key">MEMEX_LLM_API_KEY</span>    = <span class="secret">op://dev-vm/dev-memex/...</span>  <span style="color:var(--muted)">← resolved by op run</span><br>
+<span class="key">MEMEX_LLM_API_KEY</span>    = <span class="secret">op://<vault>/<item>/...</span>  <span style="color:var(--muted)">← resolved by op run</span><br>
 <br>
 <span style="color:var(--muted)">Optional:</span><br>
 <span class="key">MEMEX_DB_PATH</span>        = <span class="val">~/.openclaw/memory/memex/memex.sqlite</span>  <span style="color:var(--muted)">← default</span><br>
