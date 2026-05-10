@@ -150,7 +150,7 @@ describe("resiliency: embedding state machine", () => {
         text: `memory ${i}`, vector: randomVec(DIM),
         category: "fact", scope: "global", importance: 0.5,
       });
-      ids.push(entry.id);
+      ids.push(entry!.id);
     }
     store.setStoredEmbeddingModel("model-A");
 
@@ -177,19 +177,19 @@ describe("resiliency: embedding state machine", () => {
     });
 
     // Verify exists
-    assert.equal(await store.hasId(entry.id), true);
+    assert.equal(await store.hasId(entry!.id), true);
     const bm25 = await store.bm25Search("orphan test", 5);
     assert.ok(bm25.length > 0, "should find via BM25 before delete");
 
     // Delete
-    await store.delete(entry.id);
+    await store.delete(entry!.id);
 
     // Verify cleaned up
-    assert.equal(await store.hasId(entry.id), false);
+    assert.equal(await store.hasId(entry!.id), false);
     const bm25After = await store.bm25Search("orphan test", 5);
     assert.equal(bm25After.length, 0, "should not find via BM25 after delete");
     const vecAfter = await store.vectorSearch(randomVec(DIM), 10, 0.0);
-    const orphan = vecAfter.find(r => r.entry.id === entry.id);
+    const orphan = vecAfter.find(r => r.entry!.id === entry!.id);
     assert.equal(orphan, undefined, "should not find vector after delete");
   });
 
@@ -201,12 +201,12 @@ describe("resiliency: embedding state machine", () => {
     });
 
     const newVec = [0, 1, 0, 0]; // orthogonal
-    await store.update(entry.id, { text: "updated text", vector: newVec });
+    await store.update(entry!.id, { text: "updated text", vector: newVec });
 
     // Search should find updated vector, not original
     const results = await store.vectorSearch(newVec, 1, 0.0);
     assert.ok(results.length > 0);
-    assert.equal(results[0].entry.text, "updated text");
+    assert.equal(results[0].entry!.text, "updated text");
 
     // Original direction should NOT match well
     const origResults = await store.vectorSearch(origVec, 1, 0.0);

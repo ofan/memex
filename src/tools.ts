@@ -345,6 +345,13 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             });
           }
 
+          if (!entry) {
+            return {
+              content: [{ type: "text", text: `Memory rejected (likely duplicate or fragment).` }],
+              details: { action: "rejected", reason: "store_returned_null" },
+            };
+          }
+
           context.track?.("store", { chunked: chunks.length > 1, chunks: chunks.length, source: "tool", category, ...sw.timings });
           return {
             content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" in scope '${targetScope}'` }],
