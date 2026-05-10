@@ -15,6 +15,7 @@ import { createRetriever } from "./retriever.js";
 import { createEmbedder } from "./embedder.js";
 import { isNoise } from "./noise-filter.js";
 import { runDreamCycle } from "./dreaming.js";
+import { anchor, expandAnchor, AnchorAmbiguityError } from "./anchor.js";
 import { detectCategory } from "../index.js";
 export function createMemexMcpServer(options) {
     const { dbPath, vectorDim, embedder, reflectionLLM, dreamIntervalMs, noDream } = options;
@@ -92,10 +93,13 @@ export function createMemexMcpServer(options) {
                         text: JSON.stringify({
                             results: results.map(r => ({
                                 id: r.entry.id,
+                                anchor: anchor(r.entry.id),
                                 text: r.entry.text,
                                 category: r.entry.category,
+                                scope: r.entry.scope,
                                 score: Math.round(r.score * 1000) / 1000,
                             })),
+                            note: "Cite recalled memories by anchor (e.g. [mem:abc12345]) when relying on them. Pass the anchor (or any longer prefix) to memory_forget to delete a stale entry.",
                         }),
                     }],
             };
@@ -108,11 +112,14 @@ export function createMemexMcpServer(options) {
                     text: JSON.stringify({
                         results: bm25Results.map(r => ({
                             id: r.entry.id,
+                            anchor: anchor(r.entry.id),
                             text: r.entry.text,
                             category: r.entry.category,
+                            scope: r.entry.scope,
                             score: Math.round(r.score * 1000) / 1000,
                         })),
                         mode: "bm25-only",
+                        note: "Cite recalled memories by anchor (e.g. [mem:abc12345]) when relying on them. Pass the anchor (or any longer prefix) to memory_forget to delete a stale entry.",
                     }),
                 }],
         };
@@ -120,14 +127,37 @@ export function createMemexMcpServer(options) {
     // ── memory_forget ─────────────────────────────────────────────────────────
     server.registerTool("memory_forget", {
         title: "Forget Memory",
-        description: "Delete a memory by ID.",
+        description: "Delete a memory. Accepts a full memory ID (UUID) or a citation anchor (8+ hex chars) from a [mem:...] reference.",
         inputSchema: {
-            id: z.string().describe("Memory ID to delete"),
+            id: z.string().describe("Memory ID, citation anchor (8 hex chars), or longer prefix"),
         },
     }, async (_params) => {
         const { id } = _params;
-        const deleted = await store.delete(id);
-        return { content: [{ type: "text", text: JSON.stringify({ deleted }) }] };
+        // Resolve anchor prefixes (under 32 chars) to full ids by scanning all memories.
+        let resolvedId = id;
+        if (id.length < 32) {
+            const allEntries = await store.list(undefined, undefined, 100000, 0);
+            const allIds = allEntries.map(e => e.id);
+            try {
+                const expanded = expandAnchor(id, allIds);
+                if (!expanded) {
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ deleted: false, error: "anchor_not_found", anchor: id }) }],
+                    };
+                }
+                resolvedId = expanded;
+            }
+            catch (err) {
+                if (err instanceof AnchorAmbiguityError) {
+                    return {
+                        content: [{ type: "text", text: JSON.stringify({ deleted: false, error: "anchor_ambiguous", anchor: id, matches: err.matches }) }],
+                    };
+                }
+                throw err;
+            }
+        }
+        const deleted = await store.delete(resolvedId);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted, id: resolvedId, anchor: anchor(resolvedId), via_anchor: resolvedId !== id }) }] };
     });
     // ── memory_dream ──────────────────────────────────────────────────────────
     server.registerTool("memory_dream", {
