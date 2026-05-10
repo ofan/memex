@@ -4,7 +4,7 @@
  *
  * Usage:
  *   # Required sensitive env (from 1Password):
- *   export EMBED_API_KEY=$(op read "op://dev-vm/dev-claude/MEMEX_LLAMA_SWAP_API_KEY")
+ *   export EMBED_API_KEY=$(op read "op://<vault>/<item>/MEMEX_LLAMA_SWAP_API_KEY")
  *   export MEMEX_RERANK_API_KEY="$EMBED_API_KEY"
  *
  *   # Non-sensitive config — read from live openclaw config, not 1Password:

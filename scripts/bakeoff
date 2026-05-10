@@ -62,10 +62,10 @@ FLAGS (reranker mode)
 REQUIRED ENV (no silent fallbacks — bakeoff exits 2 if any are missing)
   MEMEX_LLAMA_SWAP_API_KEY
       Auth header for the inference host. Fetch from 1Password:
-        $(op read "op://dev-vm/dev-claude/MEMEX_LLAMA_SWAP_API_KEY")
+        $(op read "op://<vault>/<item>/MEMEX_LLAMA_SWAP_API_KEY")
   MEMEX_BENCHMARK_OPENAI_API_KEY
       OpenAI key for the GPT-4o reader + gpt-4o-mini judge in stage 2.
-        $(op read "op://dev-vm/dev-claude/MEMEX_BENCHMARK_OPENAI_API_KEY")
+        $(op read "op://<vault>/<item>/MEMEX_BENCHMARK_OPENAI_API_KEY")
   MEMEX_DB
       Path to the production memex sqlite (read-only), e.g.
         $HOME/.openclaw/memory/memex/memex.sqlite
@@ -82,8 +82,8 @@ EXIT CODES
 
 EXAMPLES
   # Read env from 1Password + openclaw config, then run:
-  export MEMEX_LLAMA_SWAP_API_KEY=$(op read "op://dev-vm/dev-claude/MEMEX_LLAMA_SWAP_API_KEY")
-  export MEMEX_BENCHMARK_OPENAI_API_KEY=$(op read "op://dev-vm/dev-claude/MEMEX_BENCHMARK_OPENAI_API_KEY")
+  export MEMEX_LLAMA_SWAP_API_KEY=$(op read "op://<vault>/<item>/MEMEX_LLAMA_SWAP_API_KEY")
+  export MEMEX_BENCHMARK_OPENAI_API_KEY=$(op read "op://<vault>/<item>/MEMEX_BENCHMARK_OPENAI_API_KEY")
   export EMBED_BASE_URL=$(python3 -c "import json; print(json.load(open('$HOME/.openclaw/openclaw.json'))['plugins']['entries']['memex']['config']['embedding']['baseURL'])")
   export MEMEX_DB=$HOME/.openclaw/memory/memex/memex.sqlite
   export EMBED_MODEL=Qwen3-Embedding-4B-Q8_0
