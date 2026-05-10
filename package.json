@@ -1,6 +1,6 @@
 {
   "name": "@ofan/memex",
-  "version": "0.5.14",
+  "version": "0.5.15",
   "description": "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database",
   "type": "module",
   "main": "index.ts",
@@ -48,7 +48,13 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.7"
+    },
+    "build": {
+      "openclawVersion": "2026.5.7"
+    }
   },
   "scripts": {
     "test": "node --import jiti/register --test tests/*.test.ts"
