@@ -182,7 +182,7 @@ export async function embedDocuments(db, dimensions, embedder) {
                     result.errors.push(`${item.path}: ${err instanceof Error ? err.message : String(err)}`);
                 }
             }
-        }, { timeout: 30 * 60 * 1000 });
+        }, { maxDuration: 30 * 60 * 1000 });
     }
     catch (err) {
         result.errors.push(`Embedding session failed: ${err instanceof Error ? err.message : String(err)}`);
