@@ -36,6 +36,7 @@ import {
 } from "./src/search.js";
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-indexer.js";
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
+import { anchor as memAnchor } from "./src/anchor.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry, Stopwatch } from "./src/telemetry.js";
 import { extractRecallQuery } from "./src/recall-query.js";
@@ -1110,12 +1111,13 @@ const memoryUnifiedPlugin = {
 
             memoryContext = results
               .map((r) => {
+                const a = memAnchor(r.id);
                 if (r.source === "conversation") {
                   const meta = r.metadata as { category?: string; scope?: string };
-                  return `- [memory:${meta.category || "other"}:${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                  return `- [mem:${a} · ${meta.category || "other"} · ${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
                 } else {
                   const meta = r.metadata as { displayPath?: string; title?: string };
-                  return `- [doc:${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                  return `- [doc:${a} · ${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
                 }
               })
               .join("\n");
@@ -1134,7 +1136,7 @@ const memoryUnifiedPlugin = {
             for (const r of results) recalledIds.push(r.entry.id);
 
             memoryContext = results
-              .map((r) => `- [${r.entry.category}:${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
+              .map((r) => `- [mem:${memAnchor(r.entry.id)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
               .join("\n");
           }
 

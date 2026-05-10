@@ -14,6 +14,7 @@ import type { Embedder } from "./embedder.js";
 import type { UnifiedRecall, UnifiedResult, ResultSource } from "./unified-recall.js";
 import type { UnifiedRetriever, UnifiedResult as UnifiedRetrieverResult } from "./unified-retriever.js";
 import { Stopwatch, type TrackFn } from "./telemetry.js";
+import { anchor, expandAnchor, AnchorAmbiguityError, ANCHOR_LEN } from "./anchor.js";
 
 // ============================================================================
 // Types
@@ -131,10 +132,10 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
               .map((r, i) => {
                 if (r.source === "conversation") {
                   const meta = r.metadata as { type: "conversation"; category: string; scope: string; memoryId: string };
-                  return `${i + 1}. [memory] [${meta.memoryId}] [${meta.category}:${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
+                  return `${i + 1}. [mem:${anchor(meta.memoryId)} · ${meta.category} · ${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
                 } else {
                   const meta = r.metadata as { type: "document"; displayPath: string; title: string };
-                  return `${i + 1}. [doc] [${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
+                  return `${i + 1}. [doc:${anchor(r.id)} · ${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
                 }
               })
               .join("\n");
@@ -182,10 +183,10 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
               .map((r, i) => {
                 if (r.source === "conversation") {
                   const meta = r.metadata as { type: "conversation"; category: string; scope: string; memoryId: string };
-                  return `${i + 1}. [memory] [${meta.memoryId}] [${meta.category}:${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
+                  return `${i + 1}. [mem:${anchor(meta.memoryId)} · ${meta.category} · ${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
                 } else {
                   const meta = r.metadata as { type: "document"; displayPath: string; title: string };
-                  return `${i + 1}. [doc] [${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
+                  return `${i + 1}. [doc:${anchor(r.id)} · ${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
                 }
               })
               .join("\n");
@@ -230,7 +231,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
               if (r.sources.bm25) sources.push("BM25");
               if (r.sources.reranked) sources.push("reranked");
 
-              return `${i + 1}. [${r.entry.id}] [${r.entry.category}:${r.entry.scope}] ${r.entry.text} (${(r.score * 100).toFixed(0)}%${sources.length > 0 ? `, ${sources.join('+')}` : ''})`;
+              return `${i + 1}. [mem:${anchor(r.entry.id)} · ${r.entry.category} · ${r.entry.scope}] ${r.entry.text} (${(r.score * 100).toFixed(0)}%${sources.length > 0 ? `, ${sources.join('+')}` : ''})`;
             })
             .join("\n");
 
@@ -374,10 +375,10 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
     {
       name: "memory_forget",
       label: "Memory Forget",
-      description: "Delete specific memories. Supports both search-based and direct ID-based deletion.",
+      description: "Delete specific memories. Accepts a search query, a full memory ID, or a citation anchor (8+ hex chars from a `[mem:...]` reference).",
       parameters: Type.Object({
         query: Type.Optional(Type.String({ description: "Search query to find memory to delete" })),
-        memoryId: Type.Optional(Type.String({ description: "Specific memory ID to delete" })),
+        memoryId: Type.Optional(Type.String({ description: "Memory ID, citation anchor (8 hex chars), or longer prefix" })),
         scope: Type.Optional(Type.String({ description: "Scope to search/delete from (optional)" })),
       }),
       async execute(_toolCallId, params) {
@@ -403,12 +404,42 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
           }
 
           if (memoryId) {
-            const deleted = await context.store.delete(memoryId, scopeFilter);
+            // Resolve anchor prefixes (8+ hex chars) to full ids by scanning
+            // accessible memories. Full UUIDs pass through unchanged.
+            let resolvedId = memoryId;
+            if (memoryId.length < 32) {
+              const accessible = await context.store.list(undefined, undefined, 10000, 0);
+              const accessibleIds = accessible
+                .filter(e => scopeFilter.includes(e.scope))
+                .map(e => e.id);
+              try {
+                const expanded = expandAnchor(memoryId, accessibleIds);
+                if (!expanded) {
+                  context.track?.("forget", { found: false, anchor_prefix: true, ...sw.timings });
+                  return {
+                    content: [{ type: "text", text: `No memory matches anchor "${memoryId}".` }],
+                    details: { error: "anchor_not_found", anchor: memoryId },
+                  };
+                }
+                resolvedId = expanded;
+              } catch (err) {
+                if (err instanceof AnchorAmbiguityError) {
+                  context.track?.("forget", { found: false, anchor_ambiguous: true, ...sw.timings });
+                  return {
+                    content: [{ type: "text", text: err.message }],
+                    details: { error: "anchor_ambiguous", anchor: memoryId, matches: err.matches },
+                  };
+                }
+                throw err;
+              }
+            }
+
+            const deleted = await context.store.delete(resolvedId, scopeFilter);
             if (deleted) {
-              context.track?.("forget", { found: true, ...sw.timings });
+              context.track?.("forget", { found: true, via_anchor: resolvedId !== memoryId, ...sw.timings });
               return {
-                content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
-                details: { action: "deleted", id: memoryId },
+                content: [{ type: "text", text: `Memory ${anchor(resolvedId)} forgotten.` }],
+                details: { action: "deleted", id: resolvedId, anchor: anchor(resolvedId) },
               };
             } else {
               context.track?.("forget", { found: false, ...sw.timings });
@@ -446,7 +477,7 @@ export function registerMemoryForgetTool(api: OpenClawPluginApi, context: ToolCo
             }
 
             const list = results
-              .map(r => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}${r.entry.text.length > 60 ? '...' : ''}`)
+              .map(r => `- [mem:${anchor(r.entry.id)}] ${r.entry.text.slice(0, 60)}${r.entry.text.length > 60 ? '...' : ''}`)
               .join("\n");
 
             return {
