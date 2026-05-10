@@ -1,7 +1,9 @@
 # State-of-the-Art Algorithms for Conversational Memory Retrieval and Ranking
 
-**Date:** 2026-03-15
-**Context:** memex unified recall pipeline — architectural research for merging heterogeneous sources (short memory facts + long documents) under a single ranking framework
+**Last updated:** 2026-04-27 (consolidated from March 2026 SOTA review + April 2026 independent re-survey)
+**Context:** memex unified recall pipeline — architectural research for merging heterogeneous sources (short memory facts + long documents) under a single ranking framework, with attention to the field's reproducibility crisis and benchmark-shape problems documented in April 2026.
+
+This is the canonical SOTA reference for memex. Replaces and consolidates the prior March 2026 doc and the April 2026 standalone research log.
 
 ---
 
@@ -13,261 +15,217 @@
 4. [Score Normalization and Multi-Source Merging](#4-score-normalization-and-multi-source-merging)
 5. [Benchmarks and Evaluation Metrics](#5-benchmarks-and-evaluation-metrics)
 6. [Analysis: What Fits Our Constraints](#6-analysis-what-fits-our-constraints)
-7. [Recommended Algorithm Design](#7-recommended-algorithm-design)
-8. [Proposed Benchmark Methodology](#8-proposed-benchmark-methodology)
+7. [Memory Governance and Security (added Apr 2026)](#7-memory-governance-and-security)
+8. [Multi-Agent Memory (added Apr 2026)](#8-multi-agent-memory)
+9. [Production Deployment Realities (added Apr 2026)](#9-production-deployment-realities)
+10. [Recommended Algorithm Design for memex](#10-recommended-algorithm-design-for-memex)
+11. [Concrete actions for memex, ordered by ROI](#11-concrete-actions-for-memex-ordered-by-roi)
+
+---
+
+## Headline shifts since March 2026
+
+- **Mem0 jumped from 49% to 93.4% on LongMemEval** via parallel multi-signal fusion (semantic + keyword + entity). Memex is on the same trend.
+- **Vendor benchmark numbers cannot be trusted at face value.** Three Mem0 LongMemEval scores in the public record (49% / 93.4% / 29.07%); Zep dispute (84% → 58.44% → 75.14%); MemPalace's "100%" was three post-hoc patches against a non-held-out set.
+- **Long-context beats memory systems on raw accuracy** by 33–35pp. Memory's win is *cost amortization past ~10 turns*, not accuracy.
+- **On causally-dependent agentic tasks, memory tools fail.** MemoryArena, MEMTRACK, and AMA-Bench all converge: external memory loses to long-context. Letta themselves report a raw-text-filesystem memory beats their specialized stack on some tasks.
+- **WorldDB introduced executable graph semantics** (Apr 21, 2026): recursive worlds + content-addressed immutable nodes + edges that execute on insert/delete/query-rewrite. Self-reports 96.40% LongMemEval.
+- **RL for memory operations is no longer "emerging"** — 5 primary papers + ICLR 2026 workshop. Reward models cap supervision at ~64K tokens.
+- **Memory governance and attacks** are now a real sub-field with 6 attack papers and 84.30% attack success rate on Agent Security Bench.
+- **Production deployment** has joined the conversation: P99 SLOs, dual-layer hot/cold path, sub-100ms cold-path retrieval as the operational target.
 
 ---
 
 ## 1. Survey of Memory Retrieval Systems
 
-### 1.1 Generative Agents (Park et al., 2023) — The Baseline Formula
-
-The foundational memory scoring formula from the Stanford Generative Agents paper:
+### 1.1 Generative Agents (Park et al., 2023) — the baseline formula [older context]
 
 ```
 score(m, q) = alpha_rec * recency(m) + alpha_imp * importance(m) + alpha_rel * relevance(m, q)
 ```
 
-where all alpha values = 1 in their implementation, and scores are min-max normalized to [0, 1] before combination. Importance is LLM-rated on a 1-10 scale.
+Min-max normalized, equal weights, LLM-rated importance. Limitations: min-max destroys tightly-clustered scores; equal weights lack source-type awareness; LLM importance per memory at store time is too costly. Memex's pipeline supersedes this.
 
-**Limitations for our case:**
-- Min-max normalization destroys scores for tightly clustered results (e.g., [0.92, 0.83, 0.79] becomes [1.0, 0.31, 0.0]). We already discovered this failure mode in our pipeline.
-- Equal alpha weights are naive — no source-type awareness.
-- LLM-rated importance requires an API call per memory at store time.
+**Reference:** Park, J.S. et al. (2023). UIST 2023. [arXiv:2304.03442](https://arxiv.org/abs/2304.03442)
 
-**Reference:** Park, J.S. et al. (2023). "Generative Agents: Interactive Simulacra of Human Behavior." UIST 2023. [arXiv:2304.03442](https://arxiv.org/abs/2304.03442)
+### 1.2 MemoryBank (Zhong et al., 2024) — Ebbinghaus forgetting curve [older context]
 
-### 1.2 MemoryBank (Zhong et al., 2024) — Ebbinghaus Forgetting Curve
-
-MemoryBank applies exponential decay based on the Ebbinghaus Forgetting Curve to modulate memory strength. Frequently accessed memories are reinforced; rarely accessed ones decay.
-
-**Key formula:**
 ```
 retention(m) = e^(-t / S(m))
 ```
-where `S(m)` is the memory strength parameter that increases on each recall event. This creates a use-it-or-lose-it dynamic where important memories self-reinforce through access frequency.
 
-**Relevance to our system:** Our 7-stage pipeline already has time decay (`score *= 0.5 + 0.5 * exp(-ageDays / halfLife)`) and recall frequency boost (`freqBoost = min(0.1, recallCount / 200)`). MemoryBank validates this direction but adds nothing new.
+Validates memex's existing time decay (`score *= 0.5 + 0.5 * exp(-ageDays / halfLife)`) and recall-frequency boost. Critical gap: pure decay doesn't distinguish *permanent preferences* from *ephemeral facts*.
 
-**Critical gap:** No mechanism to distinguish *permanent preferences* ("never say sorry") from *ephemeral facts* ("meeting at 3pm today"). Pure decay-based systems will eventually forget permanent preferences.
+**Reference:** Zhong, W. et al. (2024). AAAI 2024. [arXiv:2305.10250](https://arxiv.org/abs/2305.10250)
 
-**Reference:** Zhong, W. et al. (2024). "MemoryBank: Enhancing Large Language Models with Long-Term Memory." AAAI 2024. [arXiv:2305.10250](https://arxiv.org/abs/2305.10250)
+**Apr 2026 update — FadeMem.** Operationalizes Ebbinghaus with concrete half-lives (LML 11.25d, SML 5.02d) and reports **45% storage savings vs Mem0**. Memex's decay is currently ad-hoc; FadeMem-style explicit half-lives are an upgrade path. [https://co-r-e.com/method/agent-memory-forgetting](https://co-r-e.com/method/agent-memory-forgetting); FSFM `arXiv:2604.20300`.
 
-### 1.3 MemGPT / Letta (Packer et al., 2023) — Virtual Context Management
+### 1.3 MemGPT / Letta (Packer et al., 2023) — virtual context management
 
-MemGPT treats memory as a paging system: main context (RAM) holds the working set; archival/recall storage (disk) holds everything else. The agent explicitly calls functions to page data in and out.
+Memory as paging system: Core Memory (always in context), Recall Memory (recent, searchable), Archival Memory (long-term, on-demand). Memex's `recall` and `document_search` tools are structurally similar.
 
-**Architecture:**
-- Core Memory: always in context, compressed representation
-- Recall Memory: searchable database (recent conversations)
-- Archival Memory: long-term storage, retrieved on demand
+**Apr 2026 update — Letta filesystem result.** Letta themselves published a result showing that a simple "filesystem" memory (raw text files indexed by timestamp) surpassed several specialized systems on some tasks. This is a strong negative for the memory-as-elaborate-vector+graph-stack thesis, coming from the company that pioneered MemGPT. Cited via *The New Stack* April 2026 piece.
 
-**Relevance:** Our system is structurally similar — conversation memories and documents are "paged in" via the unified recall pipeline. MemGPT's key insight is that retrieval is a function the agent controls, not just a background process. We already implement this via the `recall` and `document_search` tools.
+**Reference:** Packer, C. et al. (2023). [arXiv:2310.08560](https://arxiv.org/abs/2310.08560)
 
-**Reference:** Packer, C. et al. (2023). "MemGPT: Towards LLMs as Operating Systems." [arXiv:2310.08560](https://arxiv.org/abs/2310.08560)
+### 1.4 Mem0 — production-mature, with rapid evolution
 
-### 1.4 Mem0 (Chadha et al., 2025) — Graph-Enhanced Memory with Entity Resolution
+The Mem0 line went through dramatic changes between March and April 2026:
 
-Mem0 is the most production-mature memory system. Its graph variant (Mem0^g) layers a knowledge graph over vector memory to capture entity relationships. Key retrieval approach: extract entities from query, find similar nodes via embedding search, rerank with BM25.
+| Version | Date | LongMemEval | LoCoMo | Mechanism |
+|---|---|---:|---:|---|
+| Mem0 (Apr 2025 paper) | Apr 2025 | 49.0% | 67.13% | Hybrid vector + graph + KV; self-edit on conflict; ~1,764 tokens/conv. p95 0.20 s. |
+| **Mem0 token-efficient** | **Apr 28, 2026** | **93.4%** | **91.6%** | **Multi-signal fusion (semantic + keyword + entity in parallel) + agent-generated facts as first-class. ~6,950–6,780 tokens/retrieval. BEAM 1M: 64.1, BEAM 10M: 48.6** |
+| Mem0 (WorldDB re-run) | Apr 2026 | 29.07% | — | Same system, third party's harness. The 64-pp spread is the cleanest single illustration of the reproducibility crisis. |
 
-**Scoring approach:**
-- Dual-strategy retrieval: entity-centric (find nodes, traverse relationships) + semantic triplet (dense embedding match against relationship triplets)
-- Conflict detection: LLM-based update resolver marks obsolete relationships as invalid rather than deleting them, enabling temporal reasoning
-- Performance: 66.9% accuracy (vector-only) vs 68.4% (graph-enhanced) on their benchmark; p95 latency 0.15s (vector) vs 0.48s (graph)
+**Implication:** memex's existing multi-signal pipeline (vector + BM25 + entity + temporal + Qwen3-rerank) is the *same family* as Mem0's winning approach. The earlier "Mem0 graph adds 3× latency for 1.5% gain" framing is now obsolete — Mem0 dropped the graph and won on fusion.
 
-**Relevance:** The graph layer adds overhead (~3x latency) for modest accuracy gains (+1.5%). Not worth it for our scale (1900 memories). However, Mem0's *conflict detection* pattern — marking superseded facts rather than deleting them — is valuable for handling knowledge updates.
+**References:** [arXiv:2504.19413](https://arxiv.org/abs/2504.19413) (Apr 2025 paper), [mem0.ai/research](https://mem0.ai/research) (Apr 28, 2026 update), [Zep blog dispute](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/), [WorldDB arXiv:2604.18478](https://arxiv.org/abs/2604.18478).
 
-**Reference:** Chadha, T. et al. (2025). "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." [arXiv:2504.19413](https://arxiv.org/abs/2504.19413)
+### 1.5 Zep / Graphiti (Rasmussen, 2025) — temporal knowledge graph
 
-### 1.5 Zep / Graphiti (Rasmussen, 2025) — Temporal Knowledge Graph
+Bitemporal tracking: every node and edge has both `valid_at` (event time) and `created_at` (ingestion time). 3-tier graph: episode subgraph, semantic entity subgraph, community subgraph. Hybrid BM25 + semantic + graph traversal, no LLM at retrieval.
 
-Zep's core innovation is Graphiti, a temporally-aware knowledge graph with **bitemporal tracking**: every node and edge has both *event time* (when the fact occurred) and *ingestion time* (when it was observed). This enables precise temporal reasoning including retroactive corrections.
+| Source | LongMemEval | LoCoMo |
+|---|---:|---:|
+| Zep's own paper | ~85% | 84% |
+| Mem0's rebuttal re-run | 71.2% | 58.44% (cat 1-4 only, 10-run mean) |
+| Zep's counter-rebuttal | — | 75.14% (corrected re-implementation) |
 
-**Architecture (3-tier graph):**
-1. Episode subgraph: raw conversation episodes
-2. Semantic entity subgraph: extracted entities and relationships
-3. Community subgraph: high-level concept clusters
+The Mem0/Zep dispute is the canonical case study for the field's reproducibility crisis. Zep alleges Mem0 misconfigured them (wrong user-graph role, timestamps appended-not-fielded, sequential-not-parallel search). Both methodologies have been challenged by independents.
 
-**Retrieval:** Hybrid BM25 + semantic embedding + graph traversal — no LLM calls during retrieval. P95 latency: 300ms.
+**Implication for memex:** SQLite cannot host Graphiti directly, but the *concept* of bitemporal columns is implementable in SQLite with two timestamp columns. memex's temporal-query detection covers the read side; provenance metadata (current design) covers the write side.
 
-**Benchmark results:**
-- DMR benchmark: 94.8% (vs MemGPT 93.4%)
-- LongMemEval: up to 18.5% accuracy improvement over baselines, 90% latency reduction
+**References:** [arXiv:2501.13956](https://arxiv.org/abs/2501.13956), [Zep blog](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/), [Mem0 rebuttal GitHub Issue](https://github.com/getzep/zep-papers/issues/5).
 
-**Relevance:** Graphiti's bitemporal model is the correct solution for the "permanent preference vs ephemeral fact" problem. However, it requires Neo4j or similar graph database, which conflicts with our SQLite constraint. The *concept* of bitemporal tracking can be implemented in SQLite with two timestamp columns.
+### 1.6 Hindsight / TEMPR (Deshpande et al., 2025) — structured entity-temporal memory
 
-**Reference:** Rasmussen, P. (2025). "Zep: A Temporal Knowledge Graph Architecture for Agent Memory." [arXiv:2501.13956](https://arxiv.org/abs/2501.13956)
-
-### 1.6 Hindsight / TEMPR (Deshpande et al., 2025) — Structured Entity-Temporal Memory
-
-The current benchmark leader. TEMPR (Temporal Entity Memory Priming Retrieval) organizes memory into four logical networks: world facts, agent experiences, entity summaries, and evolving beliefs.
-
-**Retain pipeline:** fact extraction -> embedding generation -> entity resolution -> link construction
-
-**Recall pipeline (4 parallel searches):**
+4-way parallel search:
 1. Semantic vector similarity
 2. BM25 keyword matching
 3. Graph traversal through shared entities
 4. Temporal filtering for time-constrained queries
 
-**Results:** 91.4% on LongMemEval. Multi-session questions improved from 21.1% to 79.7%; temporal reasoning from 31.6% to 79.7%.
+Reports 91.4% on LongMemEval (Gemini-3 Pro). Multi-session questions: 21.1% → 79.7%; temporal: 31.6% → 79.7%.
 
-**Relevance:** TEMPR's 4-way parallel search is directly applicable to our architecture. We currently do 2-way (conversation memories + documents). Adding entity-based traversal and explicit temporal filtering as additional retrieval channels is the most impactful architectural upgrade we could make.
+**Implication for memex:** memex's entity + temporal + vector + BM25 channels are *already* this pattern. Doc 003 (March) flagged TEMPR's 4-way search as the most impactful upgrade memex could make; that work is now landed in v0.6.
 
-**Reference:** Deshpande, A. et al. (2025). "Hindsight is 20/20: Building Agent Memory that Retains, Recalls, and Reflects." [arXiv:2512.12818](https://arxiv.org/abs/2512.12818)
+**Reference:** [arXiv:2512.12818](https://arxiv.org/abs/2512.12818)
 
-### 1.7 Observational Memory / Mastra (2026) — No-Retrieval Architecture
+### 1.7 Observational Memory / Mastra (2026) — no-retrieval architecture
 
-A radical departure: instead of per-query retrieval, two background agents (Observer + Reflector) continuously compress conversation history into timestamped, priority-ranked observations. No dynamic retrieval at all — just a stable context window with observations at the start and recent messages at the end.
+Background Observer + Reflector continuously compress conversation into timestamped, priority-ranked observations. Three-date temporal model: observation date, referenced date, relative date. Priority emoji markers. **3–6× compression for text, 5–40× for tool-heavy workloads.**
 
-**Key features:**
-- Three-date temporal model: observation date, referenced date, relative date
-- Priority ranking using emoji markers (critical / important / informational)
-- 3-6x compression for text, 5-40x for tool-heavy workloads
-- Context window is fully prompt-cacheable (huge latency/cost win)
+**LongMemEval results:**
+- gpt-5-mini: **94.87%** (highest mainstream-aggregated score, Mar 2026)
+- gpt-4o: 84.23% (above the oracle config given only answer-bearing sessions)
+- gemini-3-pro-preview: 93.27%
+- Strong category breakdowns: 95.5% temporal, 96.4% single-session-assistant, 97.1% single-session-user
 
-**Results:** 94.87% on LongMemEval (gpt-5-mini), highest ever recorded. 84.23% with gpt-4o.
+**Trade-off:** requires continuous LLM inference for Observer/Reflector (conflicts with memex's "no LLM at query time" constraint). The *concept* of pre-computing compressed summaries at write-time is valuable — memex's dreaming reflection is the same idea applied to learnings, not raw observations.
 
-**Relevance:** This approach eliminates the retrieval problem entirely by keeping everything in a compressed observation log. However, it requires continuous LLM inference for the Observer/Reflector agents, which conflicts with our "minimize API calls" constraint. The *concept* of pre-computing compressed summaries at write-time (rather than retrieve-time) is valuable.
+**Reference:** [mastra.ai/research/observational-memory](https://mastra.ai/research/observational-memory)
 
-**Reference:** Mastra. (2026). "Observational Memory: 95% on LongMemEval." [mastra.ai/research/observational-memory](https://mastra.ai/research/observational-memory)
+### 1.8 A-MEM (Xu et al., 2025) — Zettelkasten-style self-organizing memory
 
-### 1.8 A-MEM (Xu et al., 2025) — Zettelkasten-Style Self-Organizing Memory
+Each memory = structured note with contextual descriptions, keywords, tags, and links. Memory *agency*: new experiences retroactively refine attributes of existing notes. NeurIPS 2025 poster.
 
-A-MEM treats each memory as a structured note with contextual descriptions, keywords, tags, and links to related notes — inspired by the Zettelkasten method. Memories autonomously evolve their content and relationships as new information arrives.
+**Apr 2026 caveat (xMemory paper):** A-MEM and MemoryOS suffer fragility in LLM-generated structure — formatting deviations and failed updates documented as failure modes. Deterministic, schema-first structure has been proposed as more reliable.
 
-**Key innovation:** Memory *agency* — new experiences retroactively refine context/attributes of existing notes, enabling the memory graph to mirror human associative learning.
+**Implication for memex:** memex's entity graph is the structural shape; the LLM-driven update fragility is a real risk for memex's dreaming reflection. Worth watching.
 
-**Results:** NeurIPS 2025 poster. Superior improvement over baselines across six foundation models.
+**Reference:** [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)
 
-**Relevance:** The self-organizing aspect is interesting but requires LLM calls for each memory update. The *structured note* concept (contextual description + keywords + tags + links) could enhance our memory storage format at low cost by pre-computing these at store-time.
+### 1.9 RL for memory operations [HIGH CONFIDENCE — promoted from "emerging" in March]
 
-**Reference:** Xu, W. et al. (2025). "A-MEM: Agentic Memory for LLM Agents." NeurIPS 2025. [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)
+Five primary papers in the line, plus ICLR 2026 workshop:
 
-### 1.9 MEM1 (Zhou et al., 2025) — RL-Trained Memory Consolidation
+| System | Method | Headline result |
+|---|---|---|
+| **Memory-R1** ([arXiv:2508.19828](https://arxiv.org/abs/2508.19828)) | Manager (ADD/UPDATE/DELETE/NOOP) + Answer Agent. PPO + GRPO. | LLaMA-3.1-8B: F1 +68.9% / B1 +48.3% / J +37.1% over Mem0. **Backbone-sensitive** — drops to 62.74% on Qwen3-4B when MemBuilder re-ran. |
+| **Mem-α** ([arXiv:2509.25911](https://arxiv.org/abs/2509.25911)) | RL on memory construction; core/episodic/semantic components. | Qwen3-4B 0.389 → 0.642. **Generalizes 30k → 400k tokens (13×)** — RL learns principles, not patterns. |
+| **AgeMem / Agentic Memory** ([arXiv:2601.01885](https://arxiv.org/abs/2601.01885)) | Five memory ops (store/retrieve/update/summarize/**discard**) as callable tools, step-level GRPO. | Outperforms baselines on 5 long-horizon benchmarks. Learns proactive summarization and semantic-redundancy discard. |
+| Learn to Memorize ([arXiv:2508.16629](https://arxiv.org/abs/2508.16629)) | MoE gate function for retrieval, on/off-policy hybrid. | — |
+| MemRL (Jan 2026) | Self-evolving via runtime RL on episodic memory. | — |
 
-MEM1 uses reinforcement learning to train a 7B model to maintain a compact internal state across multi-turn interactions, learning which information to retain and which to discard.
+**Reward-model bottleneck:** MemoryRewardBench ([arXiv:2601.11969](https://arxiv.org/abs/2601.11969)) shows reward models degrade abruptly **beyond 64K tokens** and cannot reliably judge parallel/mixed memory-management strategies. RL-memory's reliable supervision range is upper-bounded by RM quality.
 
-**Results:** MEM1-7B improves performance 3.5x while reducing memory usage 3.7x compared to Qwen2.5-14B on 16-objective multi-hop QA.
+**Implication for memex:** memex's dreaming reflection is heuristic. AgeMem's discard-as-action and Memory-R1's ADD/UPDATE/DELETE/NOOP framings are concrete reference points. *Not a 2026 priority* — RL-memory is not yet beating heuristics consistently across backbones, and the reward-model fragility caps the supervision window memex would need.
 
-**Relevance:** The RL-training approach is not applicable to our system (we use retrieval, not trained consolidation). However, the core insight — that *what to forget* is as important as *what to remember* — validates our time-decay and importance-weighting approach.
+### 1.10 WorldDB (Apr 2026) — executable graph semantics [NEW]
 
-**Reference:** Zhou, R. et al. (2025). "MEM1: Learning to Synergize Memory and Reasoning for Efficient Long-Horizon Agents." [arXiv:2506.15841](https://arxiv.org/abs/2506.15841)
+[`arXiv:2604.18478`](https://arxiv.org/abs/2604.18478). Three architectural commitments:
 
-### 1.10 MemWalker (Chen et al., 2024) — Tree-Structured Navigation
+1. **Recursive worlds**: every node is a world — a container with its own interior subgraph, ontology scope, composed embedding.
+2. **Content-addressed immutability**: nodes are content-addressed; any edit produces a new hash at the edited node and every ancestor (Merkle audit trail).
+3. **Edges as write-time programs**: each edge type ships `on_insert` / `on_delete` / `on_query_rewrite` handlers (`SUPERSEDES` closes validity, `CONTRADICTS` preserves both, `SAME_AS` stages a merge proposal). No raw append path exists.
 
-MemWalker builds a hierarchical summary tree over long text, then navigates it with iterative LLM prompting to find relevant segments.
+**Results:** LongMemEval-s with Claude Opus 4.7 — **96.40% overall, 97.11% task-averaged**, perfect single-session-assistant recall, 96.24% temporal. +5.61pp vs Hydra DB (90.79%), +11.20pp vs Supermemory (85.20%). Largest gains on multi-session (+15.79pp) where cross-session entity unification matters most.
 
-**Two-stage process:**
-1. Build memory tree: split text into segments, summarize recursively
-2. Navigate tree: LLM reasons about child summaries, descends to relevant segments, can backtrack
+**Caveat:** numbers are paper-self-reported, not yet independently aggregated. WorldDB's own re-run of Mem0 produced 29.07% (vs Mem0's own 93.4%), illustrating the harness-dependence problem.
 
-**Relevance:** Primarily designed for single long documents, not multi-source memory retrieval. Not applicable to our architecture.
+**Implication for memex:** for Problem 1 (multi-device shared pool), content-addressed immutable nodes with executable edges give *audit trail + cross-device + correction history simultaneously* — exactly what memex's correction-chain design points toward. WorldDB is an existence proof you can have this without a graph database.
 
-**Reference:** Chen, H. et al. (2024). "Walking Down the Memory Maze: Beyond Context Limit through Interactive Reading." ICLR 2024. [arXiv:2310.05029](https://arxiv.org/abs/2310.05029)
+### 1.11 Continual / lifelong learning systems [NEW]
 
-### 1.11 Ensue (2026) — Open-Source Model Pipeline
+The Jan 2026 "From Storage to Experience" survey explicitly names continual learning as the field's "ultimate goal."
 
-Ensue built a competitive memory retrieval system using only open-source models, achieving 88% on LongMemEval (93% with GPT-5-mini).
+- **SimpleMem** ([arXiv:2601.02553](https://arxiv.org/abs/2601.02553), ICLR 2026 Workshop) — three-stage pipeline: semantic structured compression → recursive consolidation → adaptive query-aware retrieval. **Inspired by Complementary Learning Systems (CLS) theory** — same theoretical basis as memex's facts + learnings two-tier. Reports F1 +26.4%, 30× token reduction.
+- **Cross-Session SimpleMem** (Feb 2026): +64% over Claude-Mem on LoCoMo.
+- **Omni-SimpleMem** (Apr 2026): multimodal extension. **LoCoMo F1=0.613 (+47%), Mem-Gallery F1=0.810 (+51%)**.
+- AriadneMem ([arXiv:2603.03290](https://arxiv.org/html/2603.03290)) — "Threading the Maze of Lifelong Memory."
+- MemoryBench (Ai et al., 2025): "existing systems fail to use feedback effectively without forgetting."
 
-**Key insight:** 88% accuracy comes from the architecture alone; the gap to 93% is what better models add. The pipeline uses embeddings, open-source language models, and a fine-tuned classifier for each retrieval phase.
+**Field consensus:** "Memory corruption emerges through catastrophic interference. New memories don't simply add — they overwrite, distort, or contradict previous information. Agents may end up remembering conflicting versions simultaneously."
 
-**Relevance:** Validates that our open-source/local-inference approach can be competitive. The architecture matters more than the model.
+**Implication for memex:** memex's dreaming (light/deep sweep + reflection) is exactly this line of work. Storage→Reflection→Experience framing fits memex's two-tier (facts + learnings) architecture. SimpleMem's CLS-theory is the same theoretical basis.
 
-**Reference:** Ensue. (2026). "How We Built a Competitive Memory Retrieval System using Open-Source Models." [ensue.dev/blog/beating-memory-benchmarks](https://ensue.dev/blog/beating-memory-benchmarks/)
+### 1.12 Other systems (briefer)
+
+- **MEM1** ([arXiv:2506.15841](https://arxiv.org/abs/2506.15841)) — RL-trained 7B model maintaining compact internal state. Validates "what to forget = what to remember" but RL training infrastructure not relevant for memex.
+- **MemWalker** ([arXiv:2310.05029](https://arxiv.org/abs/2310.05029)) — hierarchical summary tree, iterative LLM navigation. Single-doc focus; not relevant to multi-source memex.
+- **Ensue** (2026) — open-source pipeline, 88% LongMemEval (93% with GPT-5-mini). Architectural validation for memex's local-inference stack.
+- **xMemory** (Feb 2026) — 4-level hierarchy (messages → episodes → semantics → themes) with uncertainty-gated drill-down. Up to 29% token reduction per query. Beats A-MEM, MemoryOS, LightMem, Nemori on LoCoMo. Critical paper in the LLM-driven structure-fragility documentation.
+- **MemoryOS** ([arXiv:2506.06326](https://arxiv.org/abs/2506.06326), EMNLP 2025 Oral) — short/mid/long tiers, FIFO + segmented paging + heat-driven eviction. +49.11% F1 on LoCoMo (gpt-4o-mini). Documented LLM-update fragility (xMemory critique).
+- **Engram / ENGRAM-R** ([arXiv:2511.12960](https://arxiv.org/abs/2511.12960), [arXiv:2511.12987](https://arxiv.org/abs/2511.12987)) — typed memory + Fact Cards + citation enforcement. **Read-time-heavy** philosophy ("recall-based beats extraction-based — invest intelligence at read time"). 80.0% LoCoMo, +19.6% over Mem0, **−85% input tokens, −75% reasoning tokens vs full-context**. *High-ROI reference for memex's prompt-engineering pass.*
+- **MemPalace** — claimed "100% LongMemEval"; primary critic [`arXiv:2604.21284`] attributes the 96.6% R@5 to ChromaDB defaults + verbatim storage, not the spatial-palace metaphor. The "100%" was three post-hoc patches against a non-held-out dev set.
+- **Supermemory ASMR** — 99% via 8–12 specialist-prompt parallel ensemble. Production-fatal P99 (T21).
 
 ---
 
 ## 2. Ranking and Fusion Algorithms for Heterogeneous Sources
 
-### 2.1 RRF and Its Limitations
+### 2.1 RRF and its limitations [unchanged from March]
 
-Our current system uses score-based fusion (vector score + BM25 boost), not true RRF. Standard RRF:
-
-```
-RRF(d) = SUM_r  1 / (k + rank_r(d))
-```
-
-where k = 60 (standard), and the sum is over all ranking lists r.
-
-**Known limitations (2024-2025):**
-1. **Information loss:** Discards absolute similarity scores. Two documents ranked #1 with scores 0.99 and 0.51 get identical RRF contribution.
-2. **Hyperparameter sensitivity:** Optimal k varies per domain. The "parameter-free" claim is folklore.
-3. **No source weighting:** Treats all ranking lists equally. A high-precision memory index and a noisy document search get the same weight.
-4. **Latency cost:** Requires running all retrieval pipelines before fusion.
+Standard RRF: `RRF(d) = SUM_r 1 / (k + rank_r(d))`. Limitations: information loss (drops absolute scores), hyperparameter sensitivity, no source weighting, latency cost (must run all pipelines first).
 
 ### 2.2 Weighted RRF
 
-Extension that assigns per-list weights:
+`WRRF(d) = SUM_r w_r / (k + rank_r(d))`. Elasticsearch shipped this in 2025; up to +6.4% nDCG@10 vs standard RRF. For memex: `w_conversation = 0.6`, `w_document = 0.4`. [Elastic blog](https://www.elastic.co/search-labs/blog/weighted-reciprocal-rank-fusion-rrf).
 
-```
-WRRF(d) = SUM_r  w_r / (k + rank_r(d))
-```
+### 2.3 HF-RAG: hierarchical fusion with z-score standardization [CIKM 2025]
 
-Elasticsearch shipped this in 2025. Up to +6.4% nDCG@10 vs standard RRF on multimodal benchmarks. This is the simplest upgrade path from standard RRF.
-
-**For our case:** `w_conversation = 0.6`, `w_document = 0.4` would give memory results more influence in the final ranking.
-
-**Reference:** Elastic. (2025). "Weighted Reciprocal Rank Fusion (RRF) in Elasticsearch." [elastic.co/search-labs/blog/weighted-reciprocal-rank-fusion-rrf](https://www.elastic.co/search-labs/blog/weighted-reciprocal-rank-fusion-rrf)
-
-### 2.3 HF-RAG: Hierarchical Fusion with Z-Score Standardization
-
-HF-RAG (CIKM 2025) addresses exactly our problem: merging ranked lists from heterogeneous sources with incomparable score distributions.
-
-**Two-stage process:**
-1. **Intra-source fusion:** Within each source (memories, documents), fuse ranked lists from multiple IR models using standard RRF.
-2. **Cross-source fusion:** Apply z-score standardization to each source's fused scores, then merge:
+Two stages: (1) intra-source RRF, (2) cross-source z-score then merge.
 
 ```
 z_score(s, source) = (s - mean(scores_source)) / std(scores_source)
 ```
 
-This maps each source's distribution to a standard normal, removing source-specific biases.
+Improves OOD generalization +3 pp Macro F1. Already adopted in memex's pipeline. [arXiv:2509.02837](https://arxiv.org/abs/2509.02837)
 
-**Results:** Improves out-of-domain generalization by 3 pp in Macro F1. Consistently beats single-source and single-ranker baselines.
+### 2.4 Multi-signal fusion is the 2026 winning pattern [REINFORCED]
 
-**Relevance:** Directly applicable. Our conversation pipeline produces scores with a different distribution than our document pipeline. Z-score normalization before cross-source merge is mathematically principled and cheap to compute.
+Mem0's Apr 2026 update jumped from 49% → 93.4% by running **three scoring passes in parallel and fusing**: semantic similarity, keyword matching, entity matching. xMemory does it with 4-level hierarchy. Hindsight/TEMPR with 4-way. Memex with vector + BM25 + entity + temporal + rerank.
 
-**Reference:** HF-RAG (2025). "Hierarchical Fusion-based RAG with Multiple Sources and Rankers." [arXiv:2509.02837](https://arxiv.org/abs/2509.02837)
+The pattern: **parallel scoring across orthogonal signals, fusion at read time**. Memex was on this trend before Mem0 was. The math (z-score normalization + weighted fusion) was already correct in March; April just added more empirical validation.
 
-### 2.4 Learned Fusion (Learning-to-Rank)
+### 2.5 Cross-encoder reranking and length bias
 
-Gradient Boosted Decision Trees (GBDT) as ranking models for multi-channel fusion. The query-dependent formulation learns non-linear feature interactions:
+Cross-encoders bias toward longer documents (more matching tokens). Mitigations: truncate documents to best-matching chunk before reranking (memex's `bestChunk`); length-normalized reranking (`score / log(length)`); CMC for parallel candidate processing. Practical recommendation for memex: rerank `bestChunk` from documents alongside short memories' full text.
 
-```
-score(d, q) = GBDT(f_1(d,q), f_2(d,q), ..., f_n(d,q))
-```
+### 2.6 Auxiliary Cross Attention Networks (ACAN) [reference only]
 
-where features include: vector similarity, BM25 score, source type, document length, recency, importance, entity overlap, etc.
-
-**Advantage:** Can learn that "short memory with high vector similarity" should beat "long document with high BM25 score" without explicit source-type boosting.
-
-**Disadvantage:** Requires labeled training data (relevance judgments). We do not currently have this.
-
-**Reference:** Alibaba (2025). "Unified Learning-to-Rank for Multi-Channel Retrieval." [arXiv:2602.23530](https://arxiv.org/html/2602.23530v3)
-
-### 2.5 Cross-Encoder Reranking for Mixed-Length Results
-
-Cross-encoders jointly encode (query, candidate) pairs with full attention, enabling nuanced relevance judgments. Key considerations for mixed-length content:
-
-**Length bias problem:** Cross-encoders are biased toward longer documents because they contain more potential matching tokens. A 5000-word document mentioning "Alice" 34 times will score higher than a concise memory "TTS voice is Alice" even though the memory is more relevant.
-
-**Mitigation strategies:**
-1. **Truncation:** Truncate long documents to best-matching chunk before reranking. We already do this (`bestChunk`).
-2. **Length-normalized reranking:** Divide cross-encoder score by log(length), similar to our length normalization stage.
-3. **CMC (Comparing Multiple Candidates):** Process all candidates simultaneously via self-attention with Arrow Attention masking. Each candidate interacts with the query but not with other candidates.
-
-**Practical recommendation:** Rerank the *bestChunk* from documents (not the full document), alongside the full text of short memories. This puts both sources on comparable footing for the cross-encoder.
-
-### 2.6 Auxiliary Cross Attention Networks (ACAN)
-
-Hong et al. (2025) proposed replacing the hand-tuned {recency, importance, relevance} weight combination with a learned cross-attention model trained using LLM-generated ground truth.
-
-**Training approach:** The loss function penalizes deviations from LLM-generated "correct" memory selections, and the model learns to score memories based on context without manual weight tuning.
-
-**Relevance:** Interesting research direction but requires training infrastructure. Could be approximated by collecting recall-quality labels over time and training a simple logistic regression or GBDT model offline.
-
-**Reference:** Hong, W. et al. (2025). "Enhancing memory retrieval in generative agents through LLM-trained cross attention networks." Frontiers in Psychology. [DOI:10.3389/fpsyg.2025.1591618](https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2025.1591618/full)
+Hong et al. (2025) — learned cross-attention model trained on LLM-generated ground truth. Requires training infrastructure. Not in 2026 priority for memex; could be approximated with offline-trained logistic regression / GBDT. [Frontiers in Psychology DOI:10.3389/fpsyg.2025.1591618](https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2025.1591618/full)
 
 ---
 
@@ -275,538 +233,436 @@ Hong et al. (2025) proposed replacing the hand-tuned {recency, importance, relev
 
 ### 3.1 Query Classification: Skip Retrieval Entirely
 
-Our `adaptive-retrieval.ts` already classifies queries as greetings/commands and skips retrieval. The research validates this:
+memex's `adaptive-retrieval.ts` skips for greetings/commands. Adaptive-RAG (NAACL 2024) generalizes to three tiers: no retrieval / single retrieval / iterative retrieval.
 
-**Adaptive-RAG (2024):** Classifies queries into three tiers:
-1. **No retrieval needed:** Simple greetings, commands, general knowledge
-2. **Single retrieval sufficient:** Factual questions with clear keywords
-3. **Iterative retrieval required:** Complex, multi-hop queries
+### 3.2 Source Routing
 
-We implement tier 1 (skip). Adding tier 2/3 distinction could save a reranker call on simple queries.
-
-**Reference:** Jeong, S. et al. (2024). "Adaptive-RAG: Learning to Adapt Retrieval-Augmented Large Language Models." NAACL 2024.
-
-### 3.2 Source Routing: Skip Irrelevant Sources
-
-**RAGRouter (2025):** Predicts which retrieval source is most useful for a given query before executing any retrieval. For our case:
-
-- Queries about user preferences/decisions -> conversation memory only
-- Queries about file contents/documentation -> documents only
-- Ambiguous queries -> both sources
-
-**Implementation:** A lightweight classifier (even regex + heuristics) can route queries. Example heuristics:
-- Contains "my preference", "I said", "I want" -> memory-only
-- Contains "in the file", "documentation says", "config" -> document-only
-- Default -> both
-
-**Estimated savings:** Skip document search for ~30-40% of queries, saving ~200ms each.
-
-**Reference:** RAGRouter (2025). "Query Routing for Retrieval-Augmented Language Models." [arXiv:2505.23052](https://arxiv.org/abs/2505.23052)
+RAGRouter (2025): predicts which source is useful before retrieval. Heuristics for memex: "my preference / I said / I want" → memory-only; "in the file / documentation says / config" → document-only. Estimated savings: 30–40% of queries skip document search, ~200ms each. [arXiv:2505.23052](https://arxiv.org/abs/2505.23052)
 
 ### 3.3 Confidence-Based Reranker Gating
 
-**When to skip the cross-encoder reranker:**
+Skip rerank if `(score_1 - score_2 > gap_threshold) OR (score_1 > high_threshold)`. Suggested: `gap=0.15, high=0.9`. Already implemented as `shouldRerank` gate in memex v0.6.
 
-Research identifies two conditions where reranking adds no value:
-1. **High confidence gap:** Top result score >> second result score. The ranking is already clear.
-2. **Low ambiguity:** All candidate texts are very similar (near-duplicates). Reranking cannot distinguish them.
+### 3.4 Early Termination [already implemented]
 
-**Proposed formula:**
-```
-skip_rerank = (score_1 - score_2 > gap_threshold)  OR  (score_1 > high_threshold)
-```
-
-With gap_threshold = 0.15, high_threshold = 0.9.
-
-Optimal configurations use a high upper threshold (~0.9) coupled with a low lower threshold (~0.1-0.4).
-
-**Estimated savings:** Skip reranker for ~20-30% of queries where top result is clearly dominant, saving ~53ms each.
-
-### 3.4 Early Termination (Already Implemented)
-
-Our `earlyTermination` config option already implements this: skip document search when all conversation results score above `highConfidenceThreshold` (0.6). The research validates this approach.
-
-**Enhancement opportunity:** Make it bidirectional — also skip conversation memory search when the query is clearly document-oriented (e.g., "what's in REQUIREMENTS.md").
+memex skips document search when conversation results all clear `highConfidenceThreshold` (0.6). Bidirectional extension: also skip conversation when query is clearly document-oriented.
 
 ---
 
 ## 4. Score Normalization and Multi-Source Merging
 
-### 4.1 Why Min-Max Normalization Fails
+[Math content unchanged from March — still mathematically valid]
 
-We already discovered this empirically and documented it in `unified-recall.ts`:
+### 4.1 Why min-max fails
 
-> "Min-max normalization was destroying scores for tightly clustered results
-> (e.g., [0.92, 0.83, 0.79] -> [1.0, 0.31, 0.0] which is wrong)."
+Already discovered empirically: `[0.92, 0.83, 0.79] → [1.0, 0.31, 0.0]` is wrong. BM25 follows normal-exponential mixture; cosine clusters near corpus floor (0.3–0.5). Min-max assumes uniform — violated by both. [Manmatha 2001 Information Retrieval 4(3)](https://link.springer.com/article/10.1007/s10791-010-9145-5)
 
-The theoretical basis: score distributions from different retrieval systems follow different statistical models. BM25 scores follow a normal-exponential mixture, while vector cosine similarity scores cluster near the model's inherent similarity floor (~0.3-0.5 for most embedding models). Min-max normalization assumes uniform distributions, which is violated by both.
-
-**Reference:** Manmatha, R. et al. (2001). "Modeling score distributions in information retrieval." Information Retrieval, 4(3), 191-213. [DOI:10.1007/s10791-010-9145-5](https://link.springer.com/article/10.1007/s10791-010-9145-5)
-
-### 4.2 Z-Score Normalization (Recommended Upgrade)
-
-Z-score normalization accounts for the distribution shape:
-
-```
-normalized(s) = (s - mean(S)) / std(S)
-```
-
-**Advantages over min-max:**
-- Robust to outliers (a single very high/low score does not distort others)
-- Preserves relative spacing between scores
-- Works well for approximately normal distributions (which BM25 and cosine similarity approximate)
-
-**Disadvantage:** Produces unbounded scores. Needs a final sigmoid or clamp to [0, 1].
-
-**For our case:** Apply z-score normalization within each source, then rescale to [0, 1] with a sigmoid:
+### 4.2 Z-score normalization [recommended, adopted]
 
 ```
 calibrated(s) = sigmoid(z_score(s)) = 1 / (1 + exp(-z_score(s)))
 ```
 
-This maps z=0 (average score) to 0.5, z=2 (strong result) to ~0.88, z=-2 (weak result) to ~0.12.
+Maps z=0 → 0.5, z=2 → ~0.88, z=-2 → ~0.12. Robust to outliers, preserves spacing. memex uses this.
 
-### 4.3 CDF-Based Calibration
+### 4.3 CDF-based calibration [reference]
 
-A more principled approach: transform scores through the cumulative density function of their known distribution.
+Transform through CDF of known distribution. For cosine: `Phi((s-mu)/sigma)`. For BM25: `F_gamma(s; alpha, beta)`. Maps to percentile rank. Requires offline corpus stats.
 
-For cosine similarity (approximately normally distributed around a corpus-specific mean):
-```
-calibrated(s) = Phi((s - mu_corpus) / sigma_corpus)
-```
+### 4.4 RRF as normalization
 
-where Phi is the standard normal CDF. This requires knowing the corpus statistics, which we can compute offline.
+RRF sidesteps normalization at the cost of magnitude information. memex uses score-based fusion + z-score, which preserves magnitudes within trusted-pipeline sources.
 
-For BM25 (approximately gamma-distributed):
-```
-calibrated(s) = F_gamma(s; alpha, beta)
-```
-
-**Advantage:** Maps scores to a uniform [0, 1] distribution that represents *percentile rank* — a 0.8 means "better than 80% of all possible results." This makes scores from different sources directly comparable.
-
-**Disadvantage:** Requires corpus-level statistics (mean, std for vector; alpha, beta for BM25). These drift as the corpus grows.
-
-### 4.4 Rank-Based Fusion (RRF) as Normalization
-
-RRF sidesteps the normalization problem entirely by using only rank information:
-
-```
-RRF(d) = SUM_r  1 / (k + rank_r(d))
-```
-
-This is maximally robust to score distribution differences but loses magnitude information. A document with score 0.99 and rank 1 is treated identically to a document with score 0.51 and rank 1.
-
-**For our case:** RRF is a reasonable default when we cannot trust score magnitudes. However, we *can* trust them within each source (our conversation pipeline produces calibrated scores through the 7-stage pipeline). So score-based fusion with z-score normalization is better.
-
-### 4.5 Recommended Normalization Strategy
-
-Combine z-score normalization with source-weighted merge:
+### 4.5 Recommended (memex)
 
 ```
 final_score(d) = w_source * sigmoid(z_score(d, source)) + w_type * type_bonus(d)
 ```
 
-where:
-- `w_source` = source weight (conversation: 0.55, document: 0.45)
-- `sigmoid(z_score(...))` = calibrated score within source
-- `w_type` = type-specific bonus weight
-- `type_bonus` = bonus for concise, direct memories over long document chunks
+`w_conversation = 0.55`, `w_document = 0.45`, `type_bonus` favors concise direct memories over long document chunks.
 
 ---
 
 ## 5. Benchmarks and Evaluation Metrics
 
-### 5.1 LongMemEval (ICLR 2025)
+### 5.1 The reproducibility crisis [NEW SECTION]
 
-The most comprehensive benchmark for agent memory. 500 questions across 6 categories:
+The most consequential finding of the April 2026 re-survey: **vendor benchmark numbers cannot be trusted at face value**. Three structural failure modes documented:
 
-| Category | Description |
-|----------|-------------|
-| Information Extraction | Recall facts from a session |
-| Single-Session-User | Context mentioned by the user |
-| Single-Session-Assistant | Context mentioned by the assistant |
-| Preference Extraction | Implicit user preferences |
-| Multi-Session Reasoning | Aggregation across sessions |
-| Knowledge Update | Correct adaptation to changed information |
+1. **Cherry-picking with no held-out split.** MemPalace's "100% LongMemEval" was achieved by inspecting the 3 wrong answers in the dev set and writing 3 targeted patches (a quoted-phrase boost for "sexual compulsions", a person-name boost for "Rachel", phrase patterns for "I still remember" / "when I was in high school"). LongMemEval has no official train/dev/test split — the 50-question dev set was carved out *after* the patches. ([GitHub Issue #29](https://github.com/MemPalace/mempalace/issues/29))
 
-**Key difficulty:** 115k tokens of chat history per question, 30-40 sessions.
+2. **Top-k larger than candidate pool.** LoCoMo conversations have 19–32 sessions; default `top_k=50`. LongMemEval has ~53 sessions per question; ChromaDB `n_results=50` returns ~94% of corpus on every query. **The retrieval step does not meaningfully filter.** BM25 alone hits 93.8% R@5 under this methodology. ([ATANT v1.1 `arXiv:2604.10981`](https://arxiv.org/html/2604.10981))
 
-**Current SOTA scores (LongMemEval_S):**
-- Observational Memory (Mastra) + gpt-5-mini: 94.87%
-- Hindsight (TEMPR) + Gemini-3-Pro: 91.4%
-- Ensue + open-source models: 88%
-- Supermemory + GPT-4o: 81.6%
-- Mem0: 66.9% (vector), 68.4% (graph)
+3. **Reproducible scoring defects.** A 2026 paper found LoCoMo's **scoring function makes 23% of items unscorable**, and its largest category (42%) scores paraphrase overlap rather than structural correctness. Covers 2 of 7 continuity properties at partial strength.
 
-**Reference:** Wu, X. et al. (2024). "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory." ICLR 2025. [arXiv:2410.10813](https://arxiv.org/abs/2410.10813)
+**Concrete illustrations:**
+- **Mem0 has three different LongMemEval scores in the public record:** 49% (Apr 2025 paper), 93.4% (Apr 2026 own update), **29.07% (WorldDB's re-implementation)**. 64-point spread depending on harness.
+- **Zep dispute:** 84% (original) → 58.44% (Mem0's correction, cat 1-4 only, 10-run mean) → 75.14% (Zep's counter-rebuttal with corrected re-implementation).
+- Multiple practitioners report inability to reproduce Mem0's published LoCoMo numbers from the open-source repo (mem0ai/mem0 issues #2800, #3943, #3944).
 
-### 5.2 LoCoMo (NAACL 2024)
+**Implication for memex:** memex's `R@5=96% / E2E=94%` LongMemEval numbers (doc 005) are vendor-self-reported against a benchmark with documented integrity problems. Not necessarily wrong, but they should not be the sole validation. Treat any LongMemEval / LoCoMo number above ~85% with strong skepticism unless accompanied by a held-out test split and an independent re-run.
 
-Evaluates QA, event summarization, and dialogue generation across long conversations. Subtypes:
-- Single-hop QA (intra-session)
-- Multi-hop QA (cross-session)
-- Temporal reasoning (date/order/interval)
-- Open-domain
-- Adversarial (unanswerable)
+### 5.2 LongMemEval (ICLR 2025) [updated]
 
-**Key insight:** Temporal QA is the hardest category — most systems score 20-40% below other categories.
+500 questions, 6 categories: information extraction, single-session-user, single-session-assistant, preference extraction, multi-session reasoning, knowledge update. ~115k tokens of chat history per question, 30-40 sessions.
 
-**Reference:** Maharana, A. et al. (2024). "Evaluating Very Long-Term Conversational Memory of LLM Agents." [arXiv:2402.17753](https://arxiv.org/abs/2402.17753)
+**Current SOTA — top mainstream-aggregated scores:**
+| System | Score | Reader LLM | Date | Notes |
+|---|---:|---|---|---|
+| Supermemory ASMR | ~99% | — | Mar 2026 | 8–12 specialist-prompt ensemble. P99-fatal in production. |
+| WorldDB | **96.40%** (overall) / **97.11%** (task-avg) | Claude Opus 4.7 | Apr 2026 | Paper-self-reported; not yet independently aggregated. |
+| Mastra Observational Memory | **94.87%** | gpt-5-mini | Mar 2026 | Highest mainstream-aggregated. |
+| Mem0 token-efficient | **93.4%** | — | Apr 28, 2026 | Multi-signal fusion. |
+| Hindsight (TEMPR) | 91.4% | Gemini-3 Pro | Late 2025 | 4-way parallel search. |
+| Ensue (open-source) | 88% / 93% | OS / GPT-5-mini | 2026 | Validates open-source pipeline. |
+| Emergence EmergenceMem | 86% / 82.4% | — | 2025 | At 3.2 s/item. |
+| Letta | ~83.2% | — | 2025 | OS-style tiered context. |
+| RetainDB | 79% / 88% pref | gpt-5.4-mini | Mar 2026 | Per-turn extraction, canonical dedupe. |
+| LiCoMemory | 73.8% | gpt-4o-mini | Nov 2025 | +26.6 pp multi-session, +15.9 pp temporal. |
+| **memex (self-reported)** | **94% E2E / 96% R@5** | GPT-4o | Mar 2026 | Per [005-longmemeval-baseline.md](./005-longmemeval-baseline.md). Subject to §5.1. |
+| Zep / Graphiti | 71.2% / 75.14% | — | 2025 | Disputed; see §1.5. |
+| Mem0 (Apr 2025) | 49.0% | — | Apr 2025 | Superseded. |
 
-### 5.3 Mem0 Research Benchmark
+**Saturation watch:** Both 2026 surveys flag this benchmark as approaching its useful ceiling, but per §5.4, this is a *benchmark-shape* problem, not a capability ceiling.
 
-Custom benchmark emphasizing production scenarios: 66.9% baseline (vector-only), 68.4% with graph memory. The modest improvement suggests that graph structure helps but is not transformative for simple fact retrieval.
+**Reference:** [arXiv:2410.10813](https://arxiv.org/abs/2410.10813)
 
-**Reference:** [mem0.ai/research](https://mem0.ai/research)
+### 5.3 LoCoMo (NAACL 2024) [updated]
 
-### 5.4 Memory-Specific Metrics (Beyond IR)
+~1,500–2,000 QA pairs, 4 reasoning categories (single-hop, multi-hop, temporal, adversarial). Avg conversation: 300 turns / 9k tokens / 35 sessions. Human F1 ≈ 88%.
 
-Standard IR metrics (nDCG, MRR, Recall@k) are necessary but insufficient for memory systems. Additional metrics that capture memory-specific quality:
+**Notable 2025-2026 results:**
+- Mem0 token-efficient: 91.6
+- MemMachine Episodic Memory: 0.8487 llm_score
+- MemBuilder (Qwen3-4B): 82.00%
+- MemoryOS: +49.11% F1 over baseline (gpt-4o-mini)
+- Omni-SimpleMem: F1=0.613 (+47%)
+- Engram: 80.0% (vs Mem0 66.9%)
 
-| Metric | Description | Standard IR Equivalent |
-|--------|-------------|----------------------|
-| **Temporal Accuracy** | Did the system return the *current* version of a fact that has been updated? | None (IR assumes static corpus) |
-| **Source Attribution Accuracy** | Did the system correctly identify whether a fact came from memory vs document? | None |
-| **Abstention Rate** | Does the system correctly decline when asked about something never discussed? | Precision at zero recall |
-| **Knowledge Update Lag** | How quickly does the system reflect a corrected/updated fact? | None |
-| **Preference Consistency** | Does the system consistently recall permanent preferences across sessions? | None |
-| **Cross-Session Reasoning** | Can the system connect facts from different sessions? | Multi-hop QA accuracy |
+Standard GPT-4o ≈ 30% on temporal. Full neuro-symbolic reaches ~78%.
 
-### 5.5 Custom Benchmark Design for memex
+**Reference:** [arXiv:2402.17753](https://arxiv.org/abs/2402.17753)
 
-Given our specific needs (short facts + long documents + temporal awareness), we should build a benchmark with these categories:
+### 5.4 Successor benchmarks: agentic-task evaluation [NEW]
 
-1. **Direct Memory Recall:** "What voice do I use for TTS?" -> "Alice" (from memory)
-2. **Document Retrieval:** "What does REQUIREMENTS.md say about embedding?" -> (from document)
-3. **Source Priority:** "What is my TTS voice?" where both memory says "Alice" and a document mentions "Alice" 34 times -> memory should rank higher
-4. **Temporal Correctness:** After updating "TTS voice is now Koda", the old answer "Alice" should not appear first
-5. **Permanent Preference:** After 90 days of not mentioning it, "never say sorry" should still be retrievable
-6. **Abstention:** "What is my favorite color?" (never discussed) -> should return no confident result
+Three benchmarks released in late 2025 / early 2026 expose that LongMemEval/LoCoMo saturation is a *benchmark-shape* problem, not capability ceiling.
+
+#### MemoryArena (`arXiv:2602.16313`, Feb 2026)
+Stanford Digital Economy Lab + UCSD. Memory-Agent-Environment loops with **causally interdependent subtasks** across 4 domains: web navigation, preference-constrained planning, progressive search, sequential formal reasoning. 5 dataset configs.
+
+**Concrete leaderboard (Table 3 — best Success Rate per dataset):**
+
+| Dataset | Best SR | Winning paradigm |
+|---|---:|---|
+| Bundled Web Shopping | 0.12 | long-context |
+| Group Travel Planning | 0.06 | long-context |
+| Progressive Web Search | 0.62 | long-context |
+| Formal Reasoning Math | 0.50 | long-context |
+| Formal Reasoning Physics | 0.60 | long-context |
+
+Three paradigms tested: long-context (GPT-5.1-mini, GPT-4.1-mini, Gemini-3-Flash, Claude-Sonnet-4.5), external memory (Letta, Mem0, Mem0-g, ReasoningBank), RAG (BM25, Text-Embedding-3-Small, MemoRAG, GraphRAG). **Long-context wins all 5 categories.** External-memory systems (Mem0, Letta) lose on every dataset.
+
+#### MemoryAgentBench (`arXiv:2507.05257`, Jul 2025, ICLR 2026)
+Hu et al. (HUST-AI). Four competencies: accurate retrieval, test-time learning, long-range understanding, **selective forgetting**. Two new datasets: EventQA (retrieval), FactConsolidation (forgetting). [Code](https://github.com/HUST-AI-HYZ/MemoryAgentBench).
+
+**Headline:** all methods cap at **~7% accuracy on multi-hop selective forgetting**. Single-hop forgetting: only long-context reaches reasonable scores. Reasoning models don't change the qualitative conclusion.
+
+#### MEMTRACK (`arXiv:2510.01353`, Patronus AI, NeurIPS 2025)
+47 datapoints across **Slack + Linear + Git** (full Gitea + dockerized FS). Cross-platform dependencies, contradictions, codebase comprehension. Metrics: Correctness, Efficiency, Redundancy.
+
+**Headline:** **GPT-5 only achieves 60% Correctness.** Strong negative result: "memory components like Zep and Mem0 do not significantly improve performance" — current memory tooling fails on enterprise-shaped tasks.
+
+#### AMA-Bench (`arXiv:2602.22769`, 2026)
+"Agent memory techniques often outperform long-context LLM baselines on dialogue-centric benchmarks, but fall short to the baselines in many long-horizon agentic tasks." GPT 5.2 hits **72.26%**. "Suboptimal memory system design serves as the primary bottleneck."
+
+**Implication for memex:** memex is dialogue-shaped (Claude Code conversations), where memory tools win. But these three benchmarks suggest the gains may not transfer to agentic, multi-step Claude Code workflows (tool calls + planning). Roadmap risk.
+
+### 5.5 Other benchmarks (named)
+
+- **MemoryRewardBench** ([arXiv:2601.11969](https://arxiv.org/abs/2601.11969)) — RMs for memory; 8K–128K context; abrupt fragility >64K.
+- **MEMTRACK**, **Mem2ActBench** ([arXiv:2601.19935](https://arxiv.org/abs/2601.19935)), **MemGUI-Bench** ([arXiv:2602.06075](https://arxiv.org/abs/2602.06075)), **MemBench** ([arXiv:2506.21605](https://arxiv.org/abs/2506.21605)), **MemoryBench** ([arXiv:2510.17281](https://arxiv.org/abs/2510.17281)), **AMA-Bench**, **From Recall to Forgetting** ([arXiv:2604.20006](https://arxiv.org/html/2604.20006)).
+- **BEAM** (1M / 10M tokens) — production-scale; Mem0 reports 64.1 / 48.6.
+
+### 5.6 Memory-specific metrics
+
+| Metric | Description | Standard IR equivalent |
+|---|---|---|
+| Temporal accuracy | Does it return the *current* version of an updated fact? | None |
+| Source attribution accuracy | Memory vs document correctly identified? | None |
+| Abstention rate | Correctly declines when asked about something never discussed? | Precision at zero recall |
+| Knowledge update lag | How fast a corrected fact propagates? | None |
+| Preference consistency | Permanent preferences recall across sessions? | None |
+| Cross-session reasoning | Connects facts across sessions? | Multi-hop QA |
+| **Selective forgetting accuracy** | Drops obsolete info on demand? | None — and field caps at 7% |
+
+### 5.7 Custom benchmark design for memex
+
+Given memex's specific needs (short facts + long documents + temporal + multi-device scoping), benchmark categories:
+
+1. Direct memory recall: "What voice do I use for TTS?" → "Alice" (memory)
+2. Document retrieval: "What does REQUIREMENTS.md say about embedding?" → (document)
+3. Source priority: "What is my TTS voice?" — memory says "Alice", doc mentions "Alice" 34× — memory should win
+4. Temporal correctness: After "TTS voice is now Koda", "Alice" should not appear first
+5. Permanent preference: After 90 days unmentioned, "never say sorry" should still be retrievable
+6. Abstention: "What is my favorite color?" (never discussed) → no confident result
+7. **Cross-device scoping** (NEW): A laptop-scoped fact should not leak to dev-VM context
+8. **Selective forgetting** (NEW): "Don't remember anything I said last Tuesday about X" — memex doesn't yet support this; the field caps at 7% multi-hop
 
 ---
 
 ## 6. Analysis: What Fits Our Constraints
 
-### Constraint Summary
+### Constraint summary
 
 | Constraint | Value |
-|-----------|-------|
+|---|---|
 | Database | SQLite + FTS5 + sqlite-vec |
 | Latency budget | < 500ms total pipeline |
 | Embedding | Local via llama.cpp (Qwen3-Embedding, ~83ms uncached) |
-| Reranker | Local via llama.cpp (bge-reranker-v2-m3, ~53ms for 5 docs) |
+| Reranker | Local via llama.cpp (Qwen3-Reranker-0.6B, ~53ms for 5 docs) |
 | LLM calls at query time | Zero (too slow/expensive for retrieval path) |
-| Memory count | ~1900 memories, ~450 documents |
-| Build system | None (TypeScript loaded via jiti) |
+| Memory count | ~1,900 memories, ~450 documents |
+| Build system | None (TypeScript via jiti) |
 
-### Algorithm Compatibility Matrix
+### Algorithm compatibility matrix
 
-| System | Fits Constraints? | Key Blocker |
-|--------|-------------------|-------------|
-| Generative Agents formula | Yes (trivially) | Naive weights, min-max normalization |
-| MemoryBank (Ebbinghaus) | Yes | Already implemented via time decay |
-| MemGPT (paging) | Partially | Agent-controlled paging adds complexity |
-| Mem0^g (graph) | No | Requires graph database (Neo4j) |
-| Zep/Graphiti (temporal KG) | No | Requires Neo4j, bitemporal adds schema complexity |
-| Hindsight/TEMPR (4-way search) | **Yes** | Entity resolution at store-time only |
-| Observational Memory | No | Requires continuous LLM inference |
-| A-MEM (Zettelkasten) | Partially | LLM calls at store-time (not query-time) |
-| MEM1 (RL-trained) | No | Requires RL training infrastructure |
-| HF-RAG (z-score fusion) | **Yes** | Pure math, no dependencies |
+| System | Fits constraints? | Key blocker |
+|---|---|---|
+| Generative Agents formula | Yes (trivially) | Naive weights, min-max fails |
+| MemoryBank Ebbinghaus | Yes | Already implemented; FadeMem half-lives are an upgrade |
+| FadeMem (45% storage savings) | **Yes** | Pure decay-formula change |
+| MemGPT paging | Partially | Agent-controlled paging adds complexity |
+| Mem0^g graph | No | Requires Neo4j (Mem0 itself dropped graph) |
+| Mem0 token-efficient (multi-signal fusion) | **Yes** — already this shape | Memex's pipeline = same family |
+| Zep / Graphiti temporal KG | No | Requires Neo4j |
+| Hindsight / TEMPR 4-way search | **Yes** — landed in v0.6 | Entity resolution at store-time only |
+| Observational Memory (Mastra) | No | Continuous LLM Observer/Reflector |
+| A-MEM Zettelkasten | Partially | LLM at store-time; structure fragility risks |
+| MEM1 / Memory-R1 / Mem-α / AgeMem (RL) | No (2026) | RL training infra; reward-model fragility >64K caps supervision |
+| WorldDB content-addressed graph | Partially | Conceptually adoptable; requires schema redesign |
+| HF-RAG z-score fusion | **Yes** | Pure math, adopted |
 | Weighted RRF | **Yes** | Simple formula change |
-| Learned fusion (GBDT) | **Partially** | Needs labeled data; could bootstrap |
-| ACAN (learned scoring) | No | Needs training infrastructure |
+| ENGRAM-R citation enforcement | **Yes** | Prompt-engineering pass; high ROI |
+| SimpleMem CLS-inspired pipeline | **Yes** — same shape | memex's facts + learnings two-tier |
+| Learned fusion (GBDT / ACAN) | Partially | Needs labeled data |
 
-### Recommended Picks
+### The long-context vs memory framing [NEW]
 
-**Immediate (no new dependencies):**
-1. Z-score normalization for cross-source merging (HF-RAG approach)
-2. Weighted RRF as alternative to score-based fusion
-3. Source routing heuristics to skip irrelevant sources
-4. Confidence-based reranker gating
+"Beyond the Context Window" ([arXiv:2603.04814](https://arxiv.org/html/2603.04814v1), Mar 2026) directly benchmarks long-context GPT-5-mini vs fact-based memory:
 
-**Medium-term (modest effort):**
-5. TEMPR-style entity extraction at store-time for entity-aware retrieval
-6. Bitemporal columns (event_time, ingestion_time) in memory schema
-7. Memory durability classification (permanent / transient / ephemeral)
+| Metric | Long-context GPT-5-mini | Memory (Mem0, pre-update) | Δ |
+|---|---:|---:|---:|
+| LongMemEval | 82.40% | 49.00% | +33.4 pp |
+| LoCoMo | 92.85% | 57.68% | +35.2 pp |
+| PersonaMem v2 | 69.75% | 62.48% | +7.3 pp |
 
-**Long-term (significant effort):**
-8. Learned fusion model trained on collected relevance labels
-9. Custom LongMemEval-style benchmark
+Cost / break-even: write phase ~$0.0435/conversation; per-query memory $0.0013 vs long-context $0.0265 (first turn at 100k) / $0.0036 (with 90% prompt caching). **Break-even at ~10 turns** at 100k tokens; ~9 turns at 500k.
+
+**Implication for memex:** the value proposition needs to be re-articulated. Not "better recall than long-context" — that's losing on accuracy. The honest pitch: *cross-device, cross-session amortization with provenance and scope*, which the academic field doesn't have a clean benchmark for yet.
+
+### Recommended picks (updated for April)
+
+**Already adopted in memex v0.6:**
+- Z-score normalization for cross-source merging (HF-RAG)
+- Source routing heuristics
+- Confidence-based reranker gating (`shouldRerank`)
+- Hindsight/TEMPR 4-way search (entity + temporal + vector + BM25)
+- Mem0-style multi-signal fusion (memex was on this trend before Mem0)
+- Local Qwen3-Reranker (essentially free at ~53ms)
+
+**High ROI, low effort to add:**
+- **ENGRAM-R citation enforcement** — render retrieved memories as anchored Fact Cards, instruct LLM to cite by anchor. Estimated −75% reasoning tokens at maintained accuracy.
+- **FadeMem-style explicit half-life decay** — replace ad-hoc decay; reported 45% storage savings vs Mem0.
+- **Benchmark-honesty section in README** — two sentences acknowledging LongMemEval integrity issues and memex's actual design center.
+
+**Medium-term:**
+- **Bitemporal columns** (event_time, ingestion_time) in memory schema — covers Zep concept without graph DB.
+- **Memory durability classification** (permanent / transient / ephemeral).
+- Optional: WorldDB-inspired content-addressed memory IDs for cross-device dedup.
+
+**Long-term / out of 2026 scope:**
+- Learned fusion model (GBDT / ACAN)
+- RL-learned memory ops (AgeMem-style discard)
+- Multimodal memory (MemLoRA-V style)
 
 ---
 
-## 7. Recommended Algorithm Design
+## 7. Memory Governance and Security [NEW Apr 2026]
 
-### 7.1 Proposed Architecture: TEMPR-Lite
+A real sub-field with concrete attack and defense papers. memex must consider this if it ships as a service.
 
-A simplified version of Hindsight's TEMPR adapted for our SQLite-based system.
+**Attack class:**
 
-#### Storage Enhancements
+| Attack | Vector | Source |
+|---|---|---|
+| **MINJA** | Query-only memory injection (no privileged access) | [arXiv:2503.03704](https://arxiv.org/abs/2503.03704) (Mar 2025, v5 Feb 2026) |
+| **MemoryGraft** | Poisoned successful experiences exploit semantic-imitation heuristic | [arXiv:2512.16962](https://arxiv.org/abs/2512.16962) (Dec 2025) |
+| **InjecMEM** | Targets layered systems (evaluated against MemoryOS); persists after benign drift | [OpenReview](https://openreview.net/forum?id=QVX6hcJ2um) |
+| **Memory Poisoning EHR** | Empirical eval on GPT-4o-mini, Gemini-2.0-Flash, Llama-3.1-8B | [arXiv:2601.05504](https://arxiv.org/abs/2601.05504) (Jan 2026) |
+| Implicit memory "time bombs" | Even agents without explicit memory carry state via output→input | [arXiv:2602.08563](https://arxiv.org/) (Feb 2026) |
+| Morris-II AI worm | Self-replicating worm propagating across RAG-connected agents | [arXiv:2403.02817](https://arxiv.org/) |
 
-Add columns to memory table:
+**Defense / detection:**
+- **SuperLocalMemory** ([arXiv:2603.02240](https://arxiv.org/)) — Bayesian trust model; **72% trust-degradation detection at 10.6 ms median latency**.
+- **Agent Security Bench** ([arXiv:2410.02644](https://arxiv.org/)) — **84.30% average attack success rate** across 27 attack/defense combinations on 400+ tools.
+- "Just five carefully crafted documents → 90% RAG manipulation" (Jan 2026 MDPI review).
+
+**The "mnemonic sovereignty" framing:** [arXiv:2604.16548](https://arxiv.org/html/2604.16548v1) introduces *mnemonic sovereignty* as a normative concept — verifiable, recoverable governance over what may be written, who may read, when updates are authorized, and what may be forgotten. Argues the next generation of competition will be on governance, not raw recall.
+
+**Implication for memex:** for Problem 1 (multi-device daemon), every memory write is now an attack surface. Memex's correction-chain is partial defense (preserves provenance). No detection mechanism integrated. **New roadmap item if memex ships as a service.**
+
+---
+
+## 8. Multi-Agent Memory [NEW Apr 2026]
+
+memex's daemon serving multiple devices ≡ a multi-agent memory system. The field has organized this as its own sub-problem.
+
+**Architecture position paper:** [arXiv:2603.10062](https://arxiv.org/html/2603.10062v1) (Mar 2026) frames multi-agent memory as a **computer-architecture problem**: shared vs. distributed memory paradigms, three-layer hierarchy (I/O, cache, memory), and names two open protocol gaps: **cache sharing across agents** and **structured memory access control**. The named single-most-pressing challenge: *multi-agent memory consistency*.
+
+**Ontological drift:** [arXiv:2604.03430](https://arxiv.org/html/2604.03430) — when agents have isolated memory, they diverge in conceptual definitions, causing systemic hallucinations and logical mismatches across the swarm.
+
+**Emergent collective memory:** [arXiv:2512.10166](https://arxiv.org/html/2512.10166v1) — stigmergy (indirect communication via environment modification, like ant pheromone trails) as a primitive for decentralized memory.
+
+**Attack class — contagious jailbreak via shared memory:**
+- **TMCHT** ([arXiv:2410.16155](https://arxiv.org/abs/2410.16155)) — Troublemaker Makes Chaos in Honest Towns. Multi-topology attack benchmark (graph, line, star). +52.93% attack success in 100-agent settings vs prior single-agent attacks. Key finding: *toxicity disappears* after few hops, so single-agent attacks don't propagate without topology-aware construction.
+- **MemJack** ([arXiv:2604.12616](https://arxiv.org/abs/2604.12616)) — Memory-augmented multi-agent jailbreak on VLMs.
+- **Agent Smith** ([arXiv:2402.08567](https://arxiv.org/html/2402.08567v2)) — single adversarial image jailbreaks ~1M MLLM agents exponentially fast.
+
+**Implication for memex:** Problem 1 is *exactly* multi-agent memory consistency. Read [arXiv:2603.10062](https://arxiv.org/html/2603.10062v1) before finalizing the daemon protocol. Stigmergy-style indirect-write patterns are interesting for future cross-device coordination.
+
+---
+
+## 9. Production Deployment Realities [NEW Apr 2026]
+
+**Memory at scale is mandatory.** A 200K context isn't storage. At Sonnet 4.6's $3/MTok input rate, a 1M-token call costs $3 each — full-history is impractical for daily-operation agents.
+
+**Dual-layer architecture is now standard:**
+- **Hot Path:** recent messages + summarized graph state, in-context.
+- **Cold Path:** Zep / Mem0 / Pinecone / pgvector, retrieved on demand.
+- **Memory Node** coordinates after each turn.
+- **Sub-100ms cold-path retrieval** is the operational target.
+
+**Latency tail dominates UX.** Microsoft Research 2024:
+- P99 >5s → **45% user abandonment**
+- P99 <2s → 8% abandonment
+
+**Industry SLO targets:**
+- Customer service: P99 <3s end-to-end, TTFT <500ms
+- Real-time decisioning (fraud, credit): P99 <500ms
+- Document AI: P99 10–30s acceptable
+
+**Gateway compounding.** A gateway adding 40 ms/call × 5 sequential agent calls = **200 ms pure proxy latency** — visible in P99. Inference-aware load balancing > round-robin in agentic stacks.
+
+**Mitigations:**
+- Semantic caching (>50% hit rate at <10 ms)
+- Request hedging (after P75 elapses, duplicate at ~25% extra spend)
+- Workload separation (batch vs real-time queues)
+- Consistent hashing for tenant cache locality
+
+**Concrete production numbers:**
+- **Mem0 selective vs full-context:** 1.44 s p95 vs 17.12 s — **91% latency reduction at −6 pp accuracy**.
+- **Tencent Cube Sandbox** (Apr 21, 2026, Apache 2.0): 100K+ instance bursts, P99 <200ms under 100 concurrent launches/host, ~60ms cold start (1/3 of industry average).
+
+**Implication for memex:** memex's daemon design (Tailscale-connected, single SQLite, scope-aware retrieval) is well-positioned for the cost/latency axis. **Don't chase ensemble-style accuracy** — Supermemory's 99% requires 8–12 parallel calls; that's a P99 disaster. ENGRAM-R's −85% input / −75% reasoning tokens is the kind of trade-off production actually needs.
+
+---
+
+## 10. Recommended Algorithm Design for memex
+
+### 10.1 TEMPR-Lite (already landed in v0.6)
+
+memex's v0.6 implements the four-way parallel search inspired by Hindsight/TEMPR:
+
+1. Semantic vector similarity (Qwen3-Embedding-4B-Q8 + sqlite-vec)
+2. BM25 keyword (FTS5)
+3. Entity graph traversal (entity extraction + adjacency links + one-hop expansion)
+4. Temporal query detection (regex date-range filtering)
+
+Plus reranker (Qwen3-Reranker-0.6B), `shouldRerank` gate, in-turn recall cache, source routing.
+
+This is the same family as Mem0's April 2026 winning multi-signal fusion approach.
+
+### 10.2 Storage enhancements (recommended additions)
+
 ```sql
 ALTER TABLE memories ADD COLUMN durability TEXT DEFAULT 'transient';
-  -- 'permanent': preferences, rules, identity facts (no time decay)
-  -- 'transient': facts that may change (normal time decay)
-  -- 'ephemeral': time-bounded facts (aggressive time decay)
+-- 'permanent' | 'transient' | 'ephemeral'
 
-ALTER TABLE memories ADD COLUMN entities TEXT DEFAULT '[]';
-  -- JSON array of extracted entity names, computed at store-time
+ALTER TABLE memories ADD COLUMN event_time INTEGER;     -- when the fact occurred
+ALTER TABLE memories ADD COLUMN ingestion_time INTEGER; -- when memex observed it
+-- bitemporal pattern (Zep concept, no graph DB needed)
 
-ALTER TABLE memories ADD COLUMN event_time INTEGER;
-  -- When the fact actually occurred/was stated (may differ from store time)
+ALTER TABLE memories ADD COLUMN provenance TEXT;
+-- JSON: {device, project, agent, origin, projectPath?, provenanceVersion}
+-- See two-problems-architecture.md for design
 ```
 
-Durability classification can be done at store-time using the existing importance scoring heuristics:
-- importance >= 0.9 and category in ("preference", "rule", "identity") -> permanent
-- importance <= 0.3 or contains temporal markers ("today", "this week") -> ephemeral
-- everything else -> transient
+### 10.3 Read-time citation enforcement (ENGRAM-R-style, recommended)
 
-#### Retrieval Pipeline: 3-Channel Parallel Search
+Replace raw injected memories with anchored Fact Cards in the prompt template, instructing the model to cite by anchor:
 
 ```
-Query
-  |
-  +--[Source Router]--+
-  |                   |
-  v                   v
-[Conv Memory]    [Documents]    (skip one if router is confident)
-  |                   |
-  +--- vector ---|    +--- vector ---|
-  +--- BM25 ----|    +--- BM25 ----|
-  +--- entity --|    +--- FTS5 ----|
-  |                   |
-  [Intra-source       [Intra-source
-   RRF fusion]         RRF fusion]
-  |                   |
-  [Z-score            [Z-score
-   normalize]          normalize]
-  |                   |
-  +-------Merge-------+
-          |
-  [Source-weighted combine]
-          |
-  [Durability-aware time decay]
-          |
-  [Confidence gate: rerank?]
-          |
-  [Cross-encoder rerank] (if needed)
-          |
-  [Final top-k]
+[mem:abc123 · memex/main · 3d ago · cross-context]
+We use pnpm for this project.
+
+[mem:def456 · homelab/infra · 2w ago]
+Default deploy strategy is blue-green.
 ```
 
-#### Mathematical Formulation
+Plus instruction to the LLM: "Cite supporting memories by anchor (e.g., [mem:abc123]) in your reasoning." Estimated −75% reasoning tokens at maintained accuracy.
 
-**Stage 1: Intra-source fusion (per source)**
+### 10.4 Provenance-aware recall (Problem 2 — already designed)
 
-For conversation memories, fuse vector and BM25 using weighted combination (current approach works well):
-```
-fused_conv(m, q) = sim_vec(m, q) + 0.15 * sim_vec(m, q) * I_bm25(m, q)
-```
+Soft boost via scope expansion. `RequestContext` (device, project, agent) expands to `["global", "project:X", "agent:Y"]`; existing scope-filter in retriever consumes the array. No retriever changes needed.
 
-For documents, use weighted RRF across vector, BM25, and section-level FTS:
-```
-fused_doc(d, q) = SUM_r  w_r / (60 + rank_r(d))
-```
-
-**Stage 2: Cross-source calibration (z-score + sigmoid)**
+LLM-visible recall labels surface judgment opportunity:
 
 ```
-calibrated(s, S) = sigmoid( (s - mean(S)) / max(std(S), epsilon) )
+[memex/main · 3d ago] We use pnpm for this project.
+[homelab/infra · 2w ago · cross-context] Default deploy is blue-green.
+[unknown context · 5mo ago] Prefer tabs over spaces.
 ```
 
-where S is the set of all scores from the same source, and epsilon = 0.01 to prevent division by zero.
+### 10.5 What NOT to build (in 2026)
 
-**Stage 3: Source-weighted merge**
-
-```
-final(r) = w_src(r) * calibrated(r) + bonus(r)
-```
-
-where:
-```
-w_src = 0.55  if source = conversation
-        0.45  if source = document
-
-bonus = 0.05  if source = conversation AND len(text) < 200  (concise fact bonus)
-        0.0   otherwise
-```
-
-**Stage 4: Durability-aware time decay**
-
-Replace the current uniform time decay with durability-specific decay:
-```
-decay(r) = case durability(r):
-  permanent:  1.0  (no decay)
-  transient:  0.5 + 0.5 * exp(-age_days / 60)   (current formula)
-  ephemeral:  0.5 + 0.5 * exp(-age_days / 7)    (aggressive: 1-week half-life)
-```
-
-**Stage 5: Confidence-gated reranking**
-
-```
-skip_rerank = (score_1 - score_2 > 0.15) OR (score_1 > 0.9 * w_src)
-
-if not skip_rerank:
-  reranked_score = 0.6 * cross_encoder(q, r) + 0.4 * final(r)
-```
-
-### 7.2 Source Router (Heuristic)
-
-```typescript
-function routeQuery(query: string): "conversation" | "document" | "both" {
-  const q = query.toLowerCase();
-
-  // Document-only signals
-  if (/\b(in the file|documentation|readme|config file|\.md|\.ts|\.json)\b/.test(q)) {
-    return "document";
-  }
-
-  // Memory-only signals
-  if (/\b(my preference|i said|i want|i told you|remember when|do i)\b/.test(q)) {
-    return "conversation";
-  }
-
-  // Default: search both
-  return "both";
-}
-```
-
-### 7.3 Entity-Aware Retrieval (Future Enhancement)
-
-At store-time, extract entity names from each memory:
-```
-"TTS voice is Alice" -> entities: ["TTS", "Alice"]
-"Token budget is $200/week" -> entities: ["token budget"]
-```
-
-At query-time, extract query entities and add an entity-overlap signal:
-```
-entity_overlap(m, q) = |entities(m) INTERSECT entities(q)| / |entities(q)|
-```
-
-This can be implemented as a SQLite JSON query:
-```sql
-SELECT * FROM memories
-WHERE json_each.value IN (SELECT value FROM json_each(?query_entities))
-```
-
-No graph database needed — just a JSON column and SQLite's json_each function.
-
-### 7.4 Latency Budget
-
-| Stage | Current (ms) | Proposed (ms) | Delta |
-|-------|-------------|---------------|-------|
-| Source routing | 0 | ~0.01 | +0.01 |
-| Vector search (both) | ~33 | ~33 | 0 |
-| BM25 search (both) | ~14 | ~14 | 0 |
-| Entity lookup | 0 | ~2 | +2 |
-| Intra-source fusion | ~0.1 | ~0.1 | 0 |
-| Z-score calibration | 0 | ~0.01 | +0.01 |
-| Cross-source merge | ~0.1 | ~0.1 | 0 |
-| Time decay | ~0.01 | ~0.01 | 0 |
-| Reranker (when needed) | ~53 | ~53 (70% of queries) | -16 avg |
-| **Total** | **~250-300** | **~235-285** | **-15 avg** |
-
-The proposed changes actually *reduce* average latency by skipping the reranker ~30% of the time, while improving ranking quality.
+- **Ensemble specialist-agent retrieval** (Supermemory ASMR style) — P99 disaster.
+- **RL-trained memory policies** — reward-model fragility >64K caps supervision; not yet beating heuristics consistently.
+- **Graph database (Neo4j)** — Mem0 dropped it, gains came from fusion not graph.
+- **Continuous LLM observer/reflector** (Mastra style) — conflicts with memex's no-LLM-at-query-time constraint.
 
 ---
 
-## 8. Proposed Benchmark Methodology
+## 11. Concrete actions for memex, ordered by ROI
 
-### 8.1 Test Suite Structure
+### High ROI, low effort
+1. **Add a benchmark-honesty section to README.** Two sentences: "(1) memex's LongMemEval numbers are self-reported; that benchmark has documented integrity issues. (2) memex's design center is *cross-device, cross-session amortization with provenance and scope*, which the field doesn't have a clean benchmark for yet." Positions memex as professional and skeptical instead of competing on numbers the research has discredited.
 
-Create a golden test set of query-answer pairs covering our specific failure modes:
+2. **Adopt citation-enforcement in the LLM prompt** (ENGRAM-R style). Render retrieved memories as anchored Fact Cards, instruct the model to cite by anchor. Estimated −75% reasoning tokens at maintained accuracy. One prompt-engineering pass.
 
-```typescript
-interface BenchmarkCase {
-  id: string;
-  query: string;
-  // Expected results, ordered by expected rank
-  expected: Array<{
-    source: "conversation" | "document";
-    textSubstring: string;  // substring that should appear in result
-    mustRank: number;       // must be at or above this rank (1-indexed)
-  }>;
-  // Category for per-category metrics
-  category: "direct_recall" | "document_retrieval" | "source_priority"
-           | "temporal_correctness" | "permanent_preference" | "abstention";
-}
-```
+3. **Re-frame v0.6 release notes.** memex's win condition is *cost + governance + cross-device pool*, not "better recall." Doc 003's earlier framing was implicitly accuracy-first; flip it.
 
-### 8.2 Scoring Metrics
+### Medium ROI, medium effort
+4. **Run memex against MemoryAgentBench** ([github.com/HUST-AI-HYZ/MemoryAgentBench](https://github.com/HUST-AI-HYZ/MemoryAgentBench)) to surface selective-forgetting weaknesses honestly. The benchmark is open-source.
 
-For each benchmark run, compute:
+5. **Wire FadeMem-style explicit half-life decay** into memex's session-import path. Reported 45% storage savings vs Mem0; current memex decay is ad-hoc.
 
-1. **Recall@k** (k=1,3,5,10): What fraction of expected results appear in top-k?
-2. **nDCG@10**: Standard ranking quality metric.
-3. **Source Priority Score:** When both sources match, does the expected source rank higher?
-4. **Temporal Correctness:** For updated facts, does the new version rank above the old?
-5. **Preference Persistence:** For permanent preferences, do they appear in top-3 even after simulated time passage?
-6. **Abstention Rate:** For queries with no relevant memory, is the top score below threshold?
-7. **API Call Efficiency:** How many embedding + reranker calls per query?
-8. **Latency p50/p95/p99**
+6. **Read the multi-agent memory architecture paper** ([arXiv:2603.10062](https://arxiv.org/html/2603.10062v1)) before finalizing the daemon protocol. "Multi-agent memory consistency" is the academic name for what Problem 1 is solving.
 
-### 8.3 Test Data Generation
+7. **Add bitemporal columns** (event_time, ingestion_time) to the memory schema. Covers Zep's concept in SQLite without graph DB.
 
-Populate the test database with controlled data:
+### Lower ROI / longer horizon
+8. **Add memory-attack detection.** SuperLocalMemory's Bayesian trust model is a reference point. Skip until memex ships as a service.
 
-1. **Memories (500):** Mix of preferences (50), rules (30), decisions (50), facts (200), ephemeral (170)
-2. **Documents (50):** Mix of config files, task files, meeting notes, documentation
-3. **Deliberately overlapping content:** Same entity mentioned in both memories and documents
-4. **Temporal chains:** Facts that have been updated 2-3 times (to test knowledge update)
-5. **Decoy documents:** Long documents that mention query keywords many times but are not the correct answer
+9. **Consider RL-learned memory ops** (AgeMem-style discard) only after the heuristic dreaming policy is well-validated. Reward-model fragility above 64K tokens makes this premature.
 
-### 8.4 Automated Regression
-
-Run the benchmark on every change to the retrieval pipeline:
-
-```bash
-node --import jiti/register tests/benchmark-retrieval-quality.ts
-```
-
-Output a comparison table showing per-category scores before/after the change.
+10. **Multimodal memory** (MemLoRA-V) — out of 2026 scope; revisit in 2027 if user use cases shift.
 
 ---
 
-## Key Takeaways
+## Pointers
 
-1. **The field is converging on parallel multi-signal retrieval** (vector + BM25 + entity + temporal), not single-method search. Hindsight/TEMPR's 4-way search is the gold standard.
-
-2. **Z-score normalization before cross-source merge** is the mathematically correct approach and directly addresses our tightly-clustered-scores problem. This is the single most impactful upgrade.
-
-3. **Durability classification** (permanent / transient / ephemeral) solves the "preferences should not decay" problem without adding complexity to the time-decay formula.
-
-4. **Source routing** and **confidence-gated reranking** can reduce average latency while improving quality by avoiding unnecessary work.
-
-5. **The architecture matters more than the model.** Ensue achieves 88% on LongMemEval with open-source models, within 5 points of frontier-model systems. Our local-inference approach is not a handicap.
-
-6. **Graph databases are not required.** Entity-aware retrieval can be implemented with SQLite JSON columns and entity extraction at store-time.
-
-7. **Observational Memory's no-retrieval approach** is the most radical and highest-performing, but requires continuous LLM inference that conflicts with our constraints. The *concept* of pre-computing compressed summaries at write-time is worth borrowing.
-
----
-
-## References
-
-- Chadha, T. et al. (2025). "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." [arXiv:2504.19413](https://arxiv.org/abs/2504.19413)
-- Chen, H. et al. (2024). "Walking Down the Memory Maze." ICLR 2024. [arXiv:2310.05029](https://arxiv.org/abs/2310.05029)
-- Cormack, G.V. et al. (2009). "Reciprocal rank fusion outperforms Condorcet." SIGIR 2009. [DOI:10.1145/1571941.1572114](https://dl.acm.org/doi/10.1145/1571941.1572114)
-- Deshpande, A. et al. (2025). "Hindsight is 20/20." [arXiv:2512.12818](https://arxiv.org/abs/2512.12818)
-- Elastic (2025). "Weighted RRF in Elasticsearch." [elastic.co](https://www.elastic.co/search-labs/blog/weighted-reciprocal-rank-fusion-rrf)
-- Ensue (2026). "Competitive Memory Retrieval with Open-Source Models." [ensue.dev](https://ensue.dev/blog/beating-memory-benchmarks/)
-- HF-RAG (2025). "Hierarchical Fusion-based RAG." CIKM 2025. [arXiv:2509.02837](https://arxiv.org/abs/2509.02837)
-- Hong, W. et al. (2025). "Enhancing memory retrieval via LLM-trained cross attention networks." [DOI:10.3389/fpsyg.2025.1591618](https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2025.1591618/full)
-- Maharana, A. et al. (2024). "Evaluating Very Long-Term Conversational Memory." [arXiv:2402.17753](https://arxiv.org/abs/2402.17753)
-- Manmatha, R. et al. (2001). "Modeling score distributions in information retrieval." [DOI:10.1007/s10791-010-9145-5](https://link.springer.com/article/10.1007/s10791-010-9145-5)
-- Mastra (2026). "Observational Memory." [mastra.ai/research](https://mastra.ai/research/observational-memory)
-- Packer, C. et al. (2023). "MemGPT: Towards LLMs as Operating Systems." [arXiv:2310.08560](https://arxiv.org/abs/2310.08560)
-- Park, J.S. et al. (2023). "Generative Agents." UIST 2023. [arXiv:2304.03442](https://arxiv.org/abs/2304.03442)
-- Rasmussen, P. (2025). "Zep: Temporal Knowledge Graph Architecture." [arXiv:2501.13956](https://arxiv.org/abs/2501.13956)
-- Wu, X. et al. (2024). "LongMemEval." ICLR 2025. [arXiv:2410.10813](https://arxiv.org/abs/2410.10813)
-- Xu, W. et al. (2025). "A-MEM: Agentic Memory for LLM Agents." NeurIPS 2025. [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)
-- Zhong, W. et al. (2024). "MemoryBank." AAAI 2024. [arXiv:2305.10250](https://arxiv.org/abs/2305.10250)
-- Zhou, R. et al. (2025). "MEM1." [arXiv:2506.15841](https://arxiv.org/abs/2506.15841)
-- MemEngine (2025). "Unified and Modular Library." WWW 2025. [arXiv:2505.02099](https://arxiv.org/abs/2505.02099)
-- PAMU (2025). "Preference-Aware Memory Update." [arXiv:2510.09720](https://arxiv.org/abs/2510.09720)
+- **Memex's LongMemEval baseline:** [`005-longmemeval-baseline.md`](./005-longmemeval-baseline.md) — note: numbers should be re-read in light of §5.1 (reproducibility crisis).
+- **Two-problems architecture (multi-device daemon + scoping):** [`../plans/two-problems-architecture.md`](../plans/two-problems-architecture.md) — Problem 1 is multi-agent memory consistency (§8); Problem 2's provenance design is consistent with the field.
+- **Unified pipeline design:** [`004-unified-pipeline-design.md`](./004-unified-pipeline-design.md)
+- **Ranking mathematics:** [`002-ranking-mathematics.md`](./002-ranking-mathematics.md)
+- **Extraction model comparison:** [`001-extraction-model-comparison.md`](./001-extraction-model-comparison.md)

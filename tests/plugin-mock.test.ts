@@ -176,6 +176,11 @@ describe("buildRecallContext", () => {
     const ctx = buildRecallContext(memories);
     assert.ok(ctx.includes("UNTRUSTED DATA"));
   });
+
+  it("instructs the LLM to cite memories by anchor", () => {
+    const ctx = buildRecallContext(memories);
+    assert.ok(/cite.*\bmem:\w+/i.test(ctx), "expected citation instruction with anchor example");
+  });
 });
 
 // ============================================================================

@@ -45,6 +45,17 @@ N=50 is small enough that a ±2 query swing is within noise. The reranker improv
 
 LongMemEval is the right benchmark for "does memex remember conversation history well over time?" It is **not** the canonical benchmark for mixed memory + document retrieval quality. That benchmark track is being separated out so the project does not overclaim an overall quality number from a memory-only benchmark.
 
+#### Caveats on the leaderboard table above
+
+The 2026 research consensus (see [`docs/research/003-memory-retrieval-sota.md`](./docs/research/003-memory-retrieval-sota.md)) is that LongMemEval / LoCoMo numbers should be read with significant skepticism:
+
+- LoCoMo / LongMemEval default `top_k=50` exceeds candidate-pool size (~50 sessions per question on LongMemEval, 19–32 sessions on LoCoMo) → retrieval doesn't meaningfully filter; the benchmark mostly measures whether the LLM can read.
+- LoCoMo's scoring function makes 23% of items unscorable; the largest category (42%) scores paraphrase overlap rather than structural correctness.
+- Vendor numbers vary by ±20pp depending on harness. Mem0 alone has been reported at 49% / 93.4% / 29.07% on LongMemEval across three different evaluators.
+- MemPalace's "100% LongMemEval" was three post-hoc patches against a non-held-out dev set.
+
+Memex's 94% is honestly self-measured and reproducible from this repo, but a leaderboard table comparing memex to other vendors on this benchmark is no longer particularly informative. Successor benchmarks like MemoryArena (`arXiv:2602.16313`), MemoryAgentBench (`arXiv:2507.05257`), and MEMTRACK (`arXiv:2510.01353`) test causally-dependent agentic workflows and are the better basis for comparison going forward. v0.7 plans an honest run against MemoryAgentBench.
+
 ### Domain eval
 
 A 15-query entity-rich eval against the author's production memex DB lives at `tests/domain-eval.ts`. It's the primary regression gate for day-to-day retrieval tuning because it runs in under 10s with no LLM cost. Current score: 12/15 without reranker, 11/15 with Qwen3-Reranker (one query loses to a "defensible but wrong" semantic match). See `docs/plans/LEARNINGS.md` for the history.
