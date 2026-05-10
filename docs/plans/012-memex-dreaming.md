@@ -650,7 +650,7 @@ All events flow through existing `track()` → telemetry relay → OpenPanel (`o
 
 One-time manual setup in OpenPanel UI — no code needed. OpenPanel auto-discovers events from `track()` calls. Create charts by selecting event name → property → aggregation → time range.
 
-The telemetry relay at `telemetry-relay-memex.mlab42.workers.dev` already forwards to OpenPanel. The only code work is firing the 3 new events (`dream`, `dream_metrics`, `dream_cost`) at the right points in the dream cycle.
+The telemetry relay (`<your-telemetry-relay>` — defaults baked into the SDK) already forwards to OpenPanel. The only code work is firing the 3 new events (`dream`, `dream_metrics`, `dream_cost`) at the right points in the dream cycle.
 
 ---
 
