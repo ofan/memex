@@ -428,7 +428,7 @@ async function startHttpServer(
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => newId,
             enableJsonResponse: true,
-            onsessioninitialized: (id: string) => sessions.set(id, transport!),
+            onsessioninitialized: (id: string) => { sessions.set(id, transport!); },
           });
           transport.onclose = () => {
             if (transport!.sessionId) sessions.delete(transport!.sessionId);

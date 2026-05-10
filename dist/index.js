@@ -596,7 +596,7 @@ const memoryUnifiedPlugin = {
                         apiKey: config.generation.apiKey ? resolveEnvVars(config.generation.apiKey) : resolveEnvVars(config.embedding.apiKey),
                         model: config.generation.model,
                     } : undefined,
-                    queryExpansion: config.documents.queryExpansion ?? false,
+                    queryExpansion: config.documents?.queryExpansion ?? false,
                 };
                 // Initialize shared LLM (replaces node-llama-cpp with HTTP)
                 initializeLLM(llmConfig);
@@ -638,7 +638,7 @@ const memoryUnifiedPlugin = {
                     // Fire-and-forget initial indexing
                     void runDocIndex();
                     // Periodic re-indexing (default: every 30 minutes, 0 = disabled)
-                    const reindexMinutes = config.documents.reindexIntervalMinutes ?? 30;
+                    const reindexMinutes = config.documents?.reindexIntervalMinutes ?? 30;
                     if (reindexMinutes > 0) {
                         reindexTimer = setInterval(() => void runDocIndex(true), reindexMinutes * 60_000);
                     }
@@ -1229,7 +1229,7 @@ const memoryUnifiedPlugin = {
         const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
         async function runBackup() {
             try {
-                const backupDir = api.resolvePath(join(resolvedDbPath, "..", "backups"));
+                const backupDir = join(dirname(unifiedDbFile), "backups");
                 await mkdir(backupDir, { recursive: true });
                 const allMemories = await store.list(undefined, undefined, 10000, 0);
                 if (allMemories.length === 0) {

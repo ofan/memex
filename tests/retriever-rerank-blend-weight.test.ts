@@ -98,7 +98,7 @@ describe("rerankBlendWeight — configurable rerank/fusion blend", () => {
       "light mode fallback for bright environments",
     ];
     for (const text of texts) {
-      const vector = await embedder.embedDocument(text);
+      const vector = await (embedder as any).embedDocument(text);
       await store.store({ text, vector, category: "fact", scope: "global", importance: 0.7 });
     }
   });

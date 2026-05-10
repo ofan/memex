@@ -613,7 +613,7 @@ async function main() {
   if (USE_CHUNKS && existsSync(CHUNK_SCORES_PATH)) {
     const ct0 = performance.now();
     chunkCache = JSON.parse(readFileSync(CHUNK_SCORES_PATH, "utf-8"));
-    console.log(`Loaded chunk scores (${chunkCache!.metadata.chunk_size}c/${chunkCache!.metadata.chunk_overlap}o, ${chunkCache!.metadata.total_chunks_embedded} chunks) in ${((performance.now() - ct0) / 1000).toFixed(1)}s`);
+    console.log(`Loaded chunk scores (${chunkCache!.metadata.chunk_size}c/${chunkCache!.metadata.chunk_overlap}o, ${(chunkCache!.metadata as any).total_chunks_embedded} chunks) in ${((performance.now() - ct0) / 1000).toFixed(1)}s`);
   } else if (USE_CHUNKS) {
     console.log(`No chunk scores found (run build-chunk-cache.ts first). Using truncated vectors.`);
   } else {

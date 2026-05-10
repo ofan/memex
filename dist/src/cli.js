@@ -204,7 +204,7 @@ export function registerMemoryCLI(program, context) {
                 if (backlog > 0) {
                     console.log(`  Embedding ${backlog} documents...`);
                     if (context.embedder && context.searchDimensions) {
-                        const embedResult = await embedDocuments(db, context.embedder.model, context.searchDimensions);
+                        const embedResult = await embedDocuments(db, context.searchDimensions, context.embedder);
                         console.log(`  ${embedResult.embedded} chunks embedded`);
                     }
                 }

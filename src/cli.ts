@@ -215,7 +215,7 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
           console.log("\n── Memories ──");
           const memCount = await context.store.reEmbedMemories(
             currentModel,
-            async (texts) => context.embedder.embedBatchPassage(texts),
+            async (texts) => context.embedder!.embedBatchPassage(texts),
             20,
             (done, total) => {
               if (done % 100 === 0 || done === total) {
@@ -243,7 +243,7 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
           if (backlog > 0) {
             console.log(`  Embedding ${backlog} documents...`);
             if (context.embedder && context.searchDimensions) {
-              const embedResult = await embedDocuments(db, context.embedder.model, context.searchDimensions);
+              const embedResult = await embedDocuments(db, context.searchDimensions, context.embedder);
               console.log(`  ${embedResult.embedded} chunks embedded`);
             }
           } else {
@@ -709,7 +709,7 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
     .action(async (opts) => {
       const { readFileSync, existsSync } = await import("node:fs");
       const { dirname: dn, join: jn } = await import("node:path");
-      const logPath = jn(dn(context.store.db.name || ""), "memex.log");
+      const logPath = jn(dn((context.store.db as any).name || ""), "memex.log");
 
       if (!existsSync(logPath)) {
         console.log("No log file yet. Dreaming hasn't run.");
@@ -741,7 +741,7 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
     .action(async (opts) => {
       const { runDreamCycle } = await import("./dreaming.js");
       const { dirname: dn, join: jn } = await import("node:path");
-      const logPath = jn(dn(context.store.db.name || ""), "memex.log");
+      const logPath = jn(dn((context.store.db as any).name || ""), "memex.log");
 
       if (opts.dryRun) {
         const db = context.store.db;

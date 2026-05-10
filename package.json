@@ -38,7 +38,7 @@
   "dependencies": {
     "@ofan/telemetry-relay-sdk": "^0.2.1",
     "@sinclair/typebox": "0.34.48",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^11.10.0",
     "compromise": "^14.15.0",
     "fast-glob": "^3.3.0",
     "openai": "^6.21.0",
@@ -54,6 +54,16 @@
     "runtimeExtensions": [
       "./dist/index.js"
     ],
+    "contracts": {
+      "tools": [
+        "memory_recall",
+        "memory_store",
+        "memory_forget",
+        "document_search",
+        "memory_stats",
+        "memory_list"
+      ]
+    },
     "compat": {
       "pluginApi": ">=2026.5.7"
     },
@@ -67,7 +77,7 @@
   "scripts": {
     "test": "node --import jiti/register --test tests/*.test.ts",
     "mcp": "npx tsx src/mcp-server.ts",
-    "build": "tsc --noCheck -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {

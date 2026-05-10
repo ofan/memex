@@ -30,21 +30,21 @@ const daysAgo = (d: number) => Date.now() - d * MS_PER_DAY;
 
 /** Minimal embedder that returns deterministic vectors based on text hash. */
 function createTestEmbedder(): Embedder {
-  return {
+  return ({
     embedQuery(text: string): Promise<number[]> {
       let seed = 0;
       for (let i = 0; i < text.length; i++) seed += text.charCodeAt(i);
       return Promise.resolve(makeVector(seed));
     },
     embedDocument(text: string): Promise<number[]> {
-      return this.embedQuery(text);
+      return (this as any).embedQuery(text);
     },
     embedBatch(texts: string[]): Promise<number[][]> {
-      return Promise.all(texts.map(t => this.embedQuery(t)));
+      return Promise.all(texts.map(t => (this as any).embedQuery(t)));
     },
     get dimensions(): number { return VECTOR_DIM; },
     get modelId(): string { return "test-embedder"; },
-  } as Embedder;
+  } as unknown as Embedder);
 }
 
 describe("Temporal Queries — Acceptance", () => {
@@ -115,7 +115,7 @@ describe("Temporal Queries — Acceptance", () => {
     for (let i = 0; i < allTexts.length; i++) {
       const id = `test-${i}-${Date.now()}`;
       ids.push(id);
-      const vec = await embedder.embedDocument(allTexts[i]);
+      const vec = await (embedder as any).embedDocument(allTexts[i]);
       insertMem.run(
         id, allTexts[i], "fact", "global", 0.7, allTimestamps[i], "{}",
         `hash_${i}_${Date.now()}`
@@ -167,7 +167,7 @@ describe("Temporal Queries — Acceptance", () => {
 
     for (let i = 0; i < texts.length; i++) {
       const id = `test-nontemporal-${i}-${Date.now()}`;
-      const vec = await embedder.embedDocument(texts[i]);
+      const vec = await (embedder as any).embedDocument(texts[i]);
       insertMem.run(
         id, texts[i], "preference", "global", 0.7, Date.now(), "{}",
         `hash_nt_${i}_${Date.now()}`

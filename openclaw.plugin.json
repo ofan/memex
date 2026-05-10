@@ -4,6 +4,16 @@
   "description": "Unified memory for OpenClaw: conversation memory + document search in a single SQLite database",
   "version": "0.7.0-dev",
   "kind": "memory",
+  "contracts": {
+    "tools": [
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "document_search",
+      "memory_stats",
+      "memory_list"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
