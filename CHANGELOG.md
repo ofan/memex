@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.2] — 2026-05-10
+
+**Add `runtimeExtensions` and `files` to package.json — what clawhub actually wanted.** The "requires compiled runtime output" error from clawhub validator was misleading — the file was always present in `dist/`, but clawhub finds it via the `openclaw.runtimeExtensions` field, not by inferring `./dist/index.js` from the source `./index.ts` entry. `@openclaw/lobster` has this field; memex was missing it. Verified locally with `clawhub package pack`.
+
+### Added
+- **`openclaw.runtimeExtensions: ["./dist/index.js"]`** in `package.json` — points clawhub at compiled output (matches `@openclaw/lobster`'s manifest shape).
+- **`files`** field in `package.json` — npm-pack inclusion list (`dist/**`, manifests, docs).
+
+### Changed
+- **`.github/workflows/release.yml`** — drops `index.ts` and `src/` from the publish payload (matches lobster's compiled-only shape; source is gitignored from the package even though it's in the repo).
+
 ## [0.6.1] — 2026-05-10
 
 **Track `dist/` in git so clawhub finds it.** v0.6.0 built `dist/` correctly in the workflow but clawhub validates against the GitHub source-repo at the tagged commit, not the local publish payload. Since `dist/` was gitignored, clawhub didn't find it. Removing `dist/` from `.gitignore` and committing the compiled output.

@@ -51,10 +51,12 @@ jobs:
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
           SOURCE_COMMIT=$(git rev-parse HEAD)
           # Staging dir name = package name (clawhub derives it from basename when --name omitted).
+          # Ship compiled output + manifests only (matches @openclaw/lobster's published shape).
+          # Including index.ts/src triggers a clawhub validator complaint that's not satisfied
+          # by sibling dist/ — published packages should be compiled-only.
           STAGE=/tmp/memex
           mkdir -p "$STAGE"
-          cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json index.ts "$STAGE/"
-          cp -r src/ "$STAGE/src/"
+          cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json "$STAGE/"
           cp -r dist "$STAGE/dist"
           clawhub package publish "$STAGE" \
             --family code-plugin \
