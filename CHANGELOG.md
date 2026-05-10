@@ -1,102 +1,111 @@
 # Changelog
 
-Notable user-facing and infrastructure changes. Format based on [Keep a Changelog](https://keepachangelog.com/), though past releases were not tracked formally — this file starts with the 2026-04-10/11 autonomous-loop work.
+## [0.7.0-dev] — in progress
 
-## [0.6.0] — 2026-04-29
+**Theme: cross-device memory daemon, ready for self+others.** v0.7 builds on v0.6.2 (citation-anchored recall, build step) and adds the daemon / dreaming / Claude Code integration that turn memex from a per-project plugin into a personal cross-device memory layer. Architecture decisions are intentionally limited to "current implementation is one valid answer" — see `docs/plans/013-post-v0.6.2-roadmap.md` for the deferred questions.
 
-**Theme: cross-device memory with provenance and scope, not "better recall."**
+### Added — features
+- **Standalone MCP server with HTTP transport** (`src/mcp-server.ts`) — runs as a daemon (per-session transports + bearer auth) so multiple devices and platforms (OpenClaw, Claude Code, future MCP clients) can share a single SQLite memory pool. stdio mode preserved for local subprocess.
+- **Claude Code plugin** at `plugin/memex-claude-code/` — bundled `SessionStart` / `UserPromptSubmit` / `Stop` hooks plus `.mcp.json` referencing `${MEMEX_ENDPOINT}` / `${MEMEX_AUTH_TOKEN}` env vars.
+- **Dreaming consolidation** (`src/dreaming.ts`) — light sweep + deep sweep + LLM reflection (DeepSeek v4-pro by default). `/dream` slash command replaces the previous timer-based scheduler.
+- **Entity graph** (`src/graph.ts`, `src/entities.ts`) — entity extraction as 3rd retrieval signal (ACT-R spreading activation), adjacency links, one-hop expansion, link-backfill on startup.
+- **Temporal query detection** (`src/temporal.ts`) — regex date-range filtering wired into the retriever.
+- **Intake guards** — text-hash dedup, conversation-fragment rejection, schema migration.
+- **Reranker upgrade**: Qwen3-Reranker-0.6B-Q8_0 replaces bge-reranker-v2-m3-Q8_0. R@1 78% → 82%, E2E 90% → 94% on `LongMemEval_s` N=50.
+- **Eval harness** — model-bakeoff (`scripts/bakeoff`), domain-eval (`tests/domain-eval.ts`), BEIR benchmark, latency probe.
 
-The 2026 research consensus (see [`docs/research/003-memory-retrieval-sota.md`](./docs/research/003-memory-retrieval-sota.md)) is that long-context LLMs already win on raw recall accuracy by 33–35pp on standard benchmarks; vendor benchmark numbers are unreliable (Mem0 has been reported at 49% / 93.4% / 29.07% on the same LongMemEval depending on harness); and memory tools fail on causally-dependent agentic tasks (MemoryArena, MEMTRACK, AMA-Bench all converge on long-context winning).
+### Added — citation feature parity with v0.6.2
+- **`src/anchor.ts`** — citation-anchor helpers (`anchor()`, `expandAnchor()`, `looksLikeAnchor()`, `AnchorAmbiguityError`). Backported from main.
+- **MCP server `memory_recall`** — results include `anchor` + `scope` fields and a citation-guidance `note` in the response payload.
+- **MCP server `memory_forget`** — accepts a citation anchor (8+ hex chars) or any longer prefix; returns `anchor_ambiguous` / `anchor_not_found` errors.
+- **Plugin README** — new "Citation anchors" section.
 
-memex's actual win condition is *cost + governance + cross-device pool*, not accuracy. v0.6 commits to that framing.
+### Fixed — sensitive-references audit (cleanup before wider sharing)
+- **`plugin/memex-claude-code/README.md`** — Tailscale IP and 1Password vault name in examples replaced with `<your-memex-host>` / `<your-vault>` placeholders.
+- **`scripts/bakeoff`, `tests/latency-probe.ts`, `docs/architecture.html`** — `op://` references genericized to `op://<vault>/<item>/...`.
+- **`docs/research/embed-rerank-upgrade-brief.md`, `docs/design/model-bakeoff.md`** — `~/homeinfra/...` paths replaced with `~/<infra-repo>/...`; explicit vault/item naming removed.
+- **`docs/plans/2026-04-10-loop-report.md`, `CHANGELOG.md`** — private-infra repo references in commit citations replaced with `infra-repo`.
+- **`docs/plans/012-memex-dreaming.md`** — telemetry-relay worker subdomain replaced with `<your-telemetry-relay>` placeholder.
+- **`docs/design/mcp-server.md`** — Tailscale CGNAT example IP replaced with `<embed-host>:<port>`.
+- **`docs/research/003-memory-retrieval-sota.md`** — example metadata strings switched from `homelab/infra` to `myproject/infra`.
+- **Test fixtures + docs (~25 files)** — homelab-named host fixtures (`host-a` / `host-b` etc.) and persona names (`Alex` / `Jordan`) replace previous personal naming. Public model names like Gemma/Qwen kept as-is.
+- **`.githooks/pre-commit`** — sensitive pattern list moved to gitignored `.githooks/secret-patterns.local`; hook now sources patterns from there with a committed `.example` template. Universal secret prefixes (OpenAI / GitHub / etc.) kept inline.
 
-### Headlines
-
-- **Standalone MCP server with HTTP transport.** memex can now run as a daemon, serving multiple devices and platforms (OpenClaw, Claude Code, future MCP clients) from a single shared SQLite pool. stdio for local subprocess; HTTP with per-session transports + bearer auth for cross-device. Configurable via env (`MEMEX_HTTP_PORT`, `MEMEX_AUTH_TOKEN`, `MEMEX_LLM_TIMEOUT`, etc.).
-- **Claude Code plugin** at `plugin/memex-claude-code/` — bundled `SessionStart` / `UserPromptSubmit` / `Stop` hooks plus MCP config. Deterministic per-turn injection that MCP `instructions` alone cannot deliver.
-- **Dreaming consolidation.** Scheduled light sweep + deep sweep + LLM reflection (DeepSeek v4-pro by default). Turns raw conversation history into reusable learnings — the Storage → Reflection → Experience pattern named in the 2026 surveys, implemented as `/dream` slash command (replaces timer-based scheduler).
-- **Citation-anchored recall.** Recalled memories are now rendered with stable anchors (`[mem:abc12345]`); the LLM is instructed to cite by anchor in reasoning. Reference: ENGRAM-R (`arXiv:2511.12987`) reports −85% input / −75% reasoning tokens with this pattern at maintained accuracy.
-- **Multi-signal retrieval as a coherent system.** Vector + BM25 + entity graph + temporal query detection + reranker + in-turn cache. This is the same family as Mem0's April 2026 update which jumped from 49% → 93.4% on LongMemEval by adopting parallel multi-signal fusion. memex landed this independently.
-- **Reranker upgrade: Qwen3-Reranker-0.6B-Q8_0** replaces bge-reranker-v2-m3-Q8_0. R@1 78% → 82%, E2E 90% → 94% on `LongMemEval_s` N=50. Mechanistic reason: Qwen3 has 32K context vs bge's 8K-truncation on long chunked sessions.
-- **Pool quality discipline.** Intake guards (text-hash dedup, conversation-fragment rejection), aggressive session-import decay, link-backfill on startup, recall-frequency tracking persisted in DB.
-
-### Why no leaderboard table this release
-
-Earlier README versions led with a "memex is #2 on LongMemEval" table. As of April 2026, that framing is misleading:
-- LongMemEval / LoCoMo top-k defaults exceed candidate-pool size — retrieval doesn't meaningfully filter
-- Scoring functions have reproducible defects on 23% of items
-- Vendor-self-reported numbers vary ±20pp across independent re-runs
-
-memex still publishes its own LongMemEval numbers (94% E2E with GPT-4o; reproducible from this repo) but no longer claims a position on a leaderboard the field has discredited. The "Benchmarks (with caveats)" section in `README.md` documents this stance.
-
-### What v0.6 does *not* do
-
-- **No ensemble retrieval.** Supermemory ASMR's 99% requires 8–12 parallel specialist calls — fatal for production P99 SLOs. memex stays single-pass with a gated reranker.
-- **No graph database.** Mem0 itself dropped its graph variant; the gains came from multi-signal fusion, not graph traversal. memex stays SQLite.
-- **No RL-trained memory ops.** Reward models (MemoryRewardBench, `arXiv:2601.11969`) degrade abruptly beyond 64K tokens, capping RL-memory's reliable supervision range. Heuristic dreaming is the right tool for now.
-- **No selective-forgetting solution.** The field's `MemoryAgentBench` shows all methods cap at ~7% on multi-hop selective forgetting. memex doesn't claim to solve this.
-
-### Open positioning
-
-memex's design center — cross-device pool, scope-aware retrieval, provenance metadata, dreaming consolidation — maps to research lines that don't yet have a clean public benchmark: `arXiv:2603.10062` names "multi-agent memory consistency" as the most pressing open challenge; the `mnemonic sovereignty` survey (`arXiv:2604.16548`) frames governance as the next axis of competition. memex sits in this lane intentionally.
+### Changed
+- Inherits all v0.6.2 changes (see below).
+- `package.json` `openclaw.compat.pluginApi` and `runtimeExtensions` set to current openclaw version.
+- `package.json` `bin.memex-mcp` points at compiled `./dist/src/mcp-server.js`.
 
 ---
 
-## [Unreleased]
+## [0.6.2] — 2026-05-10
+
+**Add `runtimeExtensions` and `files` to package.json — what clawhub actually wanted.** The "requires compiled runtime output" error from clawhub validator was misleading — the file was always present in `dist/`, but clawhub finds it via the `openclaw.runtimeExtensions` field, not by inferring `./dist/index.js` from the source `./index.ts` entry. `@openclaw/lobster` has this field; memex was missing it. Verified locally with `clawhub package pack`.
+
+### Added
+- **`openclaw.runtimeExtensions: ["./dist/index.js"]`** in `package.json` — points clawhub at compiled output (matches `@openclaw/lobster`'s manifest shape).
+- **`files`** field in `package.json` — npm-pack inclusion list (`dist/**`, manifests, docs).
+
+### Changed
+- **`.github/workflows/release.yml`** — drops `index.ts` and `src/` from the publish payload (matches lobster's compiled-only shape; source is gitignored from the package even though it's in the repo).
+
+## [0.6.1] — 2026-05-10
+
+**Track `dist/` in git so clawhub finds it.** v0.6.0 built `dist/` correctly in the workflow but clawhub validates against the GitHub source-repo at the tagged commit, not the local publish payload. Since `dist/` was gitignored, clawhub didn't find it. Removing `dist/` from `.gitignore` and committing the compiled output.
+
+### Changed
+- **`.gitignore`** — `dist/` is now tracked (with explanatory comment).
+- **`dist/`** — committed alongside source. Run `npm run build` to refresh before tagging.
+
+## [0.6.0] — 2026-05-10
+
+**Theme: real build step + version-line shift.** ClaHub's validator now requires compiled JS output for TypeScript code plugins. memex now compiles `index.ts` and `src/**/*.ts` to `dist/` at publish time. Source remains the editable artifact; tests still run against `.ts` via jiti. The `memex-v0.6` development branch is concurrently renamed to `memex-v0.7` so its in-flight architectural work (HTTP MCP daemon, dreaming, entity graph, Claude Code plugin) lands as v0.7+ and doesn't collide with the now-shipped v0.6 namespace.
+
+### Added
+- **`tsconfig.build.json`** — extends the main config with `noEmit: false`, `outDir: dist`, excluding tests. Used only for publish.
+- **`build` script** in `package.json` — `tsc --noCheck -p tsconfig.build.json`. `--noCheck` strips types without type-checking (jiti-equivalent semantics; the existing 42 latent type errors are out of scope for this release and will be addressed separately).
+- **`prepublishOnly`** runs build automatically.
+- **`.github/workflows/release.yml`** — runs `npm run build` between `npm ci` and the publish step; copies `dist/` alongside the source files in the publish payload.
+
+### Changed
+- **`.gitignore`** — `dist/` excluded.
+- **Version-line shift:** main bumps to `0.6.0`. The previously-named `memex-v0.6` branch is renamed to `memex-v0.7` (its in-flight features will ship as v0.7+).
+
+### Notes for downstream
+- ClaHub installs of `memex@0.6.0` get pre-built JS in `dist/`. OpenClaw's loader can use either `dist/index.js` or `index.ts` (jiti); local `npm link` deploys still work without running `npm run build`.
+- 42 latent type errors exist in the codebase (jiti was hiding them). They don't block the build (`--noCheck`) but should be cleaned up in a follow-up PR. Run `npx tsc` to see the list.
+
+## [0.5.15] — 2026-05-10
+
+**Re-publish of v0.5.13/v0.5.14 after release-pipeline shakeout.** The clawhub CLI required a sequence of fixes (`--slug` → `--name`, `--family code-plugin`, `--source-repo`/`--source-commit`/`--source-ref`, and finally `openclaw.compat.pluginApi` + `openclaw.build.openclawVersion` in `package.json`). Code is identical to v0.5.13.
+
+### Fixed
+- **`package.json`** — added `openclaw.compat.pluginApi` and `openclaw.build.openclawVersion` (required for external code plugins per the new clawhub validator).
+- **`.github/workflows/release.yml`** — added `workflow_dispatch` trigger so future re-publishes don't need a fresh version bump.
+
+## [0.5.14] — 2026-05-09
+
+**Re-publish of v0.5.13 after release-workflow fix.** v0.5.13 was tagged but its publish job failed because the `clawhub` CLI changed its publish syntax (`clawhub publish` → `clawhub package publish`) and nothing landed on ClaHub. Code is identical to v0.5.13.
+
+### Fixed
+- **`.github/workflows/release.yml`** — use `clawhub package publish <source>` (the old `clawhub publish <source>` form fails with "This looks like a plugin. Use `clawhub package publish <source>` instead.").
+
+## [0.5.13] — 2026-05-09
+
+**Theme: citation-anchored recall.** Each recalled memory now carries a short stable handle (`[mem:abc12345]`); the LLM is instructed to cite it when used and can `memory_forget` by the anchor. Inspired by ENGRAM-R (`arXiv:2511.12987`), which reports −85% input / −75% reasoning tokens vs full-context with this pattern at maintained accuracy.
 
 ### Added
 
-- **`tests/bakeoff/`** — reusable harness for evaluating a candidate reranker or embedder against the current stack. Two-stage gate (cheap domain-eval + fast-benchmark → expensive GPT-4o e2e only if stage 1 wasn't a hard fail). Unit-tested decision logic at `tests/bakeoff/criteria.ts` (16 tests), stdout parsers at `tests/bakeoff/runner-parser.test.ts` (14 tests), and endpoint probe at `tests/bakeoff/probe.test.ts` (9 tests). CLI at `scripts/bakeoff` with structured `--help`, required-env fail-fast, reranker mode, and v1.5 embedder mode (user pre-builds the candidate cache, bakeoff swaps paths via `FAST_BENCH_CACHE_PATH` / `FAST_BENCH_CHUNK_SCORES_PATH` env vars).
-- **Bakeoff pre-flight probe** — before running stage 1, bakeoff hits the candidate rerank endpoint with a trivial 2-doc request to catch unreachable/misconfigured endpoints. Previously a bad endpoint would silently produce a "PASS" verdict because every benchmark ran with the rerank silently disabled. Shared probe logic now in `src/rerank-probe.ts`.
-- **`src/rerank-probe.ts`** — shared `probeReranker(endpoint, apiKey, model, timeoutMs)` used by both `memex.health` (production liveness check) and `scripts/bakeoff reranker` (pre-flight gate). Accepts jina (`results[]`) and voyage (`data[]`) response shapes.
-- **`rerank_probe` and `reranker_configured` health checks** in the memex plugin's health snapshot. `reranker_configured` always runs and reports status=ok with the model+endpoint if configured, "disabled" otherwise. `rerank_probe` runs when `--probe` is requested and hits `/v1/rerank` with a trivial request; status=warn on failure (NOT fail) because retrieval still works via the fusion-only path. Aligns with `docs/plans/011-reranker-modes-and-fallback.md`'s design for reranker health.
-- **`rerankBlendWeight` config option** on both retriever paths:
-  - `RetrievalConfig.rerankBlendWeight` for `MemoryRetriever` (default: 0.8, preserves legacy behavior)
-  - `UnifiedRetrieverConfig.rerankBlendWeight` for `UnifiedRetriever` (default: 0.7, preserves legacy behavior)
-  - Exposed through openclaw.json as `plugins.memex.config.reranker.blendWeight` so users can tune without editing source
-  - Also exposed via `MEMEX_RERANK_BLEND_WEIGHT` env var in `tests/domain-eval.ts` and `tests/fast-benchmark.ts` for benchmark-time A/B
-  - Blend formula: `blended = weight * rerank_score + (1 - weight) * calibrated_fusion_score`
-  - Lower values protect fusion winners when the reranker is overconfident on semantically-similar-but-wrong matches
-  - Unit tests: 4 in `tests/retriever-rerank-blend-weight.test.ts` for `MemoryRetriever` + 2 in `tests/unified-retriever.test.ts`'s new `describe("rerankBlendWeight")` block for `UnifiedRetriever`
-- **Mixed-source rerank tests** — 2 new cases in `tests/unified-retriever.test.ts`:
-  - "applies rerank across BOTH memory and document candidates" — verifies the rerank endpoint sees both sources in a single request
-  - "preserves source diversity after rerank pushes one source to bottom" — verifies top-1-per-source protection holds even when the reranker favors one source overwhelmingly
-- **`src/transient-retry.ts`** — shared helper that wraps upstream API calls in 4-attempt exponential backoff (1s/2s/4s) on 502/503/504/AbortError/TimeoutError. Wired into both the embedder client (`embedSingle`, `embedMany`) and the reranker call sites (`unified-retriever.ts`, `retriever.ts`), so transient inference-server crashes never propagate to memex callers as failed recalls. 12 unit tests.
-- **`src/recall-cache.ts`** — `InTurnRecallCache` class for deduping `before_prompt_build` auto-recall within a single agent turn. Prevents N redundant retrieve() calls when the same user message triggers N prompt rebuilds (one per tool result). 11 unit tests including the multi-rebuild production scenario.
-- **Domain eval** at `tests/domain-eval.ts` — 15 entity-rich queries against the live memex DB, used as the primary regression gate for day-to-day retrieval tuning. Env-var `RERANK=1` toggle for A/B comparisons.
-- **`tests/latency-probe.ts`** — reusable latency A/B tool. Reads config from the live openclaw config file (not 1Password) and secrets from 1Password.
-- **Chunked embedding in `tests/longmemeval-benchmark.ts`** — Phase 1 now splits each session into overlapping 2000-char chunks via `chunkDocument` and dedupes by sessionId at retrieval time, matching `fast-benchmark.ts` and production behavior. Previously truncated each session to 2000 chars, which was a ~34pp R@1 gap vs production. Extracted as `dedupeChunkResultsBySession` with 10 unit tests.
-- **`RERANK=1` support in `tests/longmemeval-benchmark.ts`** — Phase 1 can now run with the reranker enabled (previously hardcoded `rerank: "none"` with a stale comment about bge hurting long sessions).
-- **`FAST_BENCH_CACHE_PATH` / `FAST_BENCH_CHUNK_SCORES_PATH` env overrides** in `tests/fast-benchmark.ts` — lets the bakeoff harness point fast-benchmark at an alternate research cache (e.g. built with a candidate embedder) without moving files.
+- **`src/anchor.ts`** — citation-anchor helpers: `anchor(id)` returns the 8-char hex prefix used in `[mem:...]` / `[doc:...]` markers; `expandAnchor(prefix, candidates)` resolves a prefix back to a full id and detects ambiguity (`AnchorAmbiguityError`); `looksLikeAnchor(s)` for input validation. Storage-agnostic — caller passes the candidate id list. Unit tests in `tests/anchor.test.ts` (12 cases).
+- **Citation instruction** added to `buildRecallContext` (`src/memory-instructions.ts`): tells the LLM to cite recalled memories by anchor in reasoning and how to delete by anchor via `memory_forget`. Verified by two new assertions in `tests/plugin-mock.test.ts`.
 
 ### Changed
 
-- **Reranker: `bge-reranker-v2-m3-Q8_0` → `Qwen3-Reranker-0.6B-Q8_0`.** Verified on `fast-benchmark.ts` with fresh GPT-4o generation: R@1 78% → **82%**, E2E 90% → **94%** on LongMemEval_s N=50. Mechanistic reason: Qwen3-Reranker has 32K context vs bge's 8K-truncation on long chunked sessions. Domain eval drops 12/15 → 11/15 with Qwen3 (the reranker prefers semantically-prominent rule memories over specific incident memories on 1-2 queries) — net verdict is PASS per the bakeoff criteria because the +4pp LongMemEval win outweighs the −1 domain-eval regression. See `docs/research/embed-rerank-upgrade-brief.md` for the full research trail.
-- **`shouldRerank` confidence gate fixed** — the gate compared weighted `pool[0].score` against `confidenceThreshold: 0.88`, but pool scores are multiplied by `conversationWeight: 0.55` or `documentWeight: 0.45` in `mergeAndCalibrate`, making the threshold check unreachable (max possible weighted score is 0.55). Fixed by comparing `pool[0].rawScore` (unweighted [0,1] sigmoid-fused source score). The gate now fires for high-confidence queries, dropping their cache-hit latency from ~1000ms → ~50ms. Regression test in `tests/unified-retriever.test.ts`.
-- **`MemoryRetriever` rerank-failure fallback** — when rerank was configured but the API failed, the code previously fell through to a cosine-similarity re-rank pass that displaced hybrid-fusion winners. Now returns the pool unchanged on rerank failure (matching `UnifiedRetriever` behavior). The cosine pass still runs for the "no rerank configured" path. Regression test in `tests/retriever-rerank-fallback.test.ts`.
-- **Auto-recall in-turn dedup** — `before_prompt_build` fires once per LLM prompt build, which happens on the initial build AND again after each tool result. Previously N tool calls meant N+1 redundant retrieve() calls for the same user message (observed: 10 rerank calls per agent turn in production). Now the hook caches the computed context by `(agentId, sessionKey, query)` for 60 seconds; cache hits return the prior result without re-running retrieval.
-- **`runPipeline` in `tests/fast-benchmark.ts`** — TIER=pipeline now honors `RERANK=1`. Previously the rerank config was hardcoded to `"none"` so the env var was silently ignored (the bug was caught when TIER=pipeline + RERANK=1 produced identical numbers as TIER=pipeline + RERANK=0).
-- **`session-indexer.ts` default reranker** — updated from `bge-reranker-v2-m3-Q8_0` to `Qwen3-Reranker-0.6B-Q8_0` to match production.
-- **No hardcoded URL/key defaults in benchmark scripts.** `tests/beir-benchmark.ts`, `tests/benchmark.ts`, `tests/build-chunk-cache.ts`, `tests/build-research-cache.ts` previously had `|| "http://localhost:8090/v1"` fallbacks. All removed; scripts now fail fast with a clear error when `EMBED_BASE_URL`, `EMBED_MODEL`, or `EMBED_API_KEY` are missing. Legacy `LLAMA_SWAP_API_KEY` env var still works as a fallback.
-- **Benchmark docs** — `docs/BENCHMARKS.md` and `docs/COMPARISON.md` updated with the Qwen3-Reranker numbers, small-sample caveat, and updated reproduction commands.
+- **Auto-recall format** (`index.ts` `before_prompt_build` hook) — both unified-recall and memory-only paths now render `- [mem:abc12345 · category · scope] ...` and `- [doc:abc12345 · path] ...` in the prepended `<relevant-memories>` block. Replaces the previous `[memory:category:scope]` / `[doc:path]` format.
+- **`memory_recall` tool output** (`src/tools.ts`) — all three response paths (unified-retriever, unified-recall fallback, conversation-only fallback) now use the same `[mem:anchor · category · scope]` / `[doc:anchor · path]` format the auto-recall hook uses, so the LLM sees one consistent anchor surface across both auto and explicit recall.
+- **`memory_forget` tool** (`src/tools.ts`) — `memoryId` parameter now accepts a citation anchor (8 hex chars) or any longer prefix in addition to the full UUID. Ambiguous prefixes return `error: anchor_ambiguous` with the matches list; non-matching prefixes return `error: anchor_not_found`. Tool description updated. Telemetry: `forget` events now include `anchor_prefix`, `anchor_ambiguous`, and `via_anchor` flags.
+- **`memory_forget` candidates list** (the "Found N candidates" path) now uses `[mem:abc12345]` to match the canonical anchor format.
 
-### Fixed
+### Documentation
 
-- **Inference-host embedding lane crash under load.** `Qwen3-Embedding-4B-Q8_0` lane was crashing reproducibly (~28% crash rate during heavy probes) due to upstream llama.cpp bugs ([#15849](https://github.com/ggml-org/llama.cpp/issues/15849), [#6722](https://github.com/ggml-org/llama.cpp/issues/6722), [#5655](https://github.com/ggml-org/llama.cpp/issues/5655)) when `--embeddings` is combined with `--parallel N>1`. Fixed at the infrastructure layer by dropping the lane to `--parallel 1` (infra-repo commit `4730f38`). A residual large-batch crash mode still exists but is now absorbed transparently by the transient-retry helper.
-
-### Methodology
-
-- **`docs/plans/01-methodology.md`** — added "Research Rigor: Diagnose Before Scoping" section. Before scoping any quality project, walk the proposed mechanism through each currently-failing case and classify the failure (recall / scoring / ingestion). If the mechanism can't fix any of the failures, don't start the project. Prepends a `Diagnose` step before `Design` in the milestone sequence.
-- **LEARNINGS.md** — added retrospectives on the entity-arc null result, the shouldRerank dead-code bug, the per-rebuild hook firing pattern, the upstream-issue-search-first triage rule, and the reranker-model-matters-more-than-on/off insight.
-
-### Infrastructure (not in this repo)
-
-- **infra repo commit `4730f38`** — `fix(<host>): drop embed lane to --parallel 1` — fixes the upstream llama.cpp crash class.
-- **infra repo commit `97cf32a`** — `feat(<host>): swap Qwen3-Reranker-0.6B for bge on llama-swap lane` — deploys the new reranker.
-- **1Password `dev-claude` item** — field names renamed to purpose-specific (`MEMEX_LLAMA_SWAP_API_KEY`, `MEMEX_BENCHMARK_OPENAI_API_KEY`). Non-sensitive config (base URLs) removed from 1Password and moved to shell/config-file sourcing.
-
-### Known limitations carried forward
-
-- **Domain eval `gemma4-stability` + `host-a-model` regressions under Qwen3-Reranker** are real (confirmed with the cosine-fallback bug fixed). The reranker prefers semantically-prominent rule memories over specific incident memories on abstract queries. Likely fixable with llama.cpp PR #20009 (instruction-aware rerank template, still unmerged).
-- **Residual embed-lane crashes** under very-large-batch load still happen occasionally; absorbed by the transient-retry helper in callers, so no user-visible failures.
-- **Full Phase 1 longmemeval rebuild** with chunked embedding takes ~2–6 hours of compute due to the crash/retry cycles. Left running disowned for multi-hour jobs.
+- **README** — new "Citation anchors" section explains the format, the LLM-side citation contract, and how `memory_forget` accepts anchor prefixes.
