@@ -131,7 +131,7 @@ Start with option 1 (required). The user already has an embedding endpoint confi
       "command": "npx",
       "args": ["tsx", "/path/to/memex/src/mcp-server.ts",
                "--db", "~/.openclaw/memory/memex/memex.sqlite",
-               "--embed-endpoint", "http://100.x.x.x:8090/v1/embeddings",
+               "--embed-endpoint", "http://<embed-host>:<port>/v1/embeddings",
                "--embed-api-key", "your-key"],
       "env": {}
     }
