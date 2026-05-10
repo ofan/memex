@@ -109,6 +109,15 @@ git clone https://github.com/ofan/memex.git ~/.openclaw/plugins/memex
 cd ~/.openclaw/plugins/memex && npm install
 ```
 
+The `npm install` runs a postinstall hook that auto-rebuilds `better-sqlite3` from source if no prebuilt binary matches your Node version (common on bleeding-edge Node releases).
+
+### Node version support
+
+| Node | Status |
+|---|---|
+| 22.x – 25.x | Supported. Prebuilt `better-sqlite3` binaries available; postinstall is a no-op. |
+| 26.x | **Not supported yet.** `better-sqlite3` (latest 12.9.0) doesn't compile against Node 26's V8 API (`GetPrototype`/`GetIsolate`/`PropertyCallbackInfo::This` removed). Tracking upstream: [WiseLibs/better-sqlite3](https://github.com/WiseLibs/better-sqlite3). Pin OpenClaw's runtime to Node ≤ 25 until a compatible version ships, OR memex's switch to `node:sqlite` lands. If memex registers under Node 26, you'll see `documents: disabled (initialization failed — common cause: better-sqlite3 native binding missing for this Node version)` in the gateway log — that's this issue. |
+
 Add to your OpenClaw config:
 
 ```json
