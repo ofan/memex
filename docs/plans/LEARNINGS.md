@@ -10,7 +10,7 @@
 
 ### LongMemEval doesn't measure what matters for memex
 - **Expected:** R@1/R@3 on LongMemEval would reflect production quality
-- **Actual:** LongMemEval uses casual conversation ("I went shopping"). Memex's real data is technical ("Ryan deployed Gemma 4 on mbp-1")
+- **Actual:** LongMemEval uses casual conversation ("I went shopping"). Memex's real data is technical ("Alex deployed Gemma 4 on host-a")
 - **Lesson:** Build a domain-specific eval early. We wasted time chasing LongMemEval metrics that don't predict real-world quality
 
 ### Entity metadata is still valuable even though the boost failed

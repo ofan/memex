@@ -97,6 +97,6 @@ memex's design center — cross-device pool, scope-aware retrieval, provenance m
 
 ### Known limitations carried forward
 
-- **Domain eval `gemma4-stability` + `mbp1-model` regressions under Qwen3-Reranker** are real (confirmed with the cosine-fallback bug fixed). The reranker prefers semantically-prominent rule memories over specific incident memories on abstract queries. Likely fixable with llama.cpp PR #20009 (instruction-aware rerank template, still unmerged).
+- **Domain eval `gemma4-stability` + `host-a-model` regressions under Qwen3-Reranker** are real (confirmed with the cosine-fallback bug fixed). The reranker prefers semantically-prominent rule memories over specific incident memories on abstract queries. Likely fixable with llama.cpp PR #20009 (instruction-aware rerank template, still unmerged).
 - **Residual embed-lane crashes** under very-large-batch load still happen occasionally; absorbed by the transient-retry helper in callers, so no user-visible failures.
 - **Full Phase 1 longmemeval rebuild** with chunked embedding takes ~2–6 hours of compute due to the crash/retry cycles. Left running disowned for multi-hour jobs.

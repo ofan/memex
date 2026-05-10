@@ -11,7 +11,7 @@
 | Model | MTEB | Dims | VRAM | Latency | Cost | Multilingual | Notes |
 |-------|------|------|------|---------|------|-------------|-------|
 | Gemini-embedding-001 (API) | 68.3 | 3072 | — | ~250ms | free tier | 100+ langs | Current production |
-| Qwen3-Embedding-0.6B (local) | 64.3 | 1024 | ~1.2GB | ~45ms | $0 | 100+ langs | Running on Mac Mini ✅ |
+| Qwen3-Embedding-0.6B (local) | 64.3 | 1024 | ~1.2GB | ~45ms | $0 | 100+ langs | Running on Host B ✅ |
 | stella_en_1.5B_v5 (local) | 71.19 | 1536 | ~3GB | TBD | $0 | English-focused | Best quality under 2B |
 | BGE-M3 (local) | 63.0 | 768 | ~0.9GB | TBD | $0 | multilingual | 8K context, good ONNX |
 | nomic-embed-text-v1.5 (local) | 59.4 | 768 | ~65MB Q4 | ~63ms | $0 | decent | QMD used this |
@@ -24,7 +24,7 @@
 | Model | BEIR nDCG@10 | Params | VRAM | Latency | Cost | Notes |
 |-------|-------------|--------|------|---------|------|-------|
 | Jina-reranker-v3 (API) | 61.9 | 0.6B | — | ~200ms | free 1M/mo | Best quality |
-| bge-reranker-v2-m3 (local) | 56.5 | 568M | ~1.5GB | ~61ms | $0 | Running on Mac Mini ✅ |
+| bge-reranker-v2-m3 (local) | 56.5 | 568M | ~1.5GB | ~61ms | $0 | Running on Host B ✅ |
 | gte-reranker-modernbert-base (local) | ~56 | 149M | ~300MB | TBD | $0 | Smallest, near-API quality |
 | Jina-reranker-v2 (local) | — | 278M | — | TBD | $0 | Open-source, multilingual |
 
@@ -48,7 +48,7 @@
 - Dynamic ports via `${PORT}` macro (embedding :5800, reranker :5801, chat :5802)
 - Preload hooks load all models on startup
 - launchd: `com.openclaw.llama-swap` (RunAtLoad, KeepAlive)
-- Current setup on Mac Mini: 3 models, port 8090
+- Current setup on Host B: 3 models, port 8090
 - Config tracked in `github.com/example/config` (private)
 
 ### mlx-openai-server Potential
@@ -56,7 +56,7 @@
 - FastAPI Python server, multi-model via YAML config
 - Supports: lm, multimodal, embeddings, whisper, image-gen
 - Missing: reranker model type (would need ~100 lines to add)
-- Same ecosystem as mlx-audio (already on Mac Mini for TTS)
+- Same ecosystem as mlx-audio (already on Host B for TTS)
 - Better long-term bet for Apple Silicon if Apple keeps pushing MLX
 
 ## Unified Model (All-in-One)
@@ -72,7 +72,7 @@ Explored using a single model for chat + embedding + reranking:
 
 ## Benchmarks (Live, 2026-03-03)
 
-### From VM via Tailscale to Mac Mini
+### From VM via Tailscale to Host B
 
 | Endpoint | Latency (warm) | Notes |
 |----------|---------------|-------|
@@ -106,7 +106,7 @@ vs current (Gemini, no reranker): ~350ms
 1. **Embedding is the bottleneck.** LanceDB search is <30ms. Switching to local drops embed from 250ms to 45ms.
 2. **Quality gap doesn't matter at our scale.** With <100 memories, MTEB 64.3 vs 68.3 returns identical top-5 results.
 3. **Reranking is new capability.** Currently disabled. Local reranker at 61ms is essentially free to add.
-4. **Mac Mini M4 has headroom.** Using ~3.5GB of 12.7GB VRAM. TTS already running, ~8-9GB available.
+4. **Host B M4 has headroom.** Using ~3.5GB of 12.7GB VRAM. TTS already running, ~8-9GB available.
 5. **Model swapping is config-only.** Plugin uses OpenAI-compat API — change baseURL + model name to switch.
 
 ## LanceDB Gotcha: External Writes

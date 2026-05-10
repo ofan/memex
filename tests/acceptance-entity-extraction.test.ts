@@ -53,7 +53,7 @@ describe("Entity Extraction — Acceptance Criteria", () => {
 
   it("AC1: extractEntities produces entities for known inputs", async () => {
     const entry = await store.store({
-      text: "Ryan deployed Gemma 4 on mbp-1",
+      text: "Alex deployed Gemma 4 on host-a",
       vector: makeVector(1),
       category: "fact",
       scope: "global",
@@ -69,8 +69,8 @@ describe("Entity Extraction — Acceptance Criteria", () => {
     // Should contain key entities (case-insensitive check)
     const entities = metadata.entities.map((e: string) => e.toLowerCase());
     assert.ok(
-      entities.some((e: string) => e.includes("ryan")),
-      `entities should contain "ryan", got: ${entities}`
+      entities.some((e: string) => e.includes("alex")),
+      `entities should contain "alex", got: ${entities}`
     );
   });
 
@@ -91,11 +91,11 @@ describe("Entity Extraction — Acceptance Criteria", () => {
   });
 
   it("AC3: entity overlap boosts retrieval of matching memories", async () => {
-    // Store 10 memories — 3 mention "Ryan"
+    // Store 10 memories — 3 mention "Alex"
     const ryanTexts = [
-      "Ryan prefers private repos by default",
-      "Ryan's deployment rule: one model at a time on mbp-1",
-      "Ryan disabled WhatsApp channel for bot use",
+      "Alex prefers private repos by default",
+      "Alex's deployment rule: one model at a time on host-a",
+      "Alex disabled WhatsApp channel for bot use",
     ];
     const otherTexts = [
       "The Discord webhook was created for notifications",
@@ -126,17 +126,17 @@ describe("Entity Extraction — Acceptance Criteria", () => {
       });
     }
 
-    // Query for Ryan — entity boost should promote ryan-memories
+    // Query for Alex — entity boost should promote alex-memories
     const retriever = createRetriever(store, createMockEmbedder(), { minScore: 0 });
-    const results = await retriever.retrieve({ query: "What does Ryan prefer?", limit: 5 });
+    const results = await retriever.retrieve({ query: "What does Alex prefer?", limit: 5 });
 
-    // At least 2 of top 5 should be ryan-related
-    const ryanResults = results.filter(r =>
-      r.entry.text.toLowerCase().includes("ryan")
+    // At least 2 of top 5 should be alex-related
+    const alexResults = results.filter(r =>
+      r.entry.text.toLowerCase().includes("alex")
     );
     assert.ok(
-      ryanResults.length >= 2,
-      `Expected ≥2 ryan results in top 5, got ${ryanResults.length}: ${results.map(r => r.entry.text.slice(0, 50))}`
+      alexResults.length >= 2,
+      `Expected ≥2 alex results in top 5, got ${alexResults.length}: ${results.map(r => r.entry.text.slice(0, 50))}`
     );
   });
 
@@ -165,7 +165,7 @@ describe("Entity Extraction — Acceptance Criteria", () => {
     // Insert entry WITHOUT entities (simulating pre-upgrade data)
     store.db.prepare(
       "INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash) VALUES (?, ?, 'fact', 'global', 0.5, ?, '{}', ?)"
-    ).run("backfill-ent-1", "Ryan uses Qwen3.5 on mbp-1", Date.now(), "hash-bf-1");
+    ).run("backfill-ent-1", "Alex uses Qwen3.5 on host-a", Date.now(), "hash-bf-1");
 
     const before = JSON.parse(
       (store.db.prepare("SELECT metadata FROM memories WHERE id = 'backfill-ent-1'").get() as any).metadata

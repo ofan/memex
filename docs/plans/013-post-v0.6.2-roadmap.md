@@ -47,9 +47,9 @@ These four questions block v0.7 from converging. Each requires a real decision, 
 - **Entangled with:** T2.2 (daemon location)
 
 ### T2.2 Daemon location
-**Question:** Mac mini-1 vs dev VM permanent home?
+**Question:** Host B vs dev VM permanent home?
 - Currently runs on dev VM as systemd user unit
-- Mac mini-1 has the embedding server already (Qwen3-Embedding-4B-Q8_0 + Qwen3-Reranker-0.6B-Q8_0)
+- Host B has the embedding server already (Qwen3-Embedding-4B-Q8_0 + Qwen3-Reranker-0.6B-Q8_0)
 - Migration cost: launchd unit + secret transfer
 - **Done when:** decision made + (if migrating) launchd unit set up and verified
 

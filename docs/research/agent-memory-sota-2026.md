@@ -71,7 +71,7 @@ TEMPR runs **4 parallel searches** and fuses them:
 
 Then: RRF fusion + neural reranker. Memex does z-score fusion + optional reranker.
 
-**The key difference**: graph traversal. When you ask "what did I say about Ryan's deployment rules?", Hindsight can follow entity links: Ryan → deployment → mbp-1 → model rules. Memex relies purely on vector similarity + BM25 keywords.
+**The key difference**: graph traversal. When you ask "what did I say about Alex's deployment rules?", Hindsight can follow entity links: Alex → deployment → host-a → model rules. Memex relies purely on vector similarity + BM25 keywords.
 
 ### CARA: Configurable Agent Disposition
 
@@ -82,7 +82,7 @@ Hindsight includes CARA — configurable personality parameters (skepticism, lit
 **1. Entity extraction + linking (HIGH ROI)**
 When storing a memory, extract named entities (people, systems, models, projects) and store them as metadata. At retrieval, add entity-overlap as a 3rd signal alongside vector + BM25. This is the biggest gap between memex (90%) and Hindsight (91.4%).
 
-Implementation: lightweight NER on store() — extract proper nouns, store as `metadata.entities: ["ryan", "mbp-1", "qwen3.5"]`. At retrieval, boost results sharing entities with the query. No graph DB needed — just entity tags.
+Implementation: lightweight NER on store() — extract proper nouns, store as `metadata.entities: ["alex", "host-a", "qwen3.5"]`. At retrieval, boost results sharing entities with the query. No graph DB needed — just entity tags.
 
 **2. Opinion/belief tracking with confidence (MEDIUM ROI)**
 Already in our dreaming plan as `category: "learning"` with `metadata.confidence`. Hindsight validates this design — they separate opinions from facts structurally.
@@ -135,7 +135,7 @@ Hindsight's 4th search signal is graph traversal through entities. Memex has onl
 **Phase 1: compromise (zero-cost, ship fast)**
 - `npm install compromise` (250KB, no native deps)
 - On `store()`: extract `doc.people()`, `doc.places()`, `doc.organizations()`, `doc.nouns()`
-- Store as `metadata.entities: ["ryan", "mbp-1", "gemma-4"]`
+- Store as `metadata.entities: ["alex", "host-a", "gemma-4"]`
 - At retrieval: extract entities from query, boost results sharing entities
 - Cost: ~0.1ms per store call, ~0.1ms per query
 
@@ -151,13 +151,13 @@ Hindsight's 4th search signal is graph traversal through entities. Memex has onl
 ### How Entity Boosting Works at Retrieval
 
 ```
-Query: "What's Ryan's rule for mbp-1 deployment?"
-Entities extracted: ["ryan", "mbp-1"]
+Query: "What's Alex's rule for host-a deployment?"
+Entities extracted: ["alex", "host-a"]
 
 Search:
 1. Vector similarity → top 20 candidates
 2. BM25 keyword → top 20 candidates
-3. Entity overlap → boost candidates containing "ryan" OR "mbp-1"
+3. Entity overlap → boost candidates containing "alex" OR "host-a"
 
 Fusion: z-score normalize all 3 signals, weighted blend
 ```
@@ -191,7 +191,7 @@ Sources:
 
 ### Future / Research
 6. **Editable context block** (Letta-style) — small always-in-context summary
-7. **Skill/procedural memory** — "how to deploy to mbp-1" not just "mbp-1 exists"
+7. **Skill/procedural memory** — "how to deploy to host-a" not just "host-a exists"
 8. **Memory versioning** — git-style history of memory changes
 9. **Graph traversal** (if entity tags aren't enough) — lightweight entity graph in SQLite
 10. **Cross-platform memory** — HTTP API for Claude Code / MCP hosts
@@ -211,7 +211,7 @@ Key difference from memex: memories aren't static after storage. They evolve as 
 ### What Memex Should Adopt
 
 **1. Memory evolution on store (MEDIUM ROI)**
-When storing a new memory, check for related existing memories (already done via vector similarity dedup). But instead of just rejecting duplicates — UPDATE the existing memory with new context. Example: "Gemma 4 deployed on mbp-1" + later "Gemma 4 crashed after 5 messages" → merge into "Gemma 4 deployed on mbp-1 but proved unstable in multi-turn (crashed after 5 messages)."
+When storing a new memory, check for related existing memories (already done via vector similarity dedup). But instead of just rejecting duplicates — UPDATE the existing memory with new context. Example: "Gemma 4 deployed on host-a" + later "Gemma 4 crashed after 5 messages" → merge into "Gemma 4 deployed on host-a but proved unstable in multi-turn (crashed after 5 messages)."
 
 This is what the dreaming reflection phase would do — but A-Mem does it at store-time, immediately. Trade-off: requires LLM call at store time (expensive) vs dreaming does it in batch (cheaper).
 
@@ -257,7 +257,7 @@ From Mem0's 2026 production learnings: a memory about "user works at Company X" 
 ### What Memex Should Adopt
 
 **Contradiction detection at store time (HIGH ROI)**
-When storing a new memory, check if it contradicts existing high-importance entries about the same entities. Example: "Ryan now uses Gemma 4" contradicts "Ryan uses Qwen3.5 on mbp-1". Flag the old one for review or auto-demote.
+When storing a new memory, check if it contradicts existing high-importance entries about the same entities. Example: "Alex now uses Gemma 4" contradicts "Alex uses Qwen3.5 on host-a". Flag the old one for review or auto-demote.
 
 This pairs with entity extraction (Iteration 3): extract entities from both old and new, find overlapping entities, check if claims conflict.
 
@@ -288,7 +288,7 @@ Compresses 2,851 task trajectories into 187 reusable procedures (15:1 compressio
 **New category: `category: "procedure"` (MEDIUM ROI, FUTURE)**
 
 Store "how to" knowledge:
-- "To deploy a model to mbp-1: 1) check current model with llama-swap status, 2) unload current, 3) upload GGUF, 4) update config, 5) verify with test prompt"
+- "To deploy a model to host-a: 1) check current model with llama-swap status, 2) unload current, 3) upload GGUF, 4) update config, 5) verify with test prompt"
 - "To create a new GitHub repo: use `gh repo create --private` (user preference)"
 
 These are different from facts because they're actionable sequences. The agent can retrieve a procedure and follow it.

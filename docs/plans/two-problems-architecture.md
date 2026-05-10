@@ -38,7 +38,7 @@ Memex needs to serve memory requests from multiple devices (laptop, dev VM, Mac 
 
 | Dimension | Question | Known constraints |
 |---|---|---|
-| **Where does the daemon run?** | Mac mini-1, Mac mini-2, dev VM, or wherever's always on? | Embedding server already on Mac mini-1; co-locating reduces network hops |
+| **Where does the daemon run?** | Host B, Host C, dev VM, or wherever's always on? | Embedding server already on Host B; co-locating reduces network hops |
 | **Transport between client and daemon?** | stdio subprocess vs HTTP/SSE | stdio = same machine only; HTTP = cross-machine but needs auth |
 | **Who manages the daemon's lifecycle?** | systemd/launchd unit, or auto-spawn by first client? | Tradeoff: install friction vs zombie processes |
 | **What's the offline behavior?** | Fail closed (no memory when host unreachable) or local read-only cache? | Pure single source = simple, no offline; cache = complex sync |
@@ -54,7 +54,7 @@ Memex needs to serve memory requests from multiple devices (laptop, dev VM, Mac 
 
 - **Pattern A**: subprocess per platform + DB lock table for dreaming — works for single-machine
 - **Pattern A'**: subprocess per platform on each machine, each machine has its own DB — defeats cross-device pool
-- **Pattern B**: single daemon on Mac mini-1, all platforms connect via Tailscale HTTP — matches user's vision
+- **Pattern B**: single daemon on Host B, all platforms connect via Tailscale HTTP — matches user's vision
 - **Pattern C-lite**: Pattern B + small read-only local cache for offline — additive, can defer
 
 ### Sub-problem 1.1: Plugin vs MCP vs REST (protocol/integration layer)
@@ -89,7 +89,7 @@ User's reframe: *"OpenClaw should just have a very thin plug-in and that calls M
 ### Open questions for user
 
 1. Is **fail-closed when host unreachable** acceptable, or do you need offline reads?
-2. Where should the daemon live by default? Mac mini-1?
+2. Where should the daemon live by default? Host B?
 3. Auto-start on boot via launchd, or manual?
 4. Should the local OpenClaw plugin **embed an MCP client** that connects to remote daemon, or run its own subprocess that proxies?
 5. **(1.1)** Backend exposes MCP-over-HTTP only, REST only, or both?

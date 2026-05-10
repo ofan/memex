@@ -39,10 +39,10 @@ const QUERIES = [
   // Short technical lookups (memex's bread and butter)
   "What model is running on the inference host?",
   "What's the rule about sorry and absolutely right?",
-  "How does Ryan want responses formatted?",
+  "How does Alex want responses formatted?",
   // Multi-entity
-  "Why did Virgil switch from Gemma to Qwen?",
-  "What does Ryan want the assistant to stop doing?",
+  "Why did Jordan switch from Gemma to Qwen?",
+  "What does Alex want the assistant to stop doing?",
   // Temporal
   "What models were deployed last week?",
   // Medium-complexity rule queries

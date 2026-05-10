@@ -89,13 +89,13 @@ describe("MCP Server", () => {
   it("AC2: memory_store creates a memory and returns it", async () => {
     const result = await client.callTool({
       name: "memory_store",
-      arguments: { text: "Ryan prefers dark mode", category: "preference", importance: 0.8 },
+      arguments: { text: "Alex prefers dark mode", category: "preference", importance: 0.8 },
     });
 
     const content = result.content as Array<{ type: string; text: string }>;
     assert.equal(content.length, 1);
     const parsed = JSON.parse(content[0].text);
-    assert.equal(parsed.text, "Ryan prefers dark mode");
+    assert.equal(parsed.text, "Alex prefers dark mode");
     assert.equal(parsed.category, "preference");
     assert.ok(parsed.id, "should return an ID");
   });

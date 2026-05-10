@@ -2,7 +2,7 @@
 
 ## Problem
 
-Memex retrieval uses 2 signals: vector similarity + BM25 keywords. Hindsight (91.4%) uses 4 signals including entity graph traversal. The gap is primarily from entity-aware retrieval — when you ask "What's Ryan's rule for mbp-1?", memex relies on vector closeness. Entity overlap as a discrete signal directly boosts memories mentioning the same entities.
+Memex retrieval uses 2 signals: vector similarity + BM25 keywords. Hindsight (91.4%) uses 4 signals including entity graph traversal. The gap is primarily from entity-aware retrieval — when you ask "What's Alex's rule for host-a?", memex relies on vector closeness. Entity overlap as a discrete signal directly boosts memories mentioning the same entities.
 
 This implements ACT-R spreading activation — a 40-year validated cognitive model.
 
@@ -10,7 +10,7 @@ This implements ACT-R spreading activation — a 40-year validated cognitive mod
 
 ### Store-time: Extract entities
 
-On every `store()` and `bulkStore()`, extract named entities using `compromise` (250KB, rule-based NLP). Also extract capitalized multi-word terms (proper nouns compromise may miss, like "mbp-1", "Qwen3.5").
+On every `store()` and `bulkStore()`, extract named entities using `compromise` (250KB, rule-based NLP). Also extract capitalized multi-word terms (proper nouns compromise may miss, like "host-a", "Qwen3.5").
 
 Stored in `metadata.entities` as JSON array. Existing metadata preserved.
 
@@ -66,7 +66,7 @@ entityOverlap(a: string[], b: string[]): number
 
 No schema changes. Entities in existing metadata JSON:
 ```json
-{ "source": "agent", "agentId": "main", "entities": ["ryan", "mbp-1"] }
+{ "source": "agent", "agentId": "main", "entities": ["alex", "host-a"] }
 ```
 
 ## Files

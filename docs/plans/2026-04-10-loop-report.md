@@ -201,13 +201,13 @@ Killed Phase 1 (was going to take ~6+ hours with chunked embedding + crash loops
 
 **Bakeoff verdict: PASS** (exit 0). `+2 R@1` meets the decisive-win threshold, `-1 domain-eval` is within the 1-query regression tolerance.
 
-**The domain-eval -1 regression is real Qwen3-Reranker behavior**, not the cosine-fallback bug. With the fallback fix in place, the same 4 misses remain: `mbp1-model`, `gemma4-stability`, `virgil-qwen`, `ryan-cabbie-behavior`. Specifically:
+**The domain-eval -1 regression is real Qwen3-Reranker behavior**, not the cosine-fallback bug. With the fallback fix in place, the same 4 misses remain: `host-a-model`, `gemma4-stability`, `virgil-qwen`, `alex-cabbie-behavior`. Specifically:
 
-- `ryan-response-style` flipped from MISS → HIT (reranker win)
-- `mbp1-model` flipped from HIT → MISS (reranker loss)
+- `alex-response-style` flipped from MISS → HIT (reranker win)
+- `host-a-model` flipped from HIT → MISS (reranker loss)
 - `gemma4-stability` flipped from HIT → MISS (reranker loss)
 
-For `gemma4-stability`, the reranker prefers the generic deployment-rule memory ("Ryan's host-A deployment rule: only one active model at a time") over the specific crash incident memory ("Gemma 4 heretic crashed after ~5 messages in multi-turn use") — picking the semantically-prominent rule over the specific incident. This is a known property of Qwen3-Reranker's instruction-free prompting; the instruction-aware rerank template (llama.cpp PR #20009, still unmerged) might address it but hasn't been merged yet.
+For `gemma4-stability`, the reranker prefers the generic deployment-rule memory ("Alex's host-A deployment rule: only one active model at a time") over the specific crash incident memory ("Gemma 4 heretic crashed after ~5 messages in multi-turn use") — picking the semantically-prominent rule over the specific incident. This is a known property of Qwen3-Reranker's instruction-free prompting; the instruction-aware rerank template (llama.cpp PR #20009, still unmerged) might address it but hasn't been merged yet.
 
 ### Item 7 — longmemeval-benchmark chunked embedding — FIXED
 
@@ -243,8 +243,8 @@ After adding `rerankBlendWeight` as a config option, I killed Phase 1 to free th
 
 | Config | Hits | Misses |
 |---|---|---|
-| **Baseline (no rerank)** | **12/15** | ryan-response-style, virgil-qwen, ryan-cabbie-behavior |
-| rerank + blend=0.8 | 11/15 | mbp1-model, gemma4-stability, virgil-qwen, ryan-cabbie-behavior |
+| **Baseline (no rerank)** | **12/15** | alex-response-style, virgil-qwen, alex-cabbie-behavior |
+| rerank + blend=0.8 | 11/15 | host-a-model, gemma4-stability, virgil-qwen, alex-cabbie-behavior |
 | rerank + blend=0.6 | 11/15 | same 4 |
 | rerank + blend=0.5 | 11/15 | same 4 |
 | rerank + blend=0.4 | 11/15 | same 4 |
@@ -267,11 +267,11 @@ The blend-weight A/B in item 18 was a negative result BECAUSE the raw-score blen
 ```
 Reranker output:
  1. 0.9998  CORRECT: "Gemma 4 ... crashed after ~5 messages in multi-turn use"
- 2. 0.9997  WRONG:   "Ryan's [host] deployment rule"
+ 2. 0.9997  WRONG:   "Alex's [host] deployment rule"
  3. 0.9987  "Gemma 4 deployed on [host]. llama-server upgraded"
 
 Hybrid-fusion scores:
- #1 fused=0.748  "Ryan's [host] deployment rule" (wrong, but denser BM25 match)
+ #1 fused=0.748  "Alex's [host] deployment rule" (wrong, but denser BM25 match)
  #2 fused=0.699  "Gemma 4 ... crashed"          (correct, but longer text → lower density)
 
 Raw blend at weight=0.8:

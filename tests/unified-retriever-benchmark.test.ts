@@ -94,7 +94,7 @@ describe("UnifiedRetriever Benchmark — API call counts", () => {
       { text: "User prefers dark mode for all editors", importance: 0.8, category: "preference" as const },
       { text: "Project uses TypeScript with jiti for transpilation", importance: 0.9, category: "fact" as const },
       { text: "Deploy memex by copying to plugin directory", importance: 0.7, category: "decision" as const },
-      { text: "Mac Mini runs llama-swap on port 8090", importance: 0.85, category: "fact" as const },
+      { text: "Host B runs llama-swap on port 8090", importance: 0.85, category: "fact" as const },
       { text: "Embedding model is Qwen3-Embedding-0.6B-Q8_0", importance: 0.9, category: "fact" as const },
     ];
 

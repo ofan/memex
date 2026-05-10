@@ -4,7 +4,7 @@
 
 Entity boost as a score multiplier doesn't work — BM25 already captures keyword entity matching. Tuning showed it hurts ranking (80% without boost vs 73% with).
 
-Hindsight's actual advantage is **graph traversal** — following entity relationships to find connected memories, not just boosting by keyword overlap. When you ask "Why did Virgil switch from Gemma to Qwen?", traversal finds: Virgil → deployed_on → mbp-1 → also_ran → Gemma 4 → crashed → switched_to → Qwen3.5.
+Hindsight's actual advantage is **graph traversal** — following entity relationships to find connected memories, not just boosting by keyword overlap. When you ask "Why did Jordan switch from Gemma to Qwen?", traversal finds: Jordan → deployed_on → host-a → also_ran → Gemma 4 → crashed → switched_to → Qwen3.5.
 
 ## Approach
 
@@ -37,9 +37,9 @@ After vector+BM25 fusion returns top-5:
 ### Why this should work
 
 The 3 misses from domain eval:
-- "What model is running on mbp-1?" — correct memory shares entities with top result via links
-- "Why did Virgil switch?" — crash memory linked to switch memory via shared entities
-- "What should Cabbie stop doing?" — "Do not explain. Fix." linked to "leaves tasks unfinished" via shared Ryan+Cabbie entities
+- "What model is running on host-a?" — correct memory shares entities with top result via links
+- "Why did Jordan switch?" — crash memory linked to switch memory via shared entities
+- "What should Cabbie stop doing?" — "Do not explain. Fix." linked to "leaves tasks unfinished" via shared Alex+Cabbie entities
 
 Graph traversal surfaces the *related but different* memory that keyword matching alone misses.
 
