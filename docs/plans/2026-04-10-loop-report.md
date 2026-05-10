@@ -29,7 +29,7 @@ Continue from "what's next, is crash fixed" — work through the remaining items
 Reranker lane unchanged (different code path, no reported crashes there).
 
 **Commits:**
-- homeinfra `4730f38` — `fix(<host>): drop embedding lane to --parallel 1`
+- infra repo commit `4730f38` — `fix(<host>): drop embedding lane to --parallel 1`
 - memex `aee0922` — `docs: record embed lane crash root cause + fix`
 
 **Process lesson** (in `LEARNINGS.md`): I burned ~30 min trying to reproduce locally with isolated curl tests before searching the upstream issue tracker. The crash signature was a textbook match — 5 min of search would have identified it without any reproduction work. New rule: **upstream issue search is step 1 of operational crash triage, not the last resort.**

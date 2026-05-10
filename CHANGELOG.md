@@ -82,7 +82,7 @@ memex's design center — cross-device pool, scope-aware retrieval, provenance m
 
 ### Fixed
 
-- **Inference-host embedding lane crash under load.** `Qwen3-Embedding-4B-Q8_0` lane was crashing reproducibly (~28% crash rate during heavy probes) due to upstream llama.cpp bugs ([#15849](https://github.com/ggml-org/llama.cpp/issues/15849), [#6722](https://github.com/ggml-org/llama.cpp/issues/6722), [#5655](https://github.com/ggml-org/llama.cpp/issues/5655)) when `--embeddings` is combined with `--parallel N>1`. Fixed at the infrastructure layer by dropping the lane to `--parallel 1` (homeinfra commit `4730f38`). A residual large-batch crash mode still exists but is now absorbed transparently by the transient-retry helper.
+- **Inference-host embedding lane crash under load.** `Qwen3-Embedding-4B-Q8_0` lane was crashing reproducibly (~28% crash rate during heavy probes) due to upstream llama.cpp bugs ([#15849](https://github.com/ggml-org/llama.cpp/issues/15849), [#6722](https://github.com/ggml-org/llama.cpp/issues/6722), [#5655](https://github.com/ggml-org/llama.cpp/issues/5655)) when `--embeddings` is combined with `--parallel N>1`. Fixed at the infrastructure layer by dropping the lane to `--parallel 1` (infra-repo commit `4730f38`). A residual large-batch crash mode still exists but is now absorbed transparently by the transient-retry helper.
 
 ### Methodology
 
@@ -91,8 +91,8 @@ memex's design center — cross-device pool, scope-aware retrieval, provenance m
 
 ### Infrastructure (not in this repo)
 
-- **homeinfra `4730f38`** — `fix(<host>): drop embed lane to --parallel 1` — fixes the upstream llama.cpp crash class.
-- **homeinfra `97cf32a`** — `feat(<host>): swap Qwen3-Reranker-0.6B for bge on llama-swap lane` — deploys the new reranker.
+- **infra repo commit `4730f38`** — `fix(<host>): drop embed lane to --parallel 1` — fixes the upstream llama.cpp crash class.
+- **infra repo commit `97cf32a`** — `feat(<host>): swap Qwen3-Reranker-0.6B for bge on llama-swap lane` — deploys the new reranker.
 - **1Password `dev-claude` item** — field names renamed to purpose-specific (`MEMEX_LLAMA_SWAP_API_KEY`, `MEMEX_BENCHMARK_OPENAI_API_KEY`). Non-sensitive config (base URLs) removed from 1Password and moved to shell/config-file sourcing.
 
 ### Known limitations carried forward
