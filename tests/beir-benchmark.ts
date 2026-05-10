@@ -31,11 +31,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
-import { createStore, hashContent, hybridQuery } from "../src/search.ts";
-import { embedDocuments } from "../src/doc-indexer.ts";
-import { initializeLLM } from "../src/llm.ts";
-import { BEIR_DATASETS, loadBeirDataset, type BeirDatasetName } from "./helpers/beir-loader.ts";
-import { evaluateBeirQuery, summarizeBeirQueries, type BeirSummary } from "./helpers/beir-eval.ts";
+import { createStore, hashContent, hybridQuery } from "../src/search.js";
+import { embedDocuments } from "../src/doc-indexer.js";
+import { initializeLLM } from "../src/llm.js";
+import { BEIR_DATASETS, loadBeirDataset, type BeirDatasetName } from "./helpers/beir-loader.js";
+import { evaluateBeirQuery, summarizeBeirQueries, type BeirSummary } from "./helpers/beir-eval.js";
 
 type BenchmarkMode = "fts" | "hybrid" | "both";
 

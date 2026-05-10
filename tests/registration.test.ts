@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import plugin from "../index.ts";
+import plugin from "../index.js";
 
 function createMockApi(root: string) {
   const onHandlers = new Map<string, Function[]>();

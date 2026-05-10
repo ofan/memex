@@ -335,7 +335,7 @@ export class MemoryStore {
     return row.c;
   }
 
-  async store(entry: Omit<MemoryEntry, "id" | "timestamp">): Promise<MemoryEntry | null> {
+  async store(entry: Omit<MemoryEntry, "id" | "timestamp"> & { timestamp?: number }): Promise<MemoryEntry | null> {
     const text = entry.text?.trim();
     // Guard: reject single-turn conversation fragments (raw dialogue dumps).
     // Multi-turn windows from auto-capture contain multiple [user]/[assistant] lines — allow those.
@@ -359,7 +359,7 @@ export class MemoryStore {
       ...entry,
       text,
       id: randomUUID(),
-      timestamp: Date.now(),
+      timestamp: entry.timestamp ?? Date.now(),
       metadata: JSON.stringify(meta),
     };
 
