@@ -42,13 +42,22 @@ jobs:
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
           TAG_VERSION: ${{ inputs.tag || github.ref_name }}
+          SOURCE_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           npm install -g clawhub
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
+          SOURCE_COMMIT=$(git rev-parse HEAD)
           mkdir -p /tmp/memex-publish
           cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json index.ts /tmp/memex-publish/
           cp -r src/ /tmp/memex-publish/src/
-          clawhub package publish /tmp/memex-publish --name memex --family code-plugin --version "${TAG_VERSION#v}"
+          clawhub package publish /tmp/memex-publish \
+            --name memex \
+            --family code-plugin \
+            --version "${TAG_VERSION#v}" \
+            --source-repo "$SOURCE_REPO" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-ref "$TAG_VERSION"
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
