@@ -61,6 +61,26 @@ If you don't want to run the daemon and prefer a per-session subprocess:
 
 Hooks emit `additionalContext` text — they don't directly call MCP tools. The LLM decides whether to actually invoke recall/store.
 
+## Citation anchors
+
+Every result from `mcp__memex__memory_recall` carries a stable 8-char `anchor` field (first hex chars of the memory's UUID). The recall response also includes a `note` instructing the model to cite memories by anchor when relying on them.
+
+The intended LLM usage:
+
+```
+> "Use pnpm here, not npm [mem:7e9b4520]. Also note the user prefers tabs [mem:a3f1c0d2]."
+```
+
+To delete a stale memory, the LLM can call `mcp__memex__memory_forget` with the anchor (or any longer hex prefix) — no need to remember the full UUID:
+
+```
+mcp__memex__memory_forget({ id: "7e9b4520" })
+```
+
+If the prefix is ambiguous (multiple memories share it), the tool returns `error: anchor_ambiguous` with the matching ids. If nothing matches, `error: anchor_not_found`.
+
+Why this matters: anchors give the model a control surface for memory it doesn't have to re-narrate. Empirically reduces reasoning-token usage (see ENGRAM-R, `arXiv:2511.12987`).
+
 ## Why both MCP server and hooks?
 
 - **MCP server** — exposes the tools (`memory_recall`, `memory_store`, `memory_forget`, `memory_dream`, `memory_stats`) so the LLM can call them.
