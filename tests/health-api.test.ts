@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import plugin from "../index.ts";
+import plugin from "../index.js";
 
 type GatewayHandler = (opts: {
   params: Record<string, unknown>;

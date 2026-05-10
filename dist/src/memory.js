@@ -300,7 +300,7 @@ export class MemoryStore {
             ...entry,
             text,
             id: randomUUID(),
-            timestamp: Date.now(),
+            timestamp: entry.timestamp ?? Date.now(),
             metadata: JSON.stringify(meta),
         };
         this.insertMemory(fullEntry, textHash);

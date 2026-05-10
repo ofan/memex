@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { MemoryStore } from "../src/memory.ts";
+import { MemoryStore } from "../src/memory.js";
 
 function randomVec(dim: number): number[] {
   return Array.from({ length: dim }, () => Math.random());

@@ -266,7 +266,7 @@ describe("UnifiedRetriever — Task 2: Source Routing", () => {
     });
 
     it("routes 'contents of' to document", () => {
-      assert.equal(retriever.routeQuery("show me the contents of index.ts"), "document");
+      assert.equal(retriever.routeQuery("show me the contents of index.js"), "document");
     });
 
     it("routes 'look at' to document", () => {

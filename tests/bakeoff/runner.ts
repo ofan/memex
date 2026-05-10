@@ -357,7 +357,7 @@ async function runDomainEval(env: BenchEnv): Promise<DomainEvalOutput> {
 
   const out = await spawnCapture("node", [
     "--import", "jiti/register",
-    join(REPO_ROOT, "tests", "domain-eval.ts"),
+    join(REPO_ROOT, "tests", "domain-eval.js"),
   ], subEnv);
 
   return parseDomainEvalOutput(out);
@@ -387,7 +387,7 @@ async function runFastBench(env: BenchEnv): Promise<FastBenchOutput> {
 
   const out = await spawnCapture("node", [
     "--import", "jiti/register",
-    join(REPO_ROOT, "tests", "fast-benchmark.ts"),
+    join(REPO_ROOT, "tests", "fast-benchmark.js"),
   ], subEnv);
 
   return parseFastBenchOutput(out);

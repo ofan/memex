@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { dedupeChunkResultsBySession } from "./longmemeval-benchmark.ts";
+import { dedupeChunkResultsBySession } from "./longmemeval-benchmark.js";
 
 /** Minimal shape the function needs — just entry.text + entry.metadata. */
 type Chunk = { entry: { text: string; metadata?: string | null } };
