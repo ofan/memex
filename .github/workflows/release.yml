@@ -3,12 +3,20 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re-)publish (e.g. v0.5.14)'
+        required: true
+        type: string
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -23,6 +31,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -31,14 +41,14 @@ jobs:
       - name: Publish to ClaHub
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
-          TAG_VERSION: ${{ github.ref_name }}
+          TAG_VERSION: ${{ inputs.tag || github.ref_name }}
         run: |
           npm install -g clawhub
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
           mkdir -p /tmp/memex-publish
           cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json index.ts /tmp/memex-publish/
           cp -r src/ /tmp/memex-publish/src/
-          clawhub package publish /tmp/memex-publish --slug memex --version "${TAG_VERSION#v}"
+          clawhub package publish /tmp/memex-publish --name memex --family code-plugin --version "${TAG_VERSION#v}"
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
