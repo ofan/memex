@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1] — 2026-05-10
+
+**Track `dist/` in git so clawhub finds it.** v0.6.0 built `dist/` correctly in the workflow but clawhub validates against the GitHub source-repo at the tagged commit, not the local publish payload. Since `dist/` was gitignored, clawhub didn't find it. Removing `dist/` from `.gitignore` and committing the compiled output.
+
+### Changed
+- **`.gitignore`** — `dist/` is now tracked (with explanatory comment).
+- **`dist/`** — committed alongside source. Run `npm run build` to refresh before tagging.
+
 ## [0.6.0] — 2026-05-10
 
 **Theme: real build step + version-line shift.** ClaHub's validator now requires compiled JS output for TypeScript code plugins. memex now compiles `index.ts` and `src/**/*.ts` to `dist/` at publish time. Source remains the editable artifact; tests still run against `.ts` via jiti. The `memex-v0.6` development branch is concurrently renamed to `memex-v0.7` so its in-flight architectural work (HTTP MCP daemon, dreaming, entity graph, Claude Code plugin) lands as v0.7+ and doesn't collide with the now-shipped v0.6 namespace.
