@@ -58,6 +58,6 @@ jobs:
             --source-repo "$SOURCE_REPO" \
             --source-commit "$SOURCE_COMMIT" \
             --source-ref "$TAG_VERSION"
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
