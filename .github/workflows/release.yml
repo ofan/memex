@@ -38,6 +38,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Build
+        run: npm run build
       - name: Publish to ClaHub
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
@@ -51,6 +53,7 @@ jobs:
           mkdir -p /tmp/memex-publish
           cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json index.ts /tmp/memex-publish/
           cp -r src/ /tmp/memex-publish/src/
+          cp -r dist/ /tmp/memex-publish/dist/
           clawhub package publish /tmp/memex-publish \
             --family code-plugin \
             --version "${TAG_VERSION#v}" \

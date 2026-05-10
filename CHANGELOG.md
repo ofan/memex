@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0] — 2026-05-10
+
+**Theme: real build step + version-line shift.** ClaHub's validator now requires compiled JS output for TypeScript code plugins. memex now compiles `index.ts` and `src/**/*.ts` to `dist/` at publish time. Source remains the editable artifact; tests still run against `.ts` via jiti. The `memex-v0.6` development branch is concurrently renamed to `memex-v0.7` so its in-flight architectural work (HTTP MCP daemon, dreaming, entity graph, Claude Code plugin) lands as v0.7+ and doesn't collide with the now-shipped v0.6 namespace.
+
+### Added
+- **`tsconfig.build.json`** — extends the main config with `noEmit: false`, `outDir: dist`, excluding tests. Used only for publish.
+- **`build` script** in `package.json` — `tsc --noCheck -p tsconfig.build.json`. `--noCheck` strips types without type-checking (jiti-equivalent semantics; the existing 42 latent type errors are out of scope for this release and will be addressed separately).
+- **`prepublishOnly`** runs build automatically.
+- **`.github/workflows/release.yml`** — runs `npm run build` between `npm ci` and the publish step; copies `dist/` alongside the source files in the publish payload.
+
+### Changed
+- **`.gitignore`** — `dist/` excluded.
+- **Version-line shift:** main bumps to `0.6.0`. The previously-named `memex-v0.6` branch is renamed to `memex-v0.7` (its in-flight features will ship as v0.7+).
+
+### Notes for downstream
+- ClaHub installs of `memex@0.6.0` get pre-built JS in `dist/`. OpenClaw's loader can use either `dist/index.js` or `index.ts` (jiti); local `npm link` deploys still work without running `npm run build`.
+- 42 latent type errors exist in the codebase (jiti was hiding them). They don't block the build (`--noCheck`) but should be cleaned up in a follow-up PR. Run `npx tsc` to see the list.
+
 ## [0.5.15] — 2026-05-10
 
 **Re-publish of v0.5.13/v0.5.14 after release-pipeline shakeout.** The clawhub CLI required a sequence of fixes (`--slug` → `--name`, `--family code-plugin`, `--source-repo`/`--source-commit`/`--source-ref`, and finally `openclaw.compat.pluginApi` + `openclaw.build.openclawVersion` in `package.json`). Code is identical to v0.5.13.
