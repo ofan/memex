@@ -805,7 +805,20 @@ const memoryUnifiedPlugin = {
             async closeAllMemorySearchManagers() { },
         });
         if (!_registered) {
-            api.logger.info(`memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`);
+            let docsStatus;
+            if (unifiedRecall.hasDocumentSearch) {
+                docsStatus = "enabled";
+            }
+            else if (config.documents?.enabled === false) {
+                docsStatus = "disabled (config.documents.enabled = false)";
+            }
+            else if (docPaths.length === 0) {
+                docsStatus = "disabled (no doc paths discovered — check api.config.agents.list and config.documents.paths)";
+            }
+            else {
+                docsStatus = "disabled (initialization failed — check earlier 'document initialization failed' warning; common cause: better-sqlite3 native binding missing for this Node version)";
+            }
+            api.logger.info(`memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, node: ${process.version}, documents: ${docsStatus})`);
         }
         // Config warnings
         if (!isCli) {

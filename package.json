@@ -78,7 +78,8 @@
     "test": "node --import jiti/register --test tests/*.test.ts",
     "mcp": "npx tsx src/mcp-server.ts",
     "build": "tsc -p tsconfig.build.json",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/ensure-native-binding.cjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
