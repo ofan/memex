@@ -605,7 +605,7 @@ Replace raw injected memories with anchored Fact Cards in the prompt template, i
 [mem:abc123 · memex/main · 3d ago · cross-context]
 We use pnpm for this project.
 
-[mem:def456 · homelab/infra · 2w ago]
+[mem:def456 · myproject/infra · 2w ago]
 Default deploy strategy is blue-green.
 ```
 
@@ -619,7 +619,7 @@ LLM-visible recall labels surface judgment opportunity:
 
 ```
 [memex/main · 3d ago] We use pnpm for this project.
-[homelab/infra · 2w ago · cross-context] Default deploy is blue-green.
+[myproject/infra · 2w ago · cross-context] Default deploy is blue-green.
 [unknown context · 5mo ago] Prefer tabs over spaces.
 ```
 
