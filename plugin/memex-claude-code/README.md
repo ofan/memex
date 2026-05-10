@@ -22,7 +22,7 @@ in Claude Code's `settings.json` `env` block — no shell exports needed:
 ```json
 {
   "env": {
-    "MEMEX_ENDPOINT": "http://100.117.49.20:7878/mcp",
+    "MEMEX_ENDPOINT": "http://<your-memex-host>:7878/mcp",
     "MEMEX_AUTH_TOKEN": "PASTE_YOUR_TOKEN_HERE"
   }
 }
@@ -31,7 +31,7 @@ in Claude Code's `settings.json` `env` block — no shell exports needed:
 Pull the token from 1Password once and paste:
 
 ```sh
-op read 'op://homelab/memex-daemon/memex-daemon-token'
+op read 'op://<your-vault>/memex-daemon/memex-daemon-token'
 ```
 
 `settings.json` is git-ignored by Claude Code by default; safe place for the literal token.
