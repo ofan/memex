@@ -80,7 +80,7 @@ Write a concrete, runnable plan for deploying the top candidate to `the inferenc
 
 1. Model file acquisition — HF URL, expected file size, SHA256 if published
 2. Destination path on the host: `/Users/oc/models/<name>.gguf`
-3. `llama-swap.yaml` model block to add (match the existing format at `~/homeinfra/hosts/<host>/etc/llama-swap.yaml`)
+3. `llama-swap.yaml` model block to add (match the existing format at `~/<infra-repo>/hosts/<host>/etc/llama-swap.yaml`)
 4. `llama-server` flags needed (`--embeddings`, `--rerank`, `--pooling`, `--normalize`, any model-specific tokenizer flags)
 5. How to restart llama-swap without disrupting in-flight requests
 6. Verification steps:
@@ -106,7 +106,7 @@ List what you cannot determine from research alone and would need empirical test
 ## Non-negotiables
 
 - **Do not reference lab infrastructure** (IPs, Tailscale hostnames, lab domains, machine names) in any committed file or markdown. Use placeholders.
-- **Secrets go in 1Password** under the `dev-claude` item in vault `dev-vm`. Never hardcode API keys anywhere.
+- **Secrets go in 1Password** under the `<your-1p-item>` item in vault `<your-vault>`. Never hardcode API keys anywhere.
 - **Do not modify the live host until the user approves the deployment plan.** Plan → approve → execute.
 - **No destructive ops on the live llama-swap host** without explicit permission (no deleting models, no kill -9, no wiping configs).
 - **Never commit secrets to git.** Pre-commit hook at `.githooks/pre-commit` will block obvious patterns; your work should not come close to triggering it.
@@ -120,7 +120,7 @@ List what you cannot determine from research alone and would need empirical test
 4. `docs/plans/LEARNINGS.md` — process lessons, especially "don't cite SOTA; walk the mechanism through our failing cases"
 5. `docs/plans/01-methodology.md` — in particular the "Research Rigor: Diagnose Before Scoping" section
 6. `tests/domain-eval.ts`, `tests/fast-benchmark.ts` — the exact benchmarks you'll be compared against
-7. `~/homeinfra/hosts/<host>/README.md` and `~/homeinfra/hosts/<host>/etc/llama-swap.yaml` — deployment target
+7. `~/<infra-repo>/hosts/<host>/README.md` and `~/<infra-repo>/hosts/<host>/etc/llama-swap.yaml` — deployment target
 
 ## Timebox
 
