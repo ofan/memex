@@ -1257,12 +1257,13 @@ const memoryUnifiedPlugin = {
 
             memoryContext = results
               .map((r) => {
+                const anchor = String(r.id).slice(0, 8);
                 if (r.source === "conversation") {
                   const meta = r.metadata as { category?: string; scope?: string };
-                  return `- [memory:${meta.category || "other"}:${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                  return `- [mem:${anchor} · ${meta.category || "other"} · ${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
                 } else {
                   const meta = r.metadata as { displayPath?: string; title?: string };
-                  return `- [doc:${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                  return `- [doc:${anchor} · ${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
                 }
               })
               .join("\n");
@@ -1281,7 +1282,7 @@ const memoryUnifiedPlugin = {
             for (const r of results) recalledIds.push(r.entry.id);
 
             memoryContext = results
-              .map((r) => `- [${r.entry.category}:${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
+              .map((r) => `- [mem:${String(r.entry.id).slice(0, 8)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
               .join("\n");
           }
 
