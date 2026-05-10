@@ -52,7 +52,6 @@ jobs:
           cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json index.ts /tmp/memex-publish/
           cp -r src/ /tmp/memex-publish/src/
           clawhub package publish /tmp/memex-publish \
-            --name memex \
             --family code-plugin \
             --version "${TAG_VERSION#v}" \
             --source-repo "$SOURCE_REPO" \
