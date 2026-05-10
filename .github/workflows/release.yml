@@ -50,15 +50,13 @@ jobs:
           npm install -g clawhub
           clawhub login --token "$CLAWHUB_TOKEN" --no-browser
           SOURCE_COMMIT=$(git rev-parse HEAD)
-          mkdir -p /tmp/memex-publish
-          cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json index.ts /tmp/memex-publish/
-          cp -r src/ /tmp/memex-publish/src/
-          cp -r dist /tmp/memex-publish/dist
-          echo "=== publish payload contents ==="
-          ls -la /tmp/memex-publish
-          echo "=== dist/ ==="
-          ls -la /tmp/memex-publish/dist | head -20
-          clawhub package publish /tmp/memex-publish \
+          # Staging dir name = package name (clawhub derives it from basename when --name omitted).
+          STAGE=/tmp/memex
+          mkdir -p "$STAGE"
+          cp SKILL.md README.md AGENTS.md CLAUDE.md package.json openclaw.plugin.json index.ts "$STAGE/"
+          cp -r src/ "$STAGE/src/"
+          cp -r dist "$STAGE/dist"
+          clawhub package publish "$STAGE" \
             --family code-plugin \
             --version "${TAG_VERSION#v}" \
             --source-repo "$SOURCE_REPO" \
