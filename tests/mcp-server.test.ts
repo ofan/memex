@@ -144,6 +144,61 @@ describe("MCP Server", () => {
     assert.equal(stats.total, 0);
   });
 
+  it("memory_recall results include anchor + scope + citation note", async () => {
+    await client.callTool({
+      name: "memory_store",
+      arguments: { text: "The deployment runs on the build server", category: "fact" },
+    });
+
+    const result = await client.callTool({
+      name: "memory_recall",
+      arguments: { query: "deployment mac mini", limit: 5 },
+    });
+
+    const parsed = JSON.parse((result.content as any)[0].text);
+    assert.ok(parsed.results.length > 0, "should return at least 1 result");
+    const r0 = parsed.results[0];
+    assert.equal(typeof r0.anchor, "string", "result should expose anchor field");
+    assert.equal(r0.anchor.length, 8, "anchor should be 8 chars");
+    assert.equal(r0.anchor, r0.id.slice(0, 8), "anchor should be id prefix");
+    assert.equal(typeof r0.scope, "string", "result should expose scope");
+    assert.ok(/cite.*\bmem:\w+/i.test(parsed.note), "response should include citation note");
+  });
+
+  it("memory_forget accepts an 8-char anchor prefix", async () => {
+    const storeResult = await client.callTool({
+      name: "memory_store",
+      arguments: { text: "Will be forgotten by anchor", category: "fact" },
+    });
+    const stored = JSON.parse((storeResult.content as any)[0].text);
+    const anchor8 = stored.id.slice(0, 8);
+
+    const forgetResult = await client.callTool({
+      name: "memory_forget",
+      arguments: { id: anchor8 },
+    });
+    const forgotten = JSON.parse((forgetResult.content as any)[0].text);
+    assert.equal(forgotten.deleted, true, `anchor ${anchor8} should resolve to ${stored.id}`);
+    assert.equal(forgotten.via_anchor, true, "should flag this as anchor-resolved");
+    assert.equal(forgotten.id, stored.id, "should report the resolved full id");
+  });
+
+  it("memory_forget returns anchor_not_found for non-matching prefix", async () => {
+    await client.callTool({
+      name: "memory_store",
+      arguments: { text: "Some unrelated memory", category: "fact" },
+    });
+
+    const forgetResult = await client.callTool({
+      name: "memory_forget",
+      arguments: { id: "deadbeef" },
+    });
+    const result = JSON.parse((forgetResult.content as any)[0].text);
+    assert.equal(result.deleted, false);
+    assert.equal(result.error, "anchor_not_found");
+    assert.equal(result.anchor, "deadbeef");
+  });
+
   it("memory_stats returns pool metrics", async () => {
     await client.callTool({
       name: "memory_store",
