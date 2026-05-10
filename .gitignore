@@ -17,3 +17,6 @@ memex.log
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+# Local pre-commit hook patterns (operational fingerprints)
+.githooks/secret-patterns.local
