@@ -64,7 +64,7 @@ describe("MemoryRetriever rerank-failure fallback", () => {
       "Kubernetes cluster runs on three control-plane nodes",
     ];
     for (const text of memories) {
-      const vector = await embedder.embedDocument(text);
+      const vector = await (embedder as any).embedDocument(text);
       await store.store({
         text,
         vector,

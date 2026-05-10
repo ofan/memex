@@ -498,7 +498,7 @@ const memoryUnifiedPlugin = {
       try {
         const liveSearchStore = getSearchStore();
         const db = liveSearchStore.db;
-        const quickCheck = String(db.prepare("PRAGMA quick_check").pluck().get() ?? "unknown");
+        const quickCheck = String((db.prepare("PRAGMA quick_check") as any).pluck().get() ?? "unknown");
         const exists = existsSync(unifiedDbFile);
         checks.push({
           name: "db",
@@ -789,7 +789,7 @@ const memoryUnifiedPlugin = {
             apiKey: config.generation.apiKey ? resolveEnvVars(config.generation.apiKey) : resolveEnvVars(config.embedding.apiKey),
             model: config.generation.model,
           } : undefined,
-          queryExpansion: config.documents.queryExpansion ?? false,
+          queryExpansion: config.documents?.queryExpansion ?? false,
         };
 
         // Initialize shared LLM (replaces node-llama-cpp with HTTP)
@@ -846,7 +846,7 @@ const memoryUnifiedPlugin = {
           void runDocIndex();
 
           // Periodic re-indexing (default: every 30 minutes, 0 = disabled)
-          const reindexMinutes = config.documents.reindexIntervalMinutes ?? 30;
+          const reindexMinutes = config.documents?.reindexIntervalMinutes ?? 30;
           if (reindexMinutes > 0) {
             reindexTimer = setInterval(() => void runDocIndex(true), reindexMinutes * 60_000);
           }
@@ -934,7 +934,7 @@ const memoryUnifiedPlugin = {
       unifiedRetrieverConfig,
     );
 
-    api.registerMemoryRuntime({
+    (api as any).registerMemoryRuntime({
       async getMemorySearchManager() {
         const manager = {
           status() {
@@ -1503,7 +1503,7 @@ const memoryUnifiedPlugin = {
 
     async function runBackup() {
       try {
-        const backupDir = api.resolvePath(join(resolvedDbPath, "..", "backups"));
+        const backupDir = join(dirname(unifiedDbFile), "backups");
         await mkdir(backupDir, { recursive: true });
 
         const allMemories = await store.list(undefined, undefined, 10000, 0);
@@ -1828,12 +1828,12 @@ function parsePluginConfig(value: unknown): PluginConfig {
     scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes as any : undefined,
     enableManagementTools: cfg.enableManagementTools === true,
     sessionMemory: typeof cfg.sessionMemory === "object" && cfg.sessionMemory !== null
-      ? {
+      ? ({
         enabled: (cfg.sessionMemory as Record<string, unknown>).enabled !== false,
         messageCount: typeof (cfg.sessionMemory as Record<string, unknown>).messageCount === "number"
           ? (cfg.sessionMemory as Record<string, unknown>).messageCount as number
           : undefined,
-      }
+      } as any)
       : undefined,
     reranker,
     documents,
@@ -1851,14 +1851,14 @@ function parsePluginConfig(value: unknown): PluginConfig {
       }
       : undefined,
     dreaming: typeof cfg.dreaming === "object" && cfg.dreaming !== null
-      ? {
+      ? ({
         enabled: (cfg.dreaming as Record<string, unknown>).enabled !== false,
         phases: typeof (cfg.dreaming as Record<string, unknown>).phases === "object"
           ? (cfg.dreaming as Record<string, unknown>).phases as { light?: boolean; deep?: boolean; reflection?: boolean }
           : undefined,
-      }
+      } as any)
       : undefined,
-  };
+  } as PluginConfig;
 }
 
 /** @internal Reset module-level registration guard (test use only). */

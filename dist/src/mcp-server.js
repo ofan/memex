@@ -361,7 +361,7 @@ async function startHttpServer(serverFactory, opts) {
                     transport = new StreamableHTTPServerTransport({
                         sessionIdGenerator: () => newId,
                         enableJsonResponse: true,
-                        onsessioninitialized: (id) => sessions.set(id, transport),
+                        onsessioninitialized: (id) => { sessions.set(id, transport); },
                     });
                     transport.onclose = () => {
                         if (transport.sessionId)

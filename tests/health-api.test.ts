@@ -130,7 +130,7 @@ describe("memex gateway health methods", () => {
     const { memoryPromptBuilder } = await registerPlugin();
 
     assert.ok(memoryPromptBuilder);
-    const section = memoryPromptBuilder!({ availableTools: new Set(["memory_store"]) });
+    const section = ((memoryPromptBuilder as any))({ availableTools: new Set(["memory_store"]) });
     assert.ok(Array.isArray(section));
     assert.ok(section.length > 0);
   });
@@ -139,7 +139,7 @@ describe("memex gateway health methods", () => {
     const { memoryFlushPlanResolver } = await registerPlugin();
 
     assert.ok(memoryFlushPlanResolver);
-    const plan = memoryFlushPlanResolver!({
+    const plan = ((memoryFlushPlanResolver as any))({
       cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 12345 } } } },
       nowMs: Date.UTC(2026, 2, 29, 12, 0, 0),
     });
@@ -156,9 +156,9 @@ describe("memex gateway health methods", () => {
     const { memoryRuntime } = await registerPlugin();
 
     assert.ok(memoryRuntime);
-    assert.equal(memoryRuntime!.resolveMemoryBackendConfig({}).backend, "builtin");
+    assert.equal((memoryRuntime as any).resolveMemoryBackendConfig({}).backend, "builtin");
 
-    const { manager } = await memoryRuntime!.getMemorySearchManager({});
+    const { manager } = await (memoryRuntime as any).getMemorySearchManager({});
     assert.ok(manager);
     assert.equal(typeof manager!.status, "function");
     assert.equal(typeof manager!.probeEmbeddingAvailability, "function");
