@@ -125,7 +125,7 @@ const PASS_CRITERIA = {
 ## Safe-by-default behaviors
 
 - **Cache invalidation is paired** — every cache delete has a try/finally that restores the original. Cache restoration hash-checks against the backup so a corrupted run never leaves the fixture in a bad state.
-- **No live config changes** — bakeoff never writes to `~/.openclaw/openclaw.json` or `~/homeinfra/...`. The candidate is tested via env vars only. Promotion to production is a separate, deliberate human action.
+- **No live config changes** — bakeoff never writes to `~/.openclaw/openclaw.json` or `~/<infra-repo>/...`. The candidate is tested via env vars only. Promotion to production is a separate, deliberate human action.
 - **No infrastructure side effects** — bakeoff never restarts llama-swap, never reloads the openclaw gateway, never touches the inference host. It only makes HTTP calls to the candidate's endpoint.
 - **Read-only DB access** — opens the live memex sqlite in readonly mode so a buggy run can't corrupt production memories.
 
