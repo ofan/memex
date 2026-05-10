@@ -1,9 +1,9 @@
 {
   "name": "@ofan/memex",
-  "version": "0.5.12",
+  "version": "0.7.0-dev",
   "description": "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database",
   "type": "module",
-  "main": "index.ts",
+  "main": "./dist/index.js",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ofan/memex.git"
@@ -17,11 +17,12 @@
     "node": ">=22"
   },
   "files": [
-    "index.ts",
-    "src/",
+    "dist/**",
     "openclaw.plugin.json",
-    "tsconfig.json",
     "README.md",
+    "SKILL.md",
+    "AGENTS.md",
+    "CLAUDE.md",
     "LICENSE"
   ],
   "keywords": [
@@ -49,14 +50,25 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.7"
+    },
+    "build": {
+      "openclawVersion": "2026.5.7"
+    }
   },
   "bin": {
-    "memex-mcp": "./src/mcp-server.ts"
+    "memex-mcp": "./dist/src/mcp-server.js"
   },
   "scripts": {
     "test": "node --import jiti/register --test tests/*.test.ts",
-    "mcp": "npx tsx src/mcp-server.ts"
+    "mcp": "npx tsx src/mcp-server.ts",
+    "build": "tsc --noCheck -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
