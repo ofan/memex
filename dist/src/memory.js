@@ -21,6 +21,9 @@ import { ensureGraphSchema, createLinks, deleteLinks } from "./graph.js";
  */
 export async function loadLanceDB() {
     try {
+        // @ts-expect-error - optional dependency; not declared in package.json,
+        // present only on hosts that did the legacy migration. Caught by try/catch
+        // when missing.
         return await import("@lancedb/lancedb");
     }
     catch {
