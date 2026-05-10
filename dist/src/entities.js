@@ -31,7 +31,7 @@ export function extractEntities(text) {
                 entities.add(t.trim().toLowerCase());
         }
         // Capitalized proper nouns that compromise may miss (technical terms)
-        // Match: "Gemma 4", "Mac Mini", "Qwen3.5", "host-1" etc.
+        // Match: "Gemma 4", "Qwen3.5", "host-1", multi-word product names, etc.
         for (const match of text.matchAll(/\b[A-Z][a-zA-Z0-9]*(?:[-.][\w]+)*(?:\s+[A-Z][a-zA-Z0-9]*(?:[-.][\w]+)*)*/g)) {
             let term = match[0].trim();
             // Strip possessives
