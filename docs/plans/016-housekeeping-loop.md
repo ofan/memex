@@ -54,7 +54,7 @@ Each item is mechanically scoped. If any item hits a real conflict, surface imme
   - **4 superseded PRs closed** with explanatory comment + branches deleted: #36 (uuid + openclaw multi — closed by v0.7.1 audit fix), #38 (setup-node v6 — done in M3), #39 (checkout v6 — done in M3), #40 (action-gh-release v3 — done in M3).
   - **2 kept open with rationale**: #42 `better-sqlite3-12.9.0` (Node 26 incompat — explicit watch tracker, see PR comment), #43 `typescript-6.0.3` (devDep major bump — held for user decision, see PR comment). Neither is security-related.
 - [x] **M4.3** Pre-empted by M4.2's `git remote prune origin`. Every legacy feature branch the plan listed (`chore/repo-hygiene`, `debug/release-payload-listing`, `feat/build-step-and-0.6-bump`, `feat/citation-anchors`, `fix/release-*` × 6, `fix/track-dist-in-git`, `fix/runtime-extensions-and-files`) was already deleted on remote — only my local cache had stale refs. Reachability check on remaining non-dependabot branches confirms only `main`, `memex-v0.7`, and `rename-to-memclaw` exist on origin. `rename-to-memclaw` already handled in M4.1 [?].
-- [ ] **M4.4** Document in `docs/plans/PROGRESS.md`: "Branch cleanup post-v0.7.1: deleted N branches; reasoning: X, Y, Z."
+- [x] **M4.4** PROGRESS.md updated with cleanup summary: 27 → 5 active remote branches, full reasoning for each category (resolved / kept-with-rationale / surfaced).
 
 ---
 
