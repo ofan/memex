@@ -50,11 +50,11 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 
 ### RES.23 — Issue #23: debug mode for injected recall
 - [x] **23.1** Injection site: `index.ts:1209` (`before_prompt_build` hook). Two paths: (a) unified-recall path lines 1257-1288 when document search is enabled, (b) memory-only fallback lines 1289-1306. Both compute `results` (full retrieval objects with metadata) and `memoryContext` (formatted text). Final injection happens at line 1331-1333: `return { prependContext: buildRecallContext(memoryContext) }`. Debug capture should snapshot both the rich `results` array and the formatted text just before that return.
-- [ ] **23.2** Add `MEMEX_DEBUG_RECALL` env flag (or `config.debugRecall: true`). When set: write the final injected payload to `/tmp/memex-debug-recall-<timestamp>.json` (or configurable path).
-- [ ] **23.3** Payload shape: `{ turn: { agentId, sessionId, ts }, query, recalledItems: [...], injectedSlice: [...], cuts: [reason per dropped item] }`.
-- [ ] **23.4** Add a test that verifies the payload structure when the flag is on (no behavior change when off).
-- [ ] **23.5** Document in README under "Debugging" section.
-- [ ] **23.6** Commit + push. Close issue #23 with implementation-link comment.
+- [x] **23.2** `MEMEX_DEBUG_RECALL` env flag implemented in new `src/debug-recall.ts`. Truthy values (`1`/`true`/`on`) → default `${tmpdir}/memex-debug-recall/`. Other strings → literal directory path. Falsy → off.
+- [x] **23.3** Payload shape: `{ ts, agentId, sessionId, query, source, resultCount, injectedContext, results: [{id, score, source, text(<=500ch), metadata}] }`. Two builder helpers: `buildPayloadFromUnifiedRecall` and `buildPayloadFromMemoryOnly`. Hooked into both injection paths in `index.ts:1294, 1314`.
+- [x] **23.4** New test file `tests/debug-recall.test.ts` — 8 cases covering env flag interpretation, off-path no-op, on-path file write, payload structure, text truncation, write-failure swallow. Discovery during testing: `mkdir` on `/proc/...` paths hangs at the syscall level → switched test failure case to `/dev/null/sub` which fails fast with ENOTDIR.
+- [x] **23.5** README "Debugging" section added (above Development), explains env flag + default path.
+- [x] **23.6** Bundled commit covers 23.2-23.6. Issue #23 closed via this commit.
 
 ### RES.19 — Issue #19: production benchmark (scope only, not implement)
 - [~] **19.1** Write a scoped design note at `docs/design/production-benchmark.md`:
