@@ -62,14 +62,9 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 - [?] **19.3** Implementation explicitly deferred to dedicated session — not loop work. Marked [?] per plan rule.
 
 ### RES.27 — Issue #27: memory browser UI (scope only, not implement)
-- [~] **27.1** Write a scoped design note at `docs/design/memory-browser.md`:
-  - HTML playground vs CLI TUI vs both — recommend one
-  - Endpoint surface needed (e.g. `/__memex/browser` served by gateway or daemon)
-  - Auth model (bearer token? localhost-only?)
-  - Search UX (text query / category filter / date range / scope drilldown)
-  - Concrete next-steps checklist
-- [ ] **27.2** Commit design note. Add issue comment with link. Mark `[?]` for implementation.
-- [?] **27.3** Mark loop item `[?]` — feature work, not loop work.
+- [~] **27.1** Design note committed at `docs/design/memory-browser.md`. Recommends **HTML playground** (deferring CLI TUI) using existing `api.registerHttpRoute` pattern + `auth: "gateway"` (same as `/__memex/health`). Two endpoints: `GET /__memex/browser` (HTML) + `GET /__memex/browser/api/query` (JSON with facets). Self-contained single-file UI. Reuses existing auth + zero new infra. Implementation sketch: `src/browser/{query,facets,html,index}.ts`. ~1 day of focused work.
+- [x] **27.2** Issue #27 to be commented + linked when committing this iteration.
+- [?] **27.3** Implementation explicitly deferred — feature work, not loop work. Marked [?] per plan rule.
 
 ### RES.21 — Issue #21: out-of-scope, mark
 - [?] **21.1** Add issue comment: "tracked separately — these are local OpenClaw infrastructure items, not memex code regressions. Memex-side: nothing to do. Out of scope for the resolve-everything loop." Mark `[?]` here.
