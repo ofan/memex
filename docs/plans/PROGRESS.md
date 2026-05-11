@@ -1,6 +1,17 @@
 # Progress
 
-## Last Updated: 2026-04-25
+## Last Updated: 2026-05-10
+
+## Branch cleanup (post-v0.7.1, housekeeping loop 016)
+
+Reduced active remote branches from 27 → 5 in the `016-housekeeping-loop.md` pass:
+
+- **22 dependabot branches resolved**: 18 already deleted on remote (cleared via `git remote prune origin`); 4 superseded PRs closed with explanatory comment + branches deleted (#36, #38, #39, #40 — all addressed by v0.7.1 audit fix or M3's GitHub-Actions bump).
+- **10 legacy `feat/*` and `fix/release-*` branches** also cleared by the prune (they were stale local refs only — already deleted on remote during the v0.6.x ship phase).
+- **2 dependabot branches kept open with rationale**: #42 `better-sqlite3-12.9.0` (Node 26 compat tracker), #43 `typescript-6.0.3` (devDep major bump for user judgment).
+- **1 branch surfaced to user**: `rename-to-memclaw` has 24 unique unreachable commits (early benchmark experiments, LanceDB Pro results, llama.cpp router decisions). Loop refused to delete autonomously — see plan M4.1 [?] for the four options (keep / archive-tag / cherry-pick + delete / delete outright).
+
+Final remote branch state: `main`, `memex-v0.7`, `rename-to-memclaw`, `dependabot/npm_and_yarn/better-sqlite3-12.9.0`, `dependabot/npm_and_yarn/typescript-6.0.3`.
 
 ## Active Architectural Tracking
 
