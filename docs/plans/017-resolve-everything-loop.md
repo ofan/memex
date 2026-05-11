@@ -49,7 +49,7 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 - [x] **43.2c** N/A — path (a) succeeded.
 
 ### RES.23 — Issue #23: debug mode for injected recall
-- [ ] **23.1** Identify the injection site: `before_prompt_build` hook in `index.ts` (where memories actually become context).
+- [x] **23.1** Injection site: `index.ts:1209` (`before_prompt_build` hook). Two paths: (a) unified-recall path lines 1257-1288 when document search is enabled, (b) memory-only fallback lines 1289-1306. Both compute `results` (full retrieval objects with metadata) and `memoryContext` (formatted text). Final injection happens at line 1331-1333: `return { prependContext: buildRecallContext(memoryContext) }`. Debug capture should snapshot both the rich `results` array and the formatted text just before that return.
 - [ ] **23.2** Add `MEMEX_DEBUG_RECALL` env flag (or `config.debugRecall: true`). When set: write the final injected payload to `/tmp/memex-debug-recall-<timestamp>.json` (or configurable path).
 - [ ] **23.3** Payload shape: `{ turn: { agentId, sessionId, ts }, query, recalledItems: [...], injectedSlice: [...], cuts: [reason per dropped item] }`.
 - [ ] **23.4** Add a test that verifies the payload structure when the flag is on (no behavior change when off).
