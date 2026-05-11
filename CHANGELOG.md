@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.1] — 2026-05-10
+
+**Theme: security bump.** Closes 18 transitive vulnerabilities (2 critical, 6 high, 10 moderate) surfaced by `npm audit` after v0.7.0 ship. No new features, no behavior change.
+
+### Fixed — security
+- **`npm audit fix` (non-force)** resolved all 18 transitive vulns in one shot: lockfile-only changes (added 121 packages, removed 26, changed 140). Final `npm audit` count: **0 vulnerabilities**. Affected upstream packages included `protobufjs` (critical RCE), `axios` (12 advisories: SSRF / prototype pollution / CRLF), `picomatch` (high+moderate ReDoS / glob method injection), `@anthropic-ai/sdk` (sandbox escape), `@hono/node-server` (middleware bypass), `path-to-regexp`, `fast-xml-parser`, `protobufjs`, `uuid`, and others — all transitive through `openclaw` / `openai` / `@ofan/telemetry-relay-sdk`.
+- **`src/tools.ts`** — added 4 type bridges (`as unknown as Parameters<typeof Type.Optional>[0]`) at the `stringEnum()` call sites. The audit-fix lockfile shift moved openclaw's transitive resolution from `@sinclair/typebox` onto unscoped `typebox@1.1.37`. Memex's own schema construction still uses `@sinclair/typebox@0.34.48`, so `Type.Optional()` and `stringEnum()` now come from two different typebox packages whose `TUnsafe`/`TSchema` types disagree at the TypeScript level (runtime is structurally compatible). Surgical cast — no code refactor.
+
+### Changed
+- Direct `dependencies` in `package.json` unchanged. All vulnerability fixes were achieved via lockfile-only resolution updates.
+
+### Plan
+- See [`docs/plans/015-v0.7.1-security-bump-loop.md`](docs/plans/015-v0.7.1-security-bump-loop.md) for the loop that produced this release.
+
+---
+
 ## [0.7.0] — 2026-05-10
 
 **Theme: cross-device memory daemon, ready for self+others.** v0.7 builds on v0.6.2 (citation-anchored recall, build step) and adds the daemon / dreaming / Claude Code integration that turn memex from a per-project plugin into a personal cross-device memory layer. Architecture decisions are intentionally limited to "current implementation is one valid answer" — see `docs/plans/013-post-v0.6.2-roadmap.md` for the deferred questions.
