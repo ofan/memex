@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.7.0-dev] — in progress
+## [0.7.0] — 2026-05-10
 
 **Theme: cross-device memory daemon, ready for self+others.** v0.7 builds on v0.6.2 (citation-anchored recall, build step) and adds the daemon / dreaming / Claude Code integration that turn memex from a per-project plugin into a personal cross-device memory layer. Architecture decisions are intentionally limited to "current implementation is one valid answer" — see `docs/plans/013-post-v0.6.2-roadmap.md` for the deferred questions.
 
