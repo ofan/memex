@@ -1,6 +1,17 @@
 # Progress
 
-## Last Updated: 2026-05-10
+## Last Updated: 2026-05-11
+
+## Resolve-everything loop (017) — same-day post-housekeeping
+
+Drove all 5 open issues + 2 open PRs to resolution after the 016 housekeeping loop. Outcome:
+
+- **3 issues closed**: #30 (memoryAgents config — code shipped); #23 (debug-recall env flag — code shipped); #43 (typescript 6.x bump — closed via direct commit, dependabot branch deleted)
+- **2 issues scoped** (`[~]` design notes only — implementation deferred to dedicated sessions): #19 (production benchmark → `docs/design/production-benchmark.md`, BEIR 3-subset recommended); #27 (memory browser → `docs/design/memory-browser.md`, HTML playground recommended)
+- **1 issue marked out-of-scope** (`[?]`): #21 (local OpenClaw infrastructure items, not memex code)
+- **1 PR kept open** as Node-26 tracker (`[?]`): #42 (better-sqlite3 12.x — waiting on upstream WiseLibs fix)
+
+Test count progression across the loop: 725 → 740 (gained 7 from RES.30 + 8 from RES.23). `npm audit` stayed at 0. Build clean. No version bump (intentional — v0.7.2 tag is a separate user-driven decision).
 
 ## Branch cleanup (post-v0.7.1, housekeeping loop 016)
 
@@ -12,6 +23,16 @@ Reduced active remote branches from 27 → 5 in the `016-housekeeping-loop.md` p
 - **1 branch surfaced to user**: `rename-to-memclaw` has 24 unique unreachable commits (early benchmark experiments, LanceDB Pro results, llama.cpp router decisions). Loop refused to delete autonomously — see plan M4.1 [?] for the four options (keep / archive-tag / cherry-pick + delete / delete outright).
 
 Final remote branch state: `main`, `memex-v0.7`, `rename-to-memclaw`, `dependabot/npm_and_yarn/better-sqlite3-12.9.0`, `dependabot/npm_and_yarn/typescript-6.0.3`.
+
+**Update 2026-05-11:** `rename-to-memclaw` deleted (option c, plan M4.1 [x]). `dependabot/npm_and_yarn/typescript-6.0.3` deleted (PR #43 closed via direct commit in loop 017). Final remote branch state: `main`, `memex-v0.7`, `dependabot/npm_and_yarn/better-sqlite3-12.9.0`. Three branches.
+
+## Surfaced this session (loop 017) — needs ticketing or follow-up
+
+- **Dual-typebox dependency situation resolved** in M2 (loop 016) → moved memex from `@sinclair/typebox` to unscoped `typebox` to align with openclaw's choice. Dropped 4 type-bridge casts.
+- **jiti only exposes `default` exports from index.ts** to test imports — discovered while writing 30.4 tests for `mergeAgentLists`. Workaround: extracted helper to `src/agent-merge.ts` (own module). Worth knowing for future test additions; consider a small note in CLAUDE.md or AGENTS.md.
+- **`mkdir` on `/proc/...` paths hangs at the Node syscall level** — discovered while writing 23.4 tests for `writeDebugRecall`. Use `/dev/null/sub` (fast ENOTDIR) for any future "unwritable path" test fixtures.
+- **`package.json` had a duplicate `files` block** (merge artifact from PR #73) — auto-canonicalized by `npm install` during RES.43. No follow-up needed; just noting for the merge-artifact archaeology.
+- **Two design notes pending implementation**: `docs/design/production-benchmark.md` (BEIR 3-subset, ~1 day) and `docs/design/memory-browser.md` (HTML playground, ~1 day). Both have concrete next-step checklists.
 
 ## Active Architectural Tracking
 

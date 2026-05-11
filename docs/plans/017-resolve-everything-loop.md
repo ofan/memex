@@ -75,8 +75,8 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 ### CLEAN — Final cleanup
 - [x] **CLEAN.1** `npm audit` → 0 vulnerabilities. Confirmed.
 - [x] **CLEAN.2** `npm test` → 740/740 pass (started loop at 725, gained 15 across RES.30 + RES.23). Build clean.
-- [ ] **CLEAN.3** Update PROGRESS.md with summary of resolved items.
-- [ ] **CLEAN.4** List any newly-discovered work surfaced during this loop and add issue stubs OR add to PROGRESS.md.
+- [x] **CLEAN.3** PROGRESS.md updated with loop 017 summary section: 3 issues closed, 2 scoped, 1 out-of-scope, 1 PR open as tracker. Test count progression and audit state recorded.
+- [x] **CLEAN.4** Surfaced-this-session section added to PROGRESS.md: dual-typebox resolution, jiti-export workaround note, /proc-mkdir-hangs trap, package.json duplicate-files canonicalization, and pointers to the two design notes pending implementation.
 
 ---
 
