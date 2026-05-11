@@ -11,12 +11,14 @@
  * without needing to re-embed on every run.
  *
  * Usage:
- *   LLAMA_SWAP_API_KEY=... node --import jiti/register tests/build-chunk-cache.ts
+ *   EMBED_BASE_URL=... EMBED_MODEL=... EMBED_API_KEY=... node --import jiti/register tests/build-chunk-cache.ts
  *
- * Environment:
- *   LLAMA_SWAP_API_KEY  — embedding API key
- *   EMBED_BASE_URL      — embedding endpoint (default: llama-swap)
+ * Required env (no defaults — fails fast if missing):
+ *   EMBED_BASE_URL      — embedding endpoint
  *   EMBED_MODEL         — model name
+ *   EMBED_API_KEY       — embedding API key (falls back to legacy LLAMA_SWAP_API_KEY)
+ *
+ * Tuning knobs (defaults OK):
  *   CHUNK_SIZE          — chars per chunk (default: 2000)
  *   CHUNK_OVERLAP       — overlap chars (default: 200)
  *   BATCH_SIZE          — texts per API call (default: 8)
@@ -33,14 +35,27 @@ const __dirname = dirname(__filename);
 const CACHE_DIR = join(__dirname, "fixtures", "longmemeval-cache");
 const CACHE_PATH = join(CACHE_DIR, "research-cache-50.json");
 
-const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "http://localhost:8090/v1";
-const EMBED_MODEL = process.env.EMBED_MODEL || "Qwen3-Embedding-4B-Q8_0";
-const EMBED_API_KEY = process.env.LLAMA_SWAP_API_KEY || "";
+// Config — no defaults
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "";
+const EMBED_MODEL = process.env.EMBED_MODEL || "";
+const EMBED_API_KEY = process.env.EMBED_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
 const VECTOR_DIM = 2560;
+
+// Tuning knobs — defaults OK
 const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || "2000");
 const CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP || "200");
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "8");
 const PARALLEL = parseInt(process.env.PARALLEL || "2");
+
+if (!EMBED_BASE_URL || !EMBED_MODEL || !EMBED_API_KEY) {
+  const missing = [
+    !EMBED_BASE_URL && "EMBED_BASE_URL",
+    !EMBED_MODEL && "EMBED_MODEL",
+    !EMBED_API_KEY && "EMBED_API_KEY (or legacy LLAMA_SWAP_API_KEY)",
+  ].filter(Boolean).join(", ");
+  console.error(`ERROR: missing required env vars: ${missing}`);
+  process.exit(2);
+}
 const CHECKPOINT_PATH = join(CACHE_DIR, "chunk-checkpoint.json");
 const CHECKPOINT_INTERVAL = 200; // save every N chunks
 
@@ -158,7 +173,8 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 async function main() {
   if (!EMBED_API_KEY) {
-    console.error("Set LLAMA_SWAP_API_KEY to run this script.");
+    // Should have exited at top-of-file guard, but belt-and-suspenders.
+    console.error("Set EMBED_API_KEY (or legacy LLAMA_SWAP_API_KEY) to run this script.");
     process.exit(1);
   }
 

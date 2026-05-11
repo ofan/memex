@@ -44,12 +44,12 @@ describe("MemoryStore", () => {
         importance: 0.8,
       });
 
-      assert.ok(entry.id, "entry should have an id");
-      assert.equal(entry.text, "User prefers dark mode");
-      assert.equal(entry.category, "preference");
-      assert.equal(entry.scope, "global");
-      assert.equal(entry.importance, 0.8);
-      assert.ok(entry.timestamp > 0);
+      assert.ok(entry!.id, "entry should have an id");
+      assert.equal(entry!.text, "User prefers dark mode");
+      assert.equal(entry!.category, "preference");
+      assert.equal(entry!.scope, "global");
+      assert.equal(entry!.importance, 0.8);
+      assert.ok(entry!.timestamp > 0);
     });
 
     it("auto-generates id and timestamp", async () => {
@@ -61,8 +61,8 @@ describe("MemoryStore", () => {
         importance: 0.7,
       });
 
-      assert.ok(entry.id.length > 0);
-      assert.ok(entry.timestamp > Date.now() - 10000);
+      assert.ok(entry!.id.length > 0);
+      assert.ok(entry!.timestamp > Date.now() - 10000);
     });
 
     it("rejects wrong vector dimensions on importEntry", async () => {
@@ -95,7 +95,7 @@ describe("MemoryStore", () => {
       // Search with the same vector (should be a perfect match)
       const results = await store.vectorSearch(vec, 5, 0.1, ["global"]);
       assert.ok(results.length >= 1);
-      assert.equal(results[0].entry.text, "Target memory");
+      assert.equal(results[0].entry!.text, "Target memory");
       assert.ok(results[0].score > 0.5, `score ${results[0].score} should be high`);
     });
 
@@ -165,7 +165,7 @@ describe("MemoryStore", () => {
         importance: 0.7,
       });
 
-      assert.equal(await store.hasId(entry.id), true);
+      assert.equal(await store.hasId(entry!.id), true);
     });
 
     it("returns false for non-existing entry", async () => {
@@ -192,10 +192,10 @@ describe("MemoryStore", () => {
         importance: 0.7,
       });
 
-      const deleted = await store.delete(entry.id);
+      const deleted = await store.delete(entry!.id);
       assert.equal(deleted, true);
 
-      assert.equal(await store.hasId(entry.id), false);
+      assert.equal(await store.hasId(entry!.id), false);
     });
 
     it("returns false for non-existing entry", async () => {
@@ -225,8 +225,8 @@ describe("MemoryStore", () => {
         timestamp: 1700000000000,
       });
 
-      assert.equal(entry.id, "preserved-id-123");
-      assert.equal(entry.timestamp, 1700000000000);
+      assert.equal(entry!.id, "preserved-id-123");
+      assert.equal(entry!.timestamp, 1700000000000);
     });
 
     it("rejects entries without id", async () => {

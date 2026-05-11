@@ -77,19 +77,19 @@ function createMockEmbedder(contextLimit: number): {
     },
 
     async embedQuery(text: string): Promise<number[]> {
-      return this.embedPassage(text);
+      return (this as any).embedPassage(text);
     },
 
     async embed(text: string): Promise<number[]> {
-      return this.embedPassage(text);
+      return (this as any).embedPassage(text);
     },
 
     async embedBatchPassage(texts: string[]): Promise<number[][]> {
-      return Promise.all(texts.map(t => this.embedPassage(t)));
+      return Promise.all(texts.map(t => (this as any).embedPassage(t)));
     },
 
     async embedBatchQuery(texts: string[]): Promise<number[][]> {
-      return Promise.all(texts.map(t => this.embedQuery(t)));
+      return Promise.all(texts.map(t => (this as any).embedQuery(t)));
     },
 
     async test() {

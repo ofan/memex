@@ -1,6 +1,9 @@
 # Retrieval Quality Fixes Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: DONE** (2026-04). Both fixes shipped.
+> - Fix A (adaptive fusion gate): `search.ts:3353-3356` — `BM25_MIN_USEFUL_RESULTS` / `BM25_MIN_USEFUL_SCORE`
+> - Fix B (BM25 OR matching): `search.ts:2442` — `buildFTS5Query` uses OR join
+> Memory BM25 path also uses OR via shared `buildFTS5Query` import in `memory.ts:552`.
 
 **Goal:** Fix two retrieval quality issues — (1) hybrid fusion hurting vector results when BM25 returns garbage, and (2) BM25/FTS fundamentally broken for natural language queries due to strict AND matching and document-level indexing.
 

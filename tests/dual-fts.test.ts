@@ -18,7 +18,7 @@ import {
   findActiveDocument,
   splitSections,
   searchFTS,
-} from "../src/search.ts";
+} from "../src/search.js";
 import { createHash } from "node:crypto";
 
 function md5(content: string): string {

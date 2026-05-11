@@ -54,13 +54,13 @@ describe("store()", () => {
       importance: 0.8,
     });
 
-    assert.ok(entry.id, "id should be non-empty");
-    assert.equal(entry.text, "User prefers dark mode");
-    assert.equal(entry.category, "preference");
-    assert.equal(entry.scope, "global");
-    assert.equal(entry.importance, 0.8);
-    assert.ok(entry.timestamp >= before, "timestamp should be recent");
-    assert.ok(entry.metadata, "metadata should default to '{}'");
+    assert.ok(entry!.id, "id should be non-empty");
+    assert.equal(entry!.text, "User prefers dark mode");
+    assert.equal(entry!.category, "preference");
+    assert.equal(entry!.scope, "global");
+    assert.equal(entry!.importance, 0.8);
+    assert.ok(entry!.timestamp >= before, "timestamp should be recent");
+    assert.ok(entry!.metadata, "metadata should default to '{}'");
   });
 
   it("entry is findable by hasId after store", async () => {
@@ -71,7 +71,7 @@ describe("store()", () => {
       scope: "global",
       importance: 0.5,
     });
-    assert.equal(await store.hasId(entry.id), true);
+    assert.equal(await store.hasId(entry!.id), true);
   });
 });
 
@@ -112,8 +112,8 @@ describe("importEntry()", () => {
       timestamp: 1700000000000,
     });
 
-    assert.equal(entry.id, "custom-id-42");
-    assert.equal(entry.timestamp, 1700000000000);
+    assert.equal(entry!.id, "custom-id-42");
+    assert.equal(entry!.timestamp, 1700000000000);
     assert.equal(await store.hasId("custom-id-42"), true);
   });
 
@@ -162,7 +162,7 @@ describe("vectorSearch()", () => {
     assert.ok(results.length >= 1, "should find at least the target");
 
     // First result should be the target (exact match = highest score)
-    assert.equal(results[0].entry.text, "Target");
+    assert.equal(results[0].entry!.text, "Target");
     assert.ok(results[0].score >= 0 && results[0].score <= 1, `score should be in [0,1], got ${results[0].score}`);
 
     // Scores should be descending
@@ -221,7 +221,7 @@ describe("bm25Search()", () => {
 
     const results = await store.bm25Search("selenium cancer");
     assert.ok(results.length >= 1, "should find at least one match");
-    assert.ok(results[0].entry.text.includes("Selenium"), "first result should match");
+    assert.ok(results[0].entry!.text.includes("Selenium"), "first result should match");
 
     for (const r of results) {
       assert.ok(r.score >= 0 && r.score < 1, `bm25 score should be in [0,1), got ${r.score}`);
@@ -252,17 +252,17 @@ describe("bm25Search()", () => {
 describe("update()", () => {
   it("updates text", async () => {
     const entry = await store.store({ text: "Old text", vector: randomVec(DIM), category: "fact", scope: "global", importance: 0.5 });
-    const updated = await store.update(entry.id, { text: "New text" });
+    const updated = await store.update(entry!.id, { text: "New text" });
 
     assert.ok(updated);
     assert.equal(updated!.text, "New text");
-    assert.equal(updated!.id, entry.id);
-    assert.equal(updated!.timestamp, entry.timestamp, "timestamp should be preserved");
+    assert.equal(updated!.id, entry!.id);
+    assert.equal(updated!.timestamp, entry!.timestamp, "timestamp should be preserved");
   });
 
   it("updates importance", async () => {
     const entry = await store.store({ text: "Test", vector: randomVec(DIM), category: "fact", scope: "global", importance: 0.5 });
-    const updated = await store.update(entry.id, { importance: 0.95 });
+    const updated = await store.update(entry!.id, { importance: 0.95 });
 
     assert.ok(updated);
     assert.equal(updated!.importance, 0.95);
@@ -270,7 +270,7 @@ describe("update()", () => {
 
   it("updates category", async () => {
     const entry = await store.store({ text: "Test", vector: randomVec(DIM), category: "fact", scope: "global", importance: 0.5 });
-    const updated = await store.update(entry.id, { category: "decision" });
+    const updated = await store.update(entry!.id, { category: "decision" });
 
     assert.ok(updated);
     assert.equal(updated!.category, "decision");
@@ -285,7 +285,7 @@ describe("update()", () => {
     const entry = await store.store({ text: "private", vector: randomVec(DIM), category: "fact", scope: "agent:x", importance: 0.5 });
 
     await assert.rejects(
-      () => store.update(entry.id, { text: "hacked" }, ["global"]),
+      () => store.update(entry!.id, { text: "hacked" }, ["global"]),
       /outside accessible scopes/
     );
   });
@@ -298,7 +298,7 @@ describe("update()", () => {
     assert.ok(results.length >= 1, "should find original text");
 
     // Update text
-    await store.update(entry.id, { text: "updated keyword tambourine" });
+    await store.update(entry!.id, { text: "updated keyword tambourine" });
 
     // Original keyword should not match anymore
     results = await store.bm25Search("xylophone");
@@ -317,9 +317,9 @@ describe("update()", () => {
 describe("delete()", () => {
   it("returns true for existing entry", async () => {
     const entry = await store.store({ text: "Delete me", vector: randomVec(DIM), category: "fact", scope: "global", importance: 0.5 });
-    const result = await store.delete(entry.id);
+    const result = await store.delete(entry!.id);
     assert.equal(result, true);
-    assert.equal(await store.hasId(entry.id), false);
+    assert.equal(await store.hasId(entry!.id), false);
   });
 
   it("returns false for non-existing entry", async () => {
@@ -331,7 +331,7 @@ describe("delete()", () => {
     const entry = await store.store({ text: "private", vector: randomVec(DIM), category: "fact", scope: "agent:x", importance: 0.5 });
 
     await assert.rejects(
-      () => store.delete(entry.id, ["global"]),
+      () => store.delete(entry!.id, ["global"]),
       /outside accessible scopes/
     );
   });
@@ -342,7 +342,7 @@ describe("delete()", () => {
     let results = await store.bm25Search("accordion");
     assert.ok(results.length >= 1);
 
-    await store.delete(entry.id);
+    await store.delete(entry!.id);
 
     results = await store.bm25Search("accordion");
     assert.equal(results.length, 0, "FTS entry should be removed after delete");
@@ -356,7 +356,7 @@ describe("delete()", () => {
 describe("hasId()", () => {
   it("returns true for existing id", async () => {
     const entry = await store.store({ text: "exists", vector: randomVec(DIM), category: "fact", scope: "global", importance: 0.5 });
-    assert.equal(await store.hasId(entry.id), true);
+    assert.equal(await store.hasId(entry!.id), true);
   });
 
   it("returns false for non-existing id", async () => {
@@ -499,7 +499,7 @@ describe("scope filtering", () => {
 
     const results = await store.vectorSearch(vec, 10, 0.0, ["a", "b"]);
     assert.equal(results.length, 2);
-    const texts = results.map(r => r.entry.text).sort();
+    const texts = results.map(r => r.entry!.text).sort();
     assert.deepEqual(texts, ["In A", "In B"]);
   });
 
@@ -578,7 +578,7 @@ describe("chunked embedding (multi-vector)", () => {
       scope: "global",
       importance: 0.7,
     });
-    const vecCount = store.getVectorCount(entry.id);
+    const vecCount = store.getVectorCount(entry!.id);
     assert.equal(vecCount, 1);
   });
 
@@ -597,7 +597,7 @@ describe("chunked embedding (multi-vector)", () => {
       importance: 0.7,
     });
 
-    const vecCount = store.getVectorCount(entry.id);
+    const vecCount = store.getVectorCount(entry!.id);
     assert.equal(vecCount, chunkVectors.length);
   });
 
@@ -640,9 +640,9 @@ describe("chunked embedding (multi-vector)", () => {
       importance: 0.7,
     });
 
-    assert.ok(store.getVectorCount(entry.id) >= 2);
-    await store.delete(entry.id);
-    assert.equal(store.getVectorCount(entry.id), 0);
+    assert.ok(store.getVectorCount(entry!.id) >= 2);
+    await store.delete(entry!.id);
+    assert.equal(store.getVectorCount(entry!.id), 0);
   });
 
   it("update replaces all chunk vectors", async () => {
@@ -658,13 +658,13 @@ describe("chunked embedding (multi-vector)", () => {
       importance: 0.7,
     });
 
-    const origCount = store.getVectorCount(entry.id);
+    const origCount = store.getVectorCount(entry!.id);
     assert.ok(origCount >= 2);
 
     const newVec = seedVec(99);
-    await store.update(entry.id, { text: "Updated short text", vector: newVec });
+    await store.update(entry!.id, { text: "Updated short text", vector: newVec });
 
-    assert.equal(store.getVectorCount(entry.id), 1);
+    assert.equal(store.getVectorCount(entry!.id), 1);
   });
 
   it("chunkForEmbedding returns single chunk for short text", () => {

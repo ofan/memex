@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memex — Architecture</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2129;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --blue: #58a6ff;
+    --green: #7ee787;
+    --purple: #d2a8ff;
+    --orange: #ffa657;
+    --red: #ff7b72;
+    --cyan: #79c0ff;
+    --yellow: #e3b341;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+  h1 {
+    font-size: 1.8rem;
+    margin-bottom: 0.25rem;
+    background: linear-gradient(135deg, var(--blue), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
+  h2 { font-size: 1.2rem; color: var(--text); margin: 2rem 0 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+
+  /* Main architecture diagram */
+  .arch {
+    display: grid;
+    grid-template-columns: 1fr 60px 1fr;
+    grid-template-rows: auto 60px auto 60px auto;
+    gap: 0;
+    align-items: center;
+    justify-items: center;
+    margin: 2rem 0;
+  }
+
+  .box {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    background: var(--surface);
+    width: 100%;
+    position: relative;
+  }
+  .box h3 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .box .items { font-size: 0.8rem; color: var(--muted); }
+  .box .items code {
+    background: var(--surface2);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    color: var(--text);
+  }
+
+  .box.clients { border-color: var(--blue); grid-column: 1 / -1; }
+  .box.clients h3 { color: var(--blue); }
+  .box.server { border-color: var(--purple); grid-column: 1 / -1; }
+  .box.server h3 { color: var(--purple); }
+  .box.db { border-color: var(--green); }
+  .box.db h3 { color: var(--green); }
+  .box.llm { border-color: var(--orange); }
+  .box.llm h3 { color: var(--orange); }
+  .box.embed { border-color: var(--cyan); }
+  .box.embed h3 { color: var(--cyan); }
+
+  .arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: var(--muted);
+    font-size: 0.7rem;
+    gap: 0.15rem;
+  }
+  .arrow .line {
+    width: 2px;
+    height: 30px;
+    background: var(--border);
+  }
+  .arrow .head { font-size: 1rem; }
+
+  /* Server internals */
+  .server-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+  .module {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8rem;
+  }
+  .module .label {
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.25rem;
+  }
+  .module.tools .label { color: var(--blue); }
+  .module.dream .label { color: var(--purple); }
+  .module.store .label { color: var(--green); }
+
+  /* Flow section */
+  .flow-section { margin: 2rem 0; }
+
+  .flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin: 1rem 0;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+  }
+  .flow-step {
+    flex: 0 0 auto;
+    min-width: 140px;
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.8rem;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .flow-step .step-title {
+    font-weight: 700;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.25rem;
+  }
+  .flow-step .step-detail { color: var(--muted); font-size: 0.75rem; }
+  .flow-arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 0.25rem;
+    color: var(--muted);
+    font-size: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  .flow-step.startup .step-title { color: var(--cyan); }
+  .flow-step.op .step-title { color: var(--yellow); }
+  .flow-step.init .step-title { color: var(--green); }
+  .flow-step.connect .step-title { color: var(--purple); }
+  .flow-step.schedule .step-title { color: var(--orange); }
+
+  .flow-step.light .step-title { color: var(--cyan); }
+  .flow-step.deep .step-title { color: var(--blue); }
+  .flow-step.reflect .step-title { color: var(--purple); }
+  .flow-step.result .step-title { color: var(--green); }
+
+  .flow-step.query .step-title { color: var(--blue); }
+  .flow-step.embed .step-title { color: var(--cyan); }
+  .flow-step.search .step-title { color: var(--green); }
+  .flow-step.rank .step-title { color: var(--purple); }
+  .flow-step.return .step-title { color: var(--orange); }
+
+  /* Bottom grid */
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 60px 1fr;
+    gap: 0;
+    align-items: start;
+    justify-items: center;
+    margin-top: 0.75rem;
+  }
+  .bottom-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: var(--muted);
+    font-size: 0.7rem;
+    padding-top: 1rem;
+  }
+  .bottom-arrow .line { width: 2px; height: 20px; background: var(--border); }
+
+  /* Clients grid */
+  .clients-grid {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .client-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+  }
+  .client-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--blue);
+  }
+
+  /* Config box */
+  .config {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin: 1rem 0;
+    overflow-x: auto;
+  }
+  .config .key { color: var(--cyan); }
+  .config .val { color: var(--green); }
+  .config .secret { color: var(--yellow); }
+
+  /* Shared DB indicator */
+  .shared-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 10px;
+    background: rgba(126,231,135,0.15);
+    color: var(--green);
+    font-weight: 600;
+    margin-left: 0.5rem;
+  }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Memex Architecture</h1>
+<p class="subtitle">Cross-platform memory system with autonomous dreaming</p>
+
+<!-- ===== Main Architecture ===== -->
+
+<div class="box clients">
+  <h3>MCP Clients</h3>
+  <div class="clients-grid">
+    <div class="client-item"><div class="client-dot"></div> Claude Code</div>
+    <div class="client-item"><div class="client-dot"></div> OpenClaw</div>
+    <div class="client-item"><div class="client-dot"></div> Cursor</div>
+    <div class="client-item"><div class="client-dot"></div> Zed</div>
+    <div class="client-item"><div class="client-dot"></div> Any MCP client</div>
+  </div>
+</div>
+
+<div class="arrow"><div class="line"></div><div class="head">▼</div><span>stdio JSON-RPC</span><div class="line"></div></div>
+
+<div class="box server">
+  <h3>Memex MCP Server <span style="font-weight:400;font-size:0.75rem;color:var(--muted)">src/mcp-server.ts</span></h3>
+  <div class="server-grid">
+    <div class="module tools">
+      <div class="label">Tools</div>
+      <code>memory_recall</code><br>
+      <code>memory_store</code><br>
+      <code>memory_forget</code><br>
+      <code>memory_dream</code><br>
+      <code>memory_stats</code>
+    </div>
+    <div class="module dream">
+      <div class="label">Background Dreaming</div>
+      <span style="color:var(--muted);font-size:0.75rem">
+        5min after start<br>
+        then every 24h<br><br>
+        light → deep → reflect
+      </span>
+    </div>
+    <div class="module store">
+      <div class="label">Data Layer</div>
+      <span style="color:var(--muted);font-size:0.75rem">
+        MemoryStore<br>
+        MemoryRetriever<br>
+        BM25 + Vector hybrid<br>
+        Intake guards (dedup)
+      </span>
+    </div>
+  </div>
+</div>
+
+<div class="bottom-grid">
+  <div class="box db">
+    <h3>SQLite <span class="shared-badge">shared</span></h3>
+    <div class="items">
+      <code>memex.sqlite</code><br>
+      memories + vectors + FTS5<br>
+      WAL mode (concurrent access)<br><br>
+      Same file used by:<br>
+      MCP server + OpenClaw plugin
+    </div>
+  </div>
+
+  <div></div>
+
+  <div style="display:flex;flex-direction:column;gap:0.75rem;width:100%">
+    <div class="box embed">
+      <h3>Embedding Server</h3>
+      <div class="items">
+        <code>Qwen3-Embedding-4B</code><br>
+        llama-swap @ inference host<br>
+        <code>/v1/embeddings</code>
+      </div>
+    </div>
+    <div class="box llm">
+      <h3>Reflection LLM</h3>
+      <div class="items">
+        <code>qwen3.5-27b</code><br>
+        LM Studio @ local host<br>
+        <code>/v1/chat/completions</code>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Startup Flow ===== -->
+<h2>Startup Sequence</h2>
+<div class="flow">
+  <div class="flow-step startup">
+    <div class="step-title">Claude Code</div>
+    <div class="step-detail">reads .mcp.json</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step op">
+    <div class="step-title">op run</div>
+    <div class="step-detail">resolves op:// secrets<br>in env vars</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step init">
+    <div class="step-title">Server Init</div>
+    <div class="step-detail">open SQLite DB<br>create embedder<br>configure LLM</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step connect">
+    <div class="step-title">stdio Connect</div>
+    <div class="step-detail">register 5 tools<br>listen for calls</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step schedule">
+    <div class="step-title">Schedule Dreams</div>
+    <div class="step-detail">setTimeout 5m<br>setInterval 24h</div>
+  </div>
+</div>
+
+<!-- ===== Dream Cycle ===== -->
+<h2>Dream Cycle (Autonomous)</h2>
+<div class="flow">
+  <div class="flow-step light">
+    <div class="step-title">Light Sweep</div>
+    <div class="step-detail">exact dedup<br>noise removal<br>fragment purge</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step deep">
+    <div class="step-title">Deep Sweep</div>
+    <div class="step-detail">recall-based scoring<br>session import decay<br>ephemeral eviction</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step reflect">
+    <div class="step-title">Reflection</div>
+    <div class="step-detail">send 50 memories → LLM<br>synthesize learnings<br>detect contradictions</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step result">
+    <div class="step-title">Result</div>
+    <div class="step-detail">store learnings (0.85)<br>demote superseded (0.1)<br>log to stderr</div>
+  </div>
+</div>
+
+<!-- ===== Recall Flow ===== -->
+<h2>memory_recall Flow</h2>
+<div class="flow">
+  <div class="flow-step query">
+    <div class="step-title">Query</div>
+    <div class="step-detail">"deployment<br>preferences"</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step embed">
+    <div class="step-title">Embed</div>
+    <div class="step-detail">query → vector<br>via embedding server</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step search">
+    <div class="step-title">Hybrid Search</div>
+    <div class="step-detail">vector similarity<br>+ BM25 keyword<br>+ z-score fusion</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step rank">
+    <div class="step-title">Rank</div>
+    <div class="step-detail">recency boost<br>importance weight<br>length norm</div>
+  </div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step return">
+    <div class="step-title">Return</div>
+    <div class="step-detail">top-k results<br>with scores</div>
+  </div>
+</div>
+
+<!-- ===== Config ===== -->
+<h2>Configuration (.mcp.json)</h2>
+<div class="config">
+<span class="key">MEMEX_EMBED_ENDPOINT</span> = <span class="val">http://&lt;embed-host&gt;:8090</span>  <span style="color:var(--muted)">← /v1 appended auto</span><br>
+<span class="key">MEMEX_EMBED_MODEL</span>    = <span class="val">Qwen3-Embedding-4B-Q8_0</span><br>
+<span class="key">MEMEX_EMBED_DIM</span>      = <span class="val">2560</span><br>
+<span class="key">MEMEX_EMBED_API_KEY</span>  = <span class="secret">op://<vault>/<item>/...</span>  <span style="color:var(--muted)">← resolved by op run</span><br>
+<span class="key">MEMEX_LLM_ENDPOINT</span>   = <span class="val">http://&lt;llm-host&gt;:1234</span><br>
+<span class="key">MEMEX_LLM_MODEL</span>      = <span class="val">qwen3.5-27b-...</span><br>
+<span class="key">MEMEX_LLM_API_KEY</span>    = <span class="secret">op://<vault>/<item>/...</span>  <span style="color:var(--muted)">← resolved by op run</span><br>
+<br>
+<span style="color:var(--muted)">Optional:</span><br>
+<span class="key">MEMEX_DB_PATH</span>        = <span class="val">~/.openclaw/memory/memex/memex.sqlite</span>  <span style="color:var(--muted)">← default</span><br>
+<span class="key">MEMEX_DREAM_INTERVAL</span> = <span class="val">86400000</span>  <span style="color:var(--muted)">← ms, default 24h</span><br>
+<span class="key">MEMEX_NO_DREAM</span>       = <span class="val">1</span>  <span style="color:var(--muted)">← disable background dreaming</span>
+</div>
+
+<footer>
+  Memex v0.6.0 — April 2026
+</footer>
+
+<script src="/nav.js"></script>
+</body>
+</html>

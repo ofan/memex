@@ -11,6 +11,7 @@
  *   const store = createStore();
  */
 import { openDatabase, loadSqliteVec } from "./db.js";
+// @ts-expect-error - picomatch ships no types
 import picomatch from "picomatch";
 import { createHash } from "crypto";
 import { realpathSync, mkdirSync } from "node:fs";

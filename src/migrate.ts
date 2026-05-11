@@ -149,7 +149,7 @@ export class MemoryMigrator {
       if (limit) query = query.limit(limit);
       const entries = await query.toArray();
 
-      return entries.map((row): LegacyMemoryEntry => ({
+      return entries.map((row: any): LegacyMemoryEntry => ({
         id: row.id as string,
         text: row.text as string,
         vector: row.vector as number[],

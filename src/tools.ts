@@ -3,7 +3,7 @@
  * Memory management tools for AI agents
  */
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { stringEnum } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { MemoryRetriever, RetrievalResult } from "./retriever.js";
@@ -344,6 +344,13 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
               category: category as any, scope: targetScope,
               metadata: JSON.stringify({ source: "agent" }),
             });
+          }
+
+          if (!entry) {
+            return {
+              content: [{ type: "text", text: `Memory rejected (likely duplicate or fragment).` }],
+              details: { action: "rejected", reason: "store_returned_null" },
+            };
           }
 
           context.track?.("store", { chunked: chunks.length > 1, chunks: chunks.length, source: "tool", category, ...sw.timings });

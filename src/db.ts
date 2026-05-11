@@ -8,7 +8,7 @@
 
 import { createRequire } from "node:module";
 
-export const isBun = typeof globalThis.Bun !== "undefined";
+export const isBun = typeof (globalThis as any).Bun !== "undefined";
 
 let _Database: any;
 let _sqliteVecLoad: (db: any) => void;
