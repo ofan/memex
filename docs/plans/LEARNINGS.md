@@ -1,5 +1,13 @@
 # Learnings — April 2026 Session
 
+## v0.7.1 security bump — vulnerability deltas
+
+Tracking transitive-dependency vulnerability counts as the security-bump loop progresses. Baseline captured 2026-05-10 right after v0.7.0 ship.
+
+| Stage | critical | high | moderate | low | total |
+|---|---|---|---|---|---|
+| **baseline (v0.7.0)** | 2 | 6 | 10 | 0 | **18** |
+
 ## Technical Learnings
 
 ### Entity boost doesn't work as a score multiplier
