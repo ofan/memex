@@ -21,10 +21,10 @@ Each item is mechanically scoped. If any item hits a real conflict, surface imme
 
 ### LOOP.M1 — Merge `memex-v0.7` → `main`
 - [x] **M1.1** Branch divergence confirmed: memex-v0.7 has 153 commits not in main (all v0.7 work); main has 22 commits not in memex-v0.7 (v0.6.2 release fixes). Common ancestor: `ebe1907 chore: bump version to 0.5.12`. **Real 3-way merge required** (not ff). Direction: memex-v0.7 → main, forward-only, no force push. Conflicts likely on `package.json`, `CHANGELOG.md`, `dist/`. If conflicts, M1.2 will stop and mark [?].
-- [ ] **M1.2** `git checkout main && git pull origin main`. Then `git merge --no-ff memex-v0.7 -m "merge: v0.7.1 work into main"`. If conflicts, **stop and mark [?]** — surface for user resolution.
-- [ ] **M1.3** Verify post-merge: `npm test` + `npm run build` on main. Both must pass.
-- [ ] **M1.4** Push main: `git push origin main`. Side-effect: 2 stale dependabot alerts may auto-close after dependabot re-scans (next scheduled scan; not synchronous).
-- [ ] **M1.5** Switch back to memex-v0.7 for remaining items.
+- [?] **M1.2** Merge produced conflicts in 9 files: `package.json`, `package-lock.json`, `CHANGELOG.md`, `index.ts`, `openclaw.plugin.json`, `src/memory-instructions.ts`, `tests/plugin-mock.test.ts`, `dist/src/tools.js.map`, `dist/src/unified-retriever.js`, `dist/src/unified-retriever.js.map`. **Every conflict is "v0.7's version wins"** (newer code, supersedes the v0.6.2 release-fix commits on main). But per plan rule, stopped and aborted — surfacing for user decision. **Three paths**: (a) user resolves manually with `git merge --no-ff memex-v0.7` then accepts v0.7's side on each; (b) tell loop to do `git merge -X theirs --no-ff memex-v0.7` (auto-take v0.7's version everywhere); (c) abandon merge, accept that main stays at v0.6.2 indefinitely and dependabot UI shows stale alerts. Option (b) is what I'd do given the conflict topology, but it's not in the loop's mandate without user OK.
+- [?] **M1.3** Blocked by M1.2.
+- [?] **M1.4** Blocked by M1.2.
+- [?] **M1.5** N/A — never left memex-v0.7 (merge aborted).
 
 ### LOOP.M2 — Switch `@sinclair/typebox` → unscoped `typebox`
 **Goal**: align memex with openclaw's typebox choice; eliminate the dual-package situation; remove the 4 type-bridge casts in `src/tools.ts`.
