@@ -7,6 +7,7 @@ Tracking transitive-dependency vulnerability counts as the security-bump loop pr
 | Stage | critical | high | moderate | low | total |
 |---|---|---|---|---|---|
 | **baseline (v0.7.0)** | 2 | 6 | 10 | 0 | **18** |
+| **after `npm audit fix`** | 0 | 0 | 0 | 0 | **0** |
 
 ## Technical Learnings
 
