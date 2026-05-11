@@ -40,7 +40,7 @@ Each item is mechanically scoped. If any item hits a real conflict, surface imme
 ### LOOP.M3 — CI: bump GitHub Actions to Node 24-compatible majors
 **Goal**: pre-empt June 2026 GitHub deadline; silence the 6+ deprecation warnings on every CI run.
 
-- [ ] **M3.1** Inspect `.github/workflows/release.yml` (and any others under `.github/workflows/`). List every `uses:` line that names a v4-or-older action.
+- [x] **M3.1** Two workflows audited: `release.yml` and `ci.yml`. Seven `uses:` lines total — 4× `actions/checkout@v4`, 2× `actions/setup-node@v4`, 1× `softprops/action-gh-release@v2`. All are v4-or-older and trigger Node 20 deprecation warnings per CI annotation.
 - [ ] **M3.2** Bump `actions/checkout@v4` → `@v5`, `actions/setup-node@v4` → `@v5`. For `softprops/action-gh-release@v2`, check the GitHub releases page (or `gh api`) for the latest major; bump if a newer one exists that supports Node 24.
 - [ ] **M3.3** Don't trigger CI by editing the workflow alone — the workflow only fires on `v*` tag push (per existing config). Verify by inspecting the `on:` block. If the workflow would auto-trigger on push to memex-v0.7, surface and pause.
 - [ ] **M3.4** Commit + push. Next tag push (whenever) will exercise the new action versions.
