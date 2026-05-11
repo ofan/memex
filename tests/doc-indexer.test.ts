@@ -104,9 +104,9 @@ describe("doc-indexer", () => {
 
     it("respects custom glob patterns", async () => {
       await writeFile(join(docsDir, "readme.md"), "# README");
-      await writeFile(join(docsDir, "code.ts"), "const x = 1;");
+      await writeFile(join(docsDir, "code.js"), "const x = 1;");
 
-      const result = await indexPath(store.db, { path: docsDir, name: "test", pattern: "**/*.ts" });
+      const result = await indexPath(store.db, { path: docsDir, name: "test", pattern: "**/*.js" });
 
       assert.equal(result.indexed, 1); // Only the .ts file
     });

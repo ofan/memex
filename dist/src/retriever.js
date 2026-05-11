@@ -4,6 +4,9 @@
  */
 import { filterNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
+import { extractEntities, entityOverlap } from "./entities.js";
+import { expandOneHop, LINK_SCORE_DISCOUNT_FACTOR } from "./graph.js";
+import { withTransientRetry } from "./transient-retry.js";
 // ============================================================================
 // Default Configuration
 // ============================================================================
@@ -218,8 +221,37 @@ export class MemoryRetriever {
         ]);
         sw.lap("search");
         const fusedResults = await this.fuseResults(vectorResults, bm25Results);
+        // Graph expansion: one-hop through entity links (disabled by default)
+        if (this.config.entityGraph) {
+            const fusedIds = fusedResults.map(r => r.entry.id);
+            try {
+                const linkedIds = expandOneHop(this.store.db, fusedIds);
+                if (linkedIds.length > 0) {
+                    const bestScore = fusedResults[0]?.score || 0;
+                    for (const linkedId of linkedIds.slice(0, 5)) {
+                        if (fusedResults.some(r => r.entry.id === linkedId))
+                            continue;
+                        const row = this.store.db.prepare("SELECT id, text, category, scope, importance, timestamp, metadata FROM memories WHERE id = ?").get(linkedId);
+                        if (row) {
+                            fusedResults.push({
+                                entry: { ...row, vector: [] },
+                                score: bestScore * LINK_SCORE_DISCOUNT_FACTOR,
+                                sources: { graph: true },
+                            });
+                        }
+                    }
+                }
+            }
+            catch { /* graph not available — skip */ }
+        }
         sw.lap("fuse");
-        const filtered = fusedResults.filter(r => r.score >= this.config.minScore);
+        // Entity boost (disabled by default — BM25 handles keyword entities)
+        let postEntityResults = fusedResults;
+        if (this.config.entityBoost) {
+            const queryEntities = extractEntities(query);
+            postEntityResults = this.applyEntityBoost(fusedResults, queryEntities);
+        }
+        const filtered = postEntityResults.filter(r => r.score >= this.config.minScore);
         const reranked = this.config.rerank !== "none"
             ? await this.rerankResults(query, queryVector, filtered.slice(0, limit * 2))
             : filtered;
@@ -365,64 +397,109 @@ export class MemoryRetriever {
                 const documents = results.map(r => r.entry.text.slice(0, 1500));
                 // Build provider-specific request
                 const { headers, body } = buildRerankRequest(provider, this.config.rerankApiKey, model, query, documents, results.length);
-                // Timeout: 15 seconds (model swap on llama-swap can take 2-5s)
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 15000);
-                const response = await fetch(endpoint, {
-                    method: "POST",
-                    headers,
-                    body: JSON.stringify(body),
-                    signal: controller.signal,
-                });
-                clearTimeout(timeout);
-                if (response.ok) {
-                    const data = await response.json();
-                    // Parse provider-specific response into unified format
-                    const parsed = parseRerankResponse(provider, data);
-                    if (!parsed) {
-                        console.warn("Rerank API: invalid response shape, falling back to cosine");
-                    }
-                    else {
-                        // Build a Set of returned indices to identify unreturned candidates
-                        const returnedIndices = new Set(parsed.map(r => r.index));
-                        const reranked = parsed
-                            .filter(item => item.index >= 0 && item.index < results.length)
-                            .map(item => {
-                            const original = results[item.index];
-                            // Blend: 80% cross-encoder score + 20% original fused score
-                            // High reranker weight ensures irrelevant results (reranker=0) are demoted
-                            const blendedScore = clamp01(item.score * 0.8 + original.score * 0.2);
-                            return {
-                                ...original,
-                                score: blendedScore,
-                                sources: {
-                                    ...original.sources,
-                                    reranked: { score: item.score },
-                                },
-                            };
+                // 15s per-attempt timeout, retried up to 4 times on transient
+                // upstream failures (502/503/504/AbortError). Persistent failures
+                // fall through to the catch block → cosine fallback.
+                const response = await withTransientRetry(async () => {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 15000);
+                    try {
+                        const resp = await fetch(endpoint, {
+                            method: "POST",
+                            headers,
+                            body: JSON.stringify(body),
+                            signal: controller.signal,
                         });
-                        // Keep unreturned candidates with their original scores (slightly penalized)
-                        const unreturned = results
-                            .filter((_, idx) => !returnedIndices.has(idx))
-                            .map(r => ({ ...r, score: r.score * 0.8 }));
-                        return [...reranked, ...unreturned].sort((a, b) => b.score - a.score);
+                        if (!resp.ok) {
+                            const err = new Error(`rerank endpoint returned ${resp.status}`);
+                            err.status = resp.status;
+                            throw err;
+                        }
+                        return resp;
                     }
+                    finally {
+                        clearTimeout(timeout);
+                    }
+                });
+                // If we reach this point the response is ok; withTransientRetry
+                // threw on non-ok statuses and the outer catch handles them.
+                const data = await response.json();
+                // Parse provider-specific response into unified format
+                const parsed = parseRerankResponse(provider, data);
+                if (!parsed) {
+                    console.warn("Rerank API: invalid response shape, returning hybrid-fusion ranking unchanged");
                 }
                 else {
-                    const errText = await response.text().catch(() => "");
-                    console.warn(`Rerank API returned ${response.status}: ${errText.slice(0, 200)}, falling back to cosine`);
+                    // Build a Set of returned indices to identify unreturned candidates
+                    const returnedIndices = new Set(parsed.map(r => r.index));
+                    // Configurable rerank/fusion blend (see RetrievalConfig.rerankBlendWeight).
+                    // Default: 0.8 reranker + 0.2 original fused score. Lower values
+                    // protect fusion winners from overconfident reranker calls.
+                    const blendWeight = this.config.rerankBlendWeight ?? 0.8;
+                    const fusionWeight = 1 - blendWeight;
+                    const scoreMode = this.config.rerankScoreMode ?? "raw";
+                    // For rank-mode scoring, convert the reranker's raw scores into
+                    // rank-normalized values (top-1 = 1.0, top-k = 1 - (k-1)/N). This
+                    // makes the rerank signal "ordinal" so saturated reranker output
+                    // (all scores near 1.0) can't get dissolved by the fusion gap
+                    // during blending.
+                    const rerankScoreByIndex = new Map();
+                    if (scoreMode === "rank") {
+                        const sorted = [...parsed].sort((a, b) => b.score - a.score);
+                        const n = sorted.length || 1;
+                        sorted.forEach((item, rank) => {
+                            rerankScoreByIndex.set(item.index, 1 - rank / n);
+                        });
+                    }
+                    const reranked = parsed
+                        .filter(item => item.index >= 0 && item.index < results.length)
+                        .map(item => {
+                        const original = results[item.index];
+                        const rerankScore = scoreMode === "rank"
+                            ? (rerankScoreByIndex.get(item.index) ?? 0)
+                            : item.score;
+                        const blendedScore = clamp01(rerankScore * blendWeight + original.score * fusionWeight);
+                        return {
+                            ...original,
+                            score: blendedScore,
+                            sources: {
+                                ...original.sources,
+                                reranked: { score: item.score },
+                            },
+                        };
+                    });
+                    // Keep unreturned candidates with their original scores (slightly penalized)
+                    const unreturned = results
+                        .filter((_, idx) => !returnedIndices.has(idx))
+                        .map(r => ({ ...r, score: r.score * 0.8 }));
+                    return [...reranked, ...unreturned].sort((a, b) => b.score - a.score);
                 }
             }
             catch (error) {
-                if (error instanceof Error && error.name === "AbortError") {
-                    console.warn("Rerank API timed out (15s), falling back to cosine");
+                const errStatus = error?.status;
+                if (typeof errStatus === "number") {
+                    console.warn(`Rerank API returned ${errStatus} after retries, returning hybrid-fusion ranking unchanged`);
+                }
+                else if (error instanceof Error && error.name === "AbortError") {
+                    console.warn("Rerank API timed out after retries, returning hybrid-fusion ranking unchanged");
                 }
                 else {
-                    console.warn("Rerank API failed, falling back to cosine:", error);
+                    console.warn("Rerank API failed, falling back to calibrated scores:", error);
                 }
             }
+            // Rerank was configured but the API call failed. Return the input
+            // results unchanged — the hybrid-fusion ranking is already a good
+            // default and is what the domain eval passes on. (Previously this
+            // fell through to the cosine-similarity fallback below, which
+            // aggressively re-ranked and displaced correct fusion winners.
+            // That behavior is intended for the case where rerank is not
+            // configured at all, not for transient rerank API failures.)
+            return results;
         }
-        // Fallback: lightweight cosine similarity rerank (skip if vectors unavailable/mismatched)
+        // Cosine-similarity second pass — runs ONLY when no cross-encoder rerank
+        // is configured at all (e.g. in a lightweight deployment without a
+        // reranker endpoint). Improves pure BM25 results slightly by mixing in
+        // vector similarity.
         try {
             const reranked = results.map(result => {
                 if (!result.entry.vector || result.entry.vector.length !== queryVector.length) {
@@ -442,7 +519,7 @@ export class MemoryRetriever {
             return reranked.sort((a, b) => b.score - a.score);
         }
         catch (error) {
-            console.warn("Reranking failed, returning original results:", error);
+            console.warn("Cosine fallback reranking failed, returning original results:", error);
             return results;
         }
     }
@@ -572,6 +649,32 @@ export class MemoryRetriever {
      * (e.g. 3 similar "SVG style" memories) while keeping them available
      * if the pool is small.
      */
+    /**
+     * Entity boost: memories sharing entities with the query get a score boost.
+     * Implements ACT-R spreading activation as a 3rd retrieval signal.
+     */
+    applyEntityBoost(results, queryEntities) {
+        if (queryEntities.length === 0)
+            return results;
+        // Entity boost weight. Set to 0 to disable (BM25 already captures keyword entities).
+        // Tuning on domain eval: 0.0 = 12/15, 0.15 = 11/15, 0.50 = 11/15, 0.75 = 10/15.
+        // Keeping at 0 for now — entity boost hurts intra-cluster ranking.
+        const ENTITY_BOOST_WEIGHT = parseFloat(process.env.ENTITY_BOOST_WEIGHT || "0");
+        const boosted = results.map(r => {
+            let memEntities = [];
+            try {
+                const meta = JSON.parse(r.entry.metadata || "{}");
+                memEntities = meta.entities || [];
+            }
+            catch { }
+            const overlap = entityOverlap(queryEntities, memEntities);
+            if (overlap === 0)
+                return r;
+            const boost = 1 + (overlap / queryEntities.length) * ENTITY_BOOST_WEIGHT;
+            return { ...r, score: r.score * boost };
+        });
+        return boosted.sort((a, b) => b.score - a.score);
+    }
     applyMMRDiversity(results, similarityThreshold = 0.85) {
         if (results.length <= 1)
             return results;

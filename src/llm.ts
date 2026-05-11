@@ -2,7 +2,7 @@
  * llm.ts - LLM abstraction layer for QMD using OpenAI-compatible HTTP endpoints
  *
  * Replaces node-llama-cpp with HTTP calls to a shared embedding/reranker server
- * (e.g., llama.cpp router on Mac Mini or any OpenAI-compatible API).
+ * (e.g., a local llama.cpp router on a homelab host, or any OpenAI-compatible API).
  */
 
 import OpenAI from "openai";

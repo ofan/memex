@@ -1,10 +1,10 @@
 # Benchmark & Comparison Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: Superseded.** See 001 status note. Bakeoff harness + domain eval + fast-benchmark are sufficient.
 
 **Goal:** Build quality benchmarks (BEIR + LongMemEval + real data), usage simulation (4 scenarios), and feature comparison against SOTA memory systems. Produce actionable optimization recommendations.
 
-**Architecture:** Three new benchmark scripts (`quality-bench.ts`, `simulation-bench.ts`) plus helper modules (`plugin-mock.ts`, `beir-loader.ts`, `ir-metrics.ts`). All use the same bench harness pattern from existing `benchmark.ts`. Comparison is a research doc. Requires Mac Mini llama.cpp at localhost:8090.
+**Architecture:** Three new benchmark scripts (`quality-bench.ts`, `simulation-bench.ts`) plus helper modules (`plugin-mock.ts`, `beir-loader.ts`, `ir-metrics.ts`). All use the same bench harness pattern from existing `benchmark.ts`. Comparison is a research doc. Requires Host B llama.cpp at localhost:8090.
 
 **Tech Stack:** TypeScript, Node.js test runner via jiti, LanceDB, SQLite/sqlite-vec, fetch for BEIR dataset download.
 

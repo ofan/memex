@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "memex": {
+      "type": "http",
+      "url": "${MEMEX_ENDPOINT}",
+      "headers": {
+        "Authorization": "Bearer ${MEMEX_AUTH_TOKEN}"
+      }
+    }
+  }
+}

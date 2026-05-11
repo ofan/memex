@@ -2,11 +2,10 @@
  * Agent Tool Definitions
  * Memory management tools for AI agents
  */
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { stringEnum } from "openclaw/plugin-sdk/core";
 import { isNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
-import { anchor, expandAnchor, AnchorAmbiguityError } from "./anchor.js";
 // ============================================================================
 // Types
 // ============================================================================
@@ -92,11 +91,11 @@ export function registerMemoryRecallTool(api, context) {
                         .map((r, i) => {
                         if (r.source === "conversation") {
                             const meta = r.metadata;
-                            return `${i + 1}. [mem:${anchor(meta.memoryId)} · ${meta.category} · ${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
+                            return `${i + 1}. [memory] [${meta.memoryId}] [${meta.category}:${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
                         }
                         else {
                             const meta = r.metadata;
-                            return `${i + 1}. [doc:${anchor(r.id)} · ${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
+                            return `${i + 1}. [doc] [${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
                         }
                     })
                         .join("\n");
@@ -137,11 +136,11 @@ export function registerMemoryRecallTool(api, context) {
                         .map((r, i) => {
                         if (r.source === "conversation") {
                             const meta = r.metadata;
-                            return `${i + 1}. [mem:${anchor(meta.memoryId)} · ${meta.category} · ${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
+                            return `${i + 1}. [memory] [${meta.memoryId}] [${meta.category}:${meta.scope}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
                         }
                         else {
                             const meta = r.metadata;
-                            return `${i + 1}. [doc:${anchor(r.id)} · ${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
+                            return `${i + 1}. [doc] [${meta.displayPath}] ${meta.title}: ${r.text.slice(0, 200)}${r.text.length > 200 ? '...' : ''} (${(r.score * 100).toFixed(0)}%)`;
                         }
                     })
                         .join("\n");
@@ -183,7 +182,7 @@ export function registerMemoryRecallTool(api, context) {
                         sources.push("BM25");
                     if (r.sources.reranked)
                         sources.push("reranked");
-                    return `${i + 1}. [mem:${anchor(r.entry.id)} · ${r.entry.category} · ${r.entry.scope}] ${r.entry.text} (${(r.score * 100).toFixed(0)}%${sources.length > 0 ? `, ${sources.join('+')}` : ''})`;
+                    return `${i + 1}. [${r.entry.id}] [${r.entry.category}:${r.entry.scope}] ${r.entry.text} (${(r.score * 100).toFixed(0)}%${sources.length > 0 ? `, ${sources.join('+')}` : ''})`;
                 })
                     .join("\n");
                 context.track?.("recall", { results: results.length, source: "tool", mode: "fallback", ...context.retriever.lastTimings, ...sw.timings });
@@ -274,6 +273,12 @@ export function registerMemoryStoreTool(api, context) {
                         metadata: JSON.stringify({ source: "agent" }),
                     });
                 }
+                if (!entry) {
+                    return {
+                        content: [{ type: "text", text: `Memory rejected (likely duplicate or fragment).` }],
+                        details: { action: "rejected", reason: "store_returned_null" },
+                    };
+                }
                 context.track?.("store", { chunked: chunks.length > 1, chunks: chunks.length, source: "tool", category, ...sw.timings });
                 return {
                     content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" in scope '${targetScope}'` }],
@@ -300,10 +305,10 @@ export function registerMemoryForgetTool(api, context) {
     api.registerTool({
         name: "memory_forget",
         label: "Memory Forget",
-        description: "Delete specific memories. Accepts a search query, a full memory ID, or a citation anchor (8+ hex chars from a `[mem:...]` reference).",
+        description: "Delete specific memories. Supports both search-based and direct ID-based deletion.",
         parameters: Type.Object({
             query: Type.Optional(Type.String({ description: "Search query to find memory to delete" })),
-            memoryId: Type.Optional(Type.String({ description: "Memory ID, citation anchor (8 hex chars), or longer prefix" })),
+            memoryId: Type.Optional(Type.String({ description: "Specific memory ID to delete" })),
             scope: Type.Optional(Type.String({ description: "Scope to search/delete from (optional)" })),
         }),
         async execute(_toolCallId, params) {
@@ -324,42 +329,12 @@ export function registerMemoryForgetTool(api, context) {
                     }
                 }
                 if (memoryId) {
-                    // Resolve anchor prefixes (8+ hex chars) to full ids by scanning
-                    // accessible memories. Full UUIDs pass through unchanged.
-                    let resolvedId = memoryId;
-                    if (memoryId.length < 32) {
-                        const accessible = await context.store.list(undefined, undefined, 10000, 0);
-                        const accessibleIds = accessible
-                            .filter(e => scopeFilter.includes(e.scope))
-                            .map(e => e.id);
-                        try {
-                            const expanded = expandAnchor(memoryId, accessibleIds);
-                            if (!expanded) {
-                                context.track?.("forget", { found: false, anchor_prefix: true, ...sw.timings });
-                                return {
-                                    content: [{ type: "text", text: `No memory matches anchor "${memoryId}".` }],
-                                    details: { error: "anchor_not_found", anchor: memoryId },
-                                };
-                            }
-                            resolvedId = expanded;
-                        }
-                        catch (err) {
-                            if (err instanceof AnchorAmbiguityError) {
-                                context.track?.("forget", { found: false, anchor_ambiguous: true, ...sw.timings });
-                                return {
-                                    content: [{ type: "text", text: err.message }],
-                                    details: { error: "anchor_ambiguous", anchor: memoryId, matches: err.matches },
-                                };
-                            }
-                            throw err;
-                        }
-                    }
-                    const deleted = await context.store.delete(resolvedId, scopeFilter);
+                    const deleted = await context.store.delete(memoryId, scopeFilter);
                     if (deleted) {
-                        context.track?.("forget", { found: true, via_anchor: resolvedId !== memoryId, ...sw.timings });
+                        context.track?.("forget", { found: true, ...sw.timings });
                         return {
-                            content: [{ type: "text", text: `Memory ${anchor(resolvedId)} forgotten.` }],
-                            details: { action: "deleted", id: resolvedId, anchor: anchor(resolvedId) },
+                            content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
+                            details: { action: "deleted", id: memoryId },
                         };
                     }
                     else {
@@ -394,7 +369,7 @@ export function registerMemoryForgetTool(api, context) {
                         }
                     }
                     const list = results
-                        .map(r => `- [mem:${anchor(r.entry.id)}] ${r.entry.text.slice(0, 60)}${r.entry.text.length > 60 ? '...' : ''}`)
+                        .map(r => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}${r.entry.text.length > 60 ? '...' : ''}`)
                         .join("\n");
                     return {
                         content: [

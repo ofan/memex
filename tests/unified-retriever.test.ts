@@ -266,7 +266,7 @@ describe("UnifiedRetriever — Task 2: Source Routing", () => {
     });
 
     it("routes 'contents of' to document", () => {
-      assert.equal(retriever.routeQuery("show me the contents of index.ts"), "document");
+      assert.equal(retriever.routeQuery("show me the contents of index.js"), "document");
     });
 
     it("routes 'look at' to document", () => {
@@ -1108,6 +1108,265 @@ describe("UnifiedRetriever — Task 4: Confidence-Gated Reranking", () => {
       } finally {
         globalThis.fetch = originalFetch;
       }
+    });
+
+    it("skips rerank when top rawScore exceeds confidenceThreshold", async () => {
+      // Regression test for bug where `shouldRerank` compared weighted `score`
+      // (max 0.55) against `confidenceThreshold` 0.88 — unreachable dead code.
+      // After the fix, the gate uses `rawScore` which is the [0,1] fused value.
+      const { embedder } = createTrackingEmbedder();
+      let fetchCalled = false;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (...args: Parameters<typeof fetch>) => {
+        const url = typeof args[0] === "string" ? args[0] : (args[0] as Request).url;
+        if (url.includes("localhost:19999")) {
+          fetchCalled = true;
+          return new Response(JSON.stringify({
+            results: [
+              { index: 0, relevance_score: 0.9 },
+              { index: 1, relevance_score: 0.8 },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return originalFetch(...args);
+      };
+
+      try {
+        // Seed two memories with extremely different vector scores so the
+        // top candidate's sigmoid-fused rawScore exceeds threshold 0.65.
+        // (Max rawScore for 2 items with 1-stddev z-score ≈ sigmoid(1) ≈ 0.731)
+        // Also set confidenceGap very high so the gap check can't skip.
+        await store.store({
+          text: "Dark mode is the correct theme preference",
+          vector: makeVector(42),  // matches query vector
+          category: "preference",
+          scope: "global",
+          importance: 0.9,
+        });
+        await store.store({
+          text: "Something entirely unrelated about weather",
+          vector: makeVector(123),  // far from query vector
+          category: "fact",
+          scope: "global",
+          importance: 0.5,
+        });
+
+        const retriever = new UnifiedRetriever(store, null, embedder, {
+          minScore: 0.0,
+          confidenceThreshold: 0.65,  // below the ~0.73 max rawScore achievable with 2 items
+          confidenceGap: 0.99,  // disable gap-based skip
+          reranker: {
+            endpoint: "http://localhost:19999/rerank",
+            apiKey: "test-key",
+            model: "test-model",
+            provider: "jina",
+          },
+        });
+
+        await retriever.retrieve("what is my theme preference");
+        assert.equal(fetchCalled, false, "rerank should be skipped when top rawScore exceeds threshold");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe("mixed-source rerank", () => {
+    it("applies rerank across BOTH memory and document candidates", async () => {
+      // Regression coverage for the mixed-source path under rerank. Previous
+      // rerank-with-mock test only seeded documents; this one seeds memories
+      // AND documents and verifies the reranker sees the full merged pool,
+      // not just one source.
+      const { embedder } = createTrackingEmbedder();
+      let rerankDocsSentToApi: string[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (...args: Parameters<typeof fetch>) => {
+        const url = typeof args[0] === "string" ? args[0] : (args[0] as Request).url;
+        if (url.includes("localhost:19999")) {
+          // Capture what the reranker was asked to rank
+          const init = args[1] as RequestInit | undefined;
+          if (init && typeof init.body === "string") {
+            const body = JSON.parse(init.body);
+            rerankDocsSentToApi = body.documents as string[];
+          }
+          // Assign the highest rerank score to whatever index matches "dark mode"
+          const docs = rerankDocsSentToApi || [];
+          const results = docs.map((d, i) => ({
+            index: i,
+            relevance_score: d.toLowerCase().includes("dark mode") ? 0.95 : 0.10,
+          }));
+          return new Response(JSON.stringify({ results }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return originalFetch(...args);
+      };
+
+      try {
+        // Seed a memory
+        await store.store({
+          text: "User prefers dark mode for all interfaces at night",
+          vector: makeVector(42),
+          category: "preference",
+          scope: "global",
+          importance: 0.8,
+        });
+        // Mock a document candidate that's NOT about dark mode
+        const docSearch = async () => [
+          makeDocCandidate("doc-1", "API Reference", 0.5),
+          makeDocCandidate("doc-2", "Deploy Guide", 0.48),
+        ];
+
+        const retriever = new UnifiedRetriever(store, docSearch, embedder, {
+          minScore: 0.0,
+          confidenceThreshold: 1.0,  // threshold never exceeded → rerank fires
+          confidenceGap: 1.0,  // gap never exceeded → rerank fires
+          reranker: {
+            endpoint: "http://localhost:19999/rerank",
+            apiKey: "test-key",
+            model: "test-model",
+            provider: "jina",
+          },
+        });
+
+        const results = await retriever.retrieve("what are my theme preferences");
+
+        // The reranker was asked to rank BOTH the memory text AND the document
+        // chunks — verify we saw both content types in the probe.
+        assert.ok(rerankDocsSentToApi.length >= 1, "reranker should have been called");
+        const combined = rerankDocsSentToApi.join(" ");
+        assert.ok(combined.toLowerCase().includes("dark mode"), "memory text should be in rerank request");
+
+        // Post-rerank, the dark-mode memory should rank above the documents
+        // (because the mock reranker gave it 0.95 vs 0.10 for the docs).
+        assert.ok(results.length >= 1, "should return results");
+        // The top result should be the conversation memory with "dark mode"
+        const topSources = results.slice(0, 1).map(r => r.source);
+        assert.ok(
+          topSources.includes("conversation"),
+          `expected memory to be top-1 after rerank, but top source was ${topSources.join(",")}`,
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("preserves source diversity after rerank pushes one source to bottom", async () => {
+      // Source diversity should protect top-1 from each source even when
+      // the reranker would otherwise push all the winners to one source.
+      const { embedder } = createTrackingEmbedder();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (...args: Parameters<typeof fetch>) => {
+        const url = typeof args[0] === "string" ? args[0] : (args[0] as Request).url;
+        if (url.includes("localhost:19999")) {
+          // Return monotonically decreasing scores; the reranker "favors"
+          // whatever's at the top of the pool already.
+          const init = args[1] as RequestInit | undefined;
+          const body = init && typeof init.body === "string" ? JSON.parse(init.body) : { documents: [] };
+          const docs: string[] = body.documents || [];
+          const results = docs.map((_, i) => ({ index: i, relevance_score: 1.0 - i * 0.15 }));
+          return new Response(JSON.stringify({ results }), { status: 200 });
+        }
+        return originalFetch(...args);
+      };
+
+      try {
+        // 5 memories + 2 docs. Reranker will prefer the memories (index-order bias in mock).
+        for (let i = 0; i < 5; i++) {
+          await store.store({
+            text: `Memory about theme preference number ${i} with theme content`,
+            vector: makeVector(100 + i),
+            category: "preference",
+            scope: "global",
+            importance: 0.7,
+          });
+        }
+        const docSearch = async () => [
+          makeDocCandidate("doc-1", "Theme Config", 0.5),
+          makeDocCandidate("doc-2", "Color Schemes", 0.45),
+        ];
+
+        const retriever = new UnifiedRetriever(store, docSearch, embedder, {
+          minScore: 0.0,
+          confidenceThreshold: 0.99,
+          confidenceGap: 0.001,
+          reranker: {
+            endpoint: "http://localhost:19999/rerank",
+            apiKey: "test-key",
+            model: "test-model",
+            provider: "jina",
+          },
+        });
+
+        const results = await retriever.retrieve("theme preference settings", { limit: 10 });
+
+        // Source diversity: at least one document should appear in the output
+        // even though the memories dominate the rerank scores.
+        const sources = new Set(results.map(r => r.source));
+        assert.ok(
+          sources.has("document"),
+          `expected at least one document in mixed results, got sources: ${[...sources].join(",")}`,
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe("rerankBlendWeight", () => {
+    it("honors custom blend weight (0.5) — lower than default 0.7", async () => {
+      const { embedder } = createTrackingEmbedder();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (...args: Parameters<typeof fetch>) => {
+        const url = typeof args[0] === "string" ? args[0] : (args[0] as Request).url;
+        if (url.includes("localhost:19999")) {
+          return new Response(JSON.stringify({
+            results: [
+              { index: 0, relevance_score: 1.0 },
+              { index: 1, relevance_score: 0.0 },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return originalFetch(...args);
+      };
+      try {
+        const docSearch = async () => [
+          makeDocCandidate("doc-1", "First Doc", 0.5),
+          makeDocCandidate("doc-2", "Second Doc", 0.49),
+        ];
+        // With weight=0.5 and reranker scores 1.0/0.0, the blended scores
+        // should be 0.5*1.0 + 0.5*calibrated for doc-1 and 0.5*0.0 + 0.5*calibrated
+        // for doc-2. With weight=0.7 (default) they'd be closer to pure reranker.
+        const retriever = new UnifiedRetriever(store, docSearch, embedder, {
+          minScore: 0.0,
+          confidenceThreshold: 1.0,
+          confidenceGap: 1.0,
+          rerankBlendWeight: 0.5,
+          reranker: {
+            endpoint: "http://localhost:19999/rerank",
+            apiKey: "test-key",
+            model: "test-model",
+            provider: "jina",
+          },
+        });
+        const results = await retriever.retrieve("search for documents about the system");
+        assert.ok(results.length > 0);
+        // Doc-1 should still outscore doc-2 but the top score should be closer
+        // to the midpoint between rerank_score and calibrated than under the default.
+        // Main smoke check: the blend is applied (top != 1.0, bottom != 0.0).
+        if (results.length >= 2) {
+          assert.ok(results[0].score > results[1].score);
+          assert.ok(results[0].score < 1.0, "0.5 weight should reduce reranker influence");
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("default weight is 0.7 (preserves existing behavior)", () => {
+      const config = { ...DEFAULT_CONFIG };
+      assert.equal(config.rerankBlendWeight, 0.7);
     });
   });
 

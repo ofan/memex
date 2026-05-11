@@ -11,6 +11,7 @@ import OpenAI from "openai";
 import { createHash } from "node:crypto";
 import { connect as netConnect } from "node:net";
 import { smartChunk } from "./chunker.js";
+import { withTransientRetry } from "./transient-retry.js";
 /**
  * Custom fetch using raw TCP sockets that tolerates malformed HTTP responses
  * (e.g. duplicate Content-Length headers from llama.cpp router proxy).
@@ -279,7 +280,7 @@ export class Embedder {
         if (cached)
             return cached;
         try {
-            const response = await this.client.embeddings.create(this.buildPayload(text, task));
+            const response = await withTransientRetry(() => this.client.embeddings.create(this.buildPayload(text, task)));
             const embedding = response.data[0]?.embedding;
             if (!embedding) {
                 throw new Error("No embedding returned from provider");
@@ -353,7 +354,7 @@ export class Embedder {
             return texts.map(() => []);
         }
         try {
-            const response = await this.client.embeddings.create(this.buildPayload(validTexts, task));
+            const response = await withTransientRetry(() => this.client.embeddings.create(this.buildPayload(validTexts, task)));
             // Create result array with proper length
             const results = new Array(texts.length);
             // Fill in embeddings for valid texts

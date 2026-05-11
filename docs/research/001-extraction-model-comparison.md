@@ -1,8 +1,8 @@
-# Memory Extraction Model Comparison — Mac Mini M4
+# Memory Extraction Model Comparison — Host B M4
 
 > **Task:** Select the best on-device LLM to power memex's hot-path extraction: given a conversation turn, (1) decide if it's memory-worthy, and (2) extract the core fact/decision/preference in 1-2 sentences.
 >
-> **Hardware:** Mac Mini M4 (base chip, 16 GB unified memory, 120 GB/s bandwidth). ~8 GB VRAM headroom after existing models (Qwen3-Embedding-0.6B + bge-reranker-v2-m3 + Qwen3-0.6B-Instruct ≈ 3.5 GB).
+> **Hardware:** Host B M4 (base chip, 16 GB unified memory, 120 GB/s bandwidth). ~8 GB VRAM headroom after existing models (Qwen3-Embedding-0.6B + bge-reranker-v2-m3 + Qwen3-0.6B-Instruct ≈ 3.5 GB).
 >
 > **Backend:** llama.cpp (llama-swap, port 8090). GGUF format required.
 
@@ -35,7 +35,7 @@ LLM token generation on Apple Silicon is **memory-bandwidth-bound** for small ba
 max_tok/s = memory_bandwidth / model_size_in_memory
 ```
 
-Mac Mini M4 base: **120 GB/s** (vs 273 GB/s M4 Pro, 410 GB/s M4 Max).
+Host B M4 base: **120 GB/s** (vs 273 GB/s M4 Pro, 410 GB/s M4 Max).
 
 llama.cpp achieves ~65–75% of theoretical on M4 base via Metal shaders:
 
@@ -178,7 +178,7 @@ SmolLM2-1.7B is HuggingFace's "efficient on-device" model. It's slower than Llam
 | Est. speed on M4 base | 30–40 tok/s |
 | Est. 35-token latency | ~900–1,100ms |
 
-Phi-4-mini is actually 3.8B parameters — Microsoft's "mini" label is relative to Phi-4 (14B), not an actual small model. Benchmarks show ~65–75 tok/s on M4 Mac Mini Pro with Ollama (a faster chip variant), implying ~30–38 tok/s on M4 base. At ~1 second per extraction, it's 2–5× too slow for the hot path and uses 3.2 GB of precious VRAM.
+Phi-4-mini is actually 3.8B parameters — Microsoft's "mini" label is relative to Phi-4 (14B), not an actual small model. Benchmarks show ~65–75 tok/s on M4 Host B Pro with Ollama (a faster chip variant), implying ~30–38 tok/s on M4 base. At ~1 second per extraction, it's 2–5× too slow for the hot path and uses 3.2 GB of precious VRAM.
 
 **Verdict:** Excellent quality, wrong size for this use case.
 
@@ -269,4 +269,4 @@ Expected output tokens: 20–50. At 115 tok/s: **~175–435ms**. At 80% confiden
 
 ---
 
-*Report generated: 2026-03-08. LLM benchmarks are hardware- and version-sensitive; run `llama-bench` on your specific Mac Mini M4 to confirm latency numbers before committing.*
+*Report generated: 2026-03-08. LLM benchmarks are hardware- and version-sensitive; run `llama-bench` on your specific Host B M4 to confirm latency numbers before committing.*

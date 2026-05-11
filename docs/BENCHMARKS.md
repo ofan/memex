@@ -1,31 +1,31 @@
 # Benchmarks — memex
 
-**Updated:** 2026-03-18
+**Updated:** 2026-04-11
 
 ## Environment
 
 | Component | Value |
 |---|---|
-| VM | Ubuntu, Xeon CPU, 16GB RAM, Node 25.6.1 |
-| Embedding | Qwen3-Embedding-4B-Q8_0 (2560d) via llama-swap on Mac Mini M4 |
-| Reranker | bge-reranker-v2-m3-Q8_0 via same endpoint |
-| Network | VM → Mac Mini via Tailscale (~3-90ms RTT, WiFi jitter) |
+| Test host | Ubuntu, Xeon CPU, 16GB RAM, Node 25.9 |
+| Embedding | Qwen3-Embedding-4B-Q8_0 (2560d) via llama-swap on a dedicated Apple Silicon host |
+| Reranker | **Qwen3-Reranker-0.6B-Q8_0** via same endpoint (upgraded 2026-04-10, replaced bge-reranker-v2-m3-Q8_0) |
+| Network | Test host → inference host via Tailscale (~3-90ms RTT) |
 | Database | SQLite + sqlite-vec + FTS5 |
-| Memories | 1900 entries (avg 94 chars, max 650 chars) |
+| Memories | ~2100 entries (avg 94 chars, max 650 chars) |
 | Documents | 505 docs, 973 chunks |
 
 ---
 
 ## LongMemEval (ICLR 2025) — Conversation Memory Retrieval
 
-Cross-system conversation-memory benchmark. Measures **memory-only retrieval quality** — does not cover document search or the production mixed-source path (UnifiedRetriever). N=50, LongMemEval_s subset. Official LongMemEval prompts + GPT-4o-mini LLM-judge.
+Cross-system conversation-memory benchmark. Measures **memory-only retrieval quality** — does not cover document search or the production mixed-source path (UnifiedRetriever). N=50, LongMemEval_s subset. Official LongMemEval prompts + GPT-4o-mini LLM-judge. Numbers below are from `tests/fast-benchmark.ts` with chunked embeddings (2000-char chunks, 200-char overlap, max-sim aggregation).
 
-| Metric | Score | What it measures |
-|---|---|---|
-| **R@1** | **78%** | Correct session ranked #1 |
-| **R@3** | **90%** | Correct session in top 3 |
-| **R@5** | **96%** | Correct session in top 5 (auto-recall window) |
-| **E2E** | **90%** | LLM extracts correct answer from retrieved sessions |
+| Metric | No reranker | + Qwen3-Reranker-0.6B | What it measures |
+|---|---|---|---|
+| **R@1** | 78% | **82%** | Correct session ranked #1 |
+| **R@3** | 90% | **90%** | Correct session in top 3 |
+| **R@5** | 96% | 96% | Correct session in top 5 (auto-recall window) |
+| **E2E** | 90% | **94%** | LLM extracts correct answer from retrieved sessions |
 
 - **R@1** is the strictest — requires the retriever to put the exact right session at position 1.
 - **R@3** reflects production behavior where the LLM sees the top 3 results.
@@ -34,8 +34,9 @@ Cross-system conversation-memory benchmark. Measures **memory-only retrieval qua
 
 | System | R@1 | R@3 | E2E Accuracy | Reader LLM |
 |---|---|---|---|---|
+| **memex (Qwen3-Reranker)** | **82%** | **90%** | **94%** | GPT-4o |
 | Hindsight/TEMPR | — | — | 91.4% | GPT-4o |
-| **memex** | **78%** | **90%** | **90%** | GPT-4o |
+| memex (no reranker) | 78% | 90% | 90% | GPT-4o |
 | Zep/Graphiti | — | — | ~85% | GPT-4o |
 | mem0 (graph) | — | — | ~78% | GPT-4o |
 | MemGPT/Letta | — | — | ~75% | GPT-4o |
@@ -50,7 +51,7 @@ Full details: `docs/research/longmemeval-baseline-2026-03-18.md`
 
 ## Production Latencies
 
-Measured against 1900 memories + 505 documents.
+Measured against ~2100 memories + 505 documents.
 
 | Operation | Latency |
 |---|---|
@@ -110,14 +111,23 @@ Embedding API call dominates. Local compute (SQLite, fusion) is negligible.
 ## Reproduction
 
 ```bash
-# Unit tests (561+)
+# Unit tests (~700)
 node --import jiti/register --test tests/*.test.ts
 
-# LongMemEval fast benchmark (~1s, memory-only harness)
+# LongMemEval fast benchmark (~1s, memory-only harness, no LLM cost)
 TIER=fast node --import jiti/register tests/fast-benchmark.ts
 
-# LongMemEval E2E benchmark (~2min, memory-only harness)
-TIER=e2e GEMINI_API_KEY=... node --import jiti/register tests/fast-benchmark.ts
+# LongMemEval fast benchmark with Qwen3-Reranker (~2min, rerank adds latency)
+TIER=fast RERANK=1 RERANK_ENDPOINT=... RERANK_MODEL=Qwen3-Reranker-0.6B-Q8_0 RERANK_API_KEY=... \
+  node --import jiti/register tests/fast-benchmark.ts
+
+# LongMemEval E2E benchmark with fresh GPT-4o generation (~4min, OpenAI cost)
+TIER=e2e RERANK=1 LLM_API_KEY=... OPENAI_API_KEY=... \
+  node --import jiti/register tests/fast-benchmark.ts
+
+# Full bakeoff harness — PASS/HOLD/FAIL verdict for any candidate reranker
+./scripts/bakeoff reranker <endpoint> <model>
+./scripts/bakeoff reranker <endpoint> <model> --skip-e2e
 
 # BEIR document benchmark (fast FTS smoke)
 BEIR_MODE=fts BEIR_DATASETS=fiqa,scifact,nq node --import jiti/register tests/beir-benchmark.ts
