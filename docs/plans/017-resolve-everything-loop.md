@@ -67,7 +67,7 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 - [?] **27.3** Implementation explicitly deferred — feature work, not loop work. Marked [?] per plan rule.
 
 ### RES.21 — Issue #21: out-of-scope, mark
-- [?] **21.1** Add issue comment: "tracked separately — these are local OpenClaw infrastructure items, not memex code regressions. Memex-side: nothing to do. Out of scope for the resolve-everything loop." Mark `[?]` here.
+- [?] **21.1** Out-of-scope comment posted on issue #21 (https://github.com/ofan/memex/issues/21#issuecomment-4417756347). Reason: items are local OpenClaw infrastructure (WebSocket warnings, dir-permissions warnings, stale memex-audit sessions in gateway state, residual noise entries in user's personal DB) — none are memex code regressions. Issue stays open as personal tracker.
 
 ### RES.42 — PR #42: better-sqlite3 12.x (held)
 - [?] **42.1** Already has a rationale comment from M4.2. Leave open as tracker. Mark `[?]` with link to existing comment.
