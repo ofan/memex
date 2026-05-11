@@ -13,13 +13,13 @@
  * Usage:
  *   node --import jiti/register tests/fast-benchmark.ts
  *   TIER=pipeline node --import jiti/register tests/fast-benchmark.ts
- *   TIER=e2e LLM_MODEL=gemini-2.5-flash node --import jiti/register tests/fast-benchmark.ts
+ *   TIER=e2e node --import jiti/register tests/fast-benchmark.ts
  *
  * Environment:
  *   TIER             — "fast" (default), "pipeline", or "e2e"
- *   LLM_MODEL        — for e2e tier (default: gemini-2.5-flash)
- *   LLM_BASE_URL     — LLM endpoint
- *   LLM_API_KEY      — defaults to GEMINI_API_KEY
+ *   LLM_MODEL        — for e2e tier (default: gpt-4o)
+ *   LLM_BASE_URL     — LLM endpoint (default: OpenAI)
+ *   LLM_API_KEY      — defaults to OPENAI_API_KEY
  *   FUSION           — "zscore" (default), "weighted", "veconly"
  *   VEC_WEIGHT       — vector weight (default: 0.8)
  *   BM25_WEIGHT      — BM25 weight (default: 0.2)
@@ -39,8 +39,13 @@ const __dirname = dirname(__filename);
 // Config
 // ============================================================================
 
-const CACHE_PATH = join(__dirname, "fixtures", "longmemeval-cache", "research-cache-50.json");
-const CHUNK_SCORES_PATH = join(__dirname, "fixtures", "longmemeval-cache", "chunk-scores-50.json");
+// Cache paths — overridable via env vars so the bakeoff harness can point
+// the benchmark at an alternate cache (e.g. built with a candidate embedder)
+// without moving files.
+const CACHE_PATH = process.env.FAST_BENCH_CACHE_PATH ||
+  join(__dirname, "fixtures", "longmemeval-cache", "research-cache-50.json");
+const CHUNK_SCORES_PATH = process.env.FAST_BENCH_CHUNK_SCORES_PATH ||
+  join(__dirname, "fixtures", "longmemeval-cache", "chunk-scores-50.json");
 const TIER = (process.env.TIER || "fast") as "fast" | "pipeline" | "e2e";
 const FUSION = (process.env.FUSION || "zscore") as "zscore" | "weighted" | "veconly";
 const VEC_WEIGHT = parseFloat(process.env.VEC_WEIGHT || "0.8");
@@ -49,12 +54,12 @@ const POOL_VEC = parseInt(process.env.POOL_VEC || "30");
 const POOL_BM25 = parseInt(process.env.POOL_BM25 || "20");
 const USE_CHUNKS = process.env.CHUNKS !== "0"; // default: use chunks if available
 const RERANK = process.env.RERANK === "1";
-const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "http://REDACTED_IP:8090/v1/rerank";
-const RERANK_MODEL = process.env.RERANK_MODEL || "bge-reranker-v2-m3-Q8_0";
-const RERANK_API_KEY = process.env.RERANK_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
-const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai";
-const LLM_MODEL = process.env.LLM_MODEL || "gemini-2.5-flash";
-const LLM_API_KEY = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || "";
+const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "";
+const RERANK_MODEL = process.env.RERANK_MODEL || "";
+const RERANK_API_KEY = process.env.RERANK_API_KEY || "";
+const LLM_BASE_URL = process.env.LLM_BASE_URL || "";
+const LLM_MODEL = process.env.LLM_MODEL || "";
+const LLM_API_KEY = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "";
 const RESPONSES_DIR = join(__dirname, "fixtures", "longmemeval-cache");
 
 // ============================================================================
@@ -375,12 +380,22 @@ async function runPipeline(cache: ResearchCache): Promise<ExampleResult[]> {
       // Set the query vector for this example
       currentQueryVector = ex.query_vector;
 
+      // RERANK env var also wires through to TIER=pipeline (previously dead).
+      // Required when RERANK=1: RERANK_ENDPOINT, RERANK_MODEL, RERANK_API_KEY.
       const retriever = createRetriever(store, dummyEmbedder, {
         mode: "hybrid",
         fusionMethod: FUSION === "veconly" ? "weighted" : (FUSION as any),
         vectorWeight: FUSION === "veconly" ? 1.0 : VEC_WEIGHT,
         bm25Weight: FUSION === "veconly" ? 0.0 : BM25_WEIGHT,
-        rerank: "none",
+        rerank: RERANK ? "cross-encoder" : "none",
+        rerankEndpoint: RERANK_ENDPOINT,
+        rerankModel: RERANK_MODEL,
+        rerankApiKey: RERANK_API_KEY,
+        rerankProvider: "jina",
+        rerankBlendWeight: process.env.MEMEX_RERANK_BLEND_WEIGHT
+          ? parseFloat(process.env.MEMEX_RERANK_BLEND_WEIGHT)
+          : undefined,
+        rerankScoreMode: (process.env.MEMEX_RERANK_SCORE_MODE as "raw" | "rank" | undefined),
         candidatePoolSize: Math.max(POOL_VEC, POOL_BM25),
         minScore: 0.05,
         hardMinScore: 0.10,
@@ -435,7 +450,7 @@ async function runPipeline(cache: ResearchCache): Promise<ExampleResult[]> {
 
 async function addE2E(results: ExampleResult[]): Promise<void> {
   if (!LLM_API_KEY) {
-    console.log("No LLM_API_KEY — skipping E2E. Set GEMINI_API_KEY or LLM_API_KEY.");
+    console.log("No LLM_API_KEY — skipping E2E. Set OPENAI_API_KEY or LLM_API_KEY.");
     return;
   }
 
@@ -598,7 +613,7 @@ async function main() {
   if (USE_CHUNKS && existsSync(CHUNK_SCORES_PATH)) {
     const ct0 = performance.now();
     chunkCache = JSON.parse(readFileSync(CHUNK_SCORES_PATH, "utf-8"));
-    console.log(`Loaded chunk scores (${chunkCache!.metadata.chunk_size}c/${chunkCache!.metadata.chunk_overlap}o, ${chunkCache!.metadata.total_chunks_embedded} chunks) in ${((performance.now() - ct0) / 1000).toFixed(1)}s`);
+    console.log(`Loaded chunk scores (${chunkCache!.metadata.chunk_size}c/${chunkCache!.metadata.chunk_overlap}o, ${(chunkCache!.metadata as any).total_chunks_embedded} chunks) in ${((performance.now() - ct0) / 1000).toFixed(1)}s`);
   } else if (USE_CHUNKS) {
     console.log(`No chunk scores found (run build-chunk-cache.ts first). Using truncated vectors.`);
   } else {

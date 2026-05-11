@@ -10,6 +10,7 @@ import type { MemoryStore, MemoryEntry, MemorySearchResult } from "./memory.js";
 import type { Embedder } from "./embedder.js";
 import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 import { buildRerankRequest, parseRerankResponse } from "./retriever.js";
+import { withTransientRetry } from "./transient-retry.js";
 
 // =============================================================================
 // Types
@@ -39,6 +40,26 @@ export interface UnifiedRetrieverConfig {
   confidenceThreshold: number;
   /** Gap between top and second result for confidence check (default: 0.15) */
   confidenceGap: number;
+  /**
+   * Weight given to the cross-encoder rerank score when blending with the
+   * source-calibrated fused score. Final reranked score is:
+   *     blended = rerankBlendWeight * rerank_score + (1 - rerankBlendWeight) * calibrated_score
+   * Higher = reranker dominates. Lower = calibrated fusion has more say.
+   * Default: 0.7 (keeping the existing behavior).
+   */
+  rerankBlendWeight: number;
+  /**
+   * Score mode for the cross-encoder rerank output:
+   * - "raw": use the raw relevance_score as returned by the reranker
+   * - "rank": replace raw scores with rank-normalized values (top-1 = 1.0,
+   *   top-k = 1 - (k-1)/N). Useful when the reranker saturates (all top
+   *   scores near 1.0) and raw-score differentials get dissolved by blend
+   *   math with the fusion score. On Qwen3-Reranker + memex's domain-eval
+   *   + TIER=pipeline fast-benchmark, rank mode recovered +1 query and
+   *   +7/+13 queries respectively over raw mode.
+   * Default: "raw" (backward compat).
+   */
+  rerankScoreMode: "raw" | "rank";
 }
 
 export interface UnifiedResult {
@@ -89,6 +110,8 @@ export const DEFAULT_CONFIG: UnifiedRetrieverConfig = {
   candidatePoolSize: 15,
   confidenceThreshold: 0.88,
   confidenceGap: 0.15,
+  rerankBlendWeight: 0.7,
+  rerankScoreMode: "raw",
 };
 
 // =============================================================================
@@ -356,8 +379,12 @@ export class UnifiedRetriever {
    */
   private shouldRerank(pool: CalibratedResult[]): boolean {
     if (pool.length <= 1) return false;
-    const top = pool[0].score;
-    const second = pool[1].score;
+    // Use rawScore (unweighted [0,1] sigmoid-fused source score) for threshold
+    // and gap checks. The `score` field is multiplied by conversationWeight
+    // (0.55) or documentWeight (0.45), so its max value is ~0.55 — which makes
+    // a confidenceThreshold of 0.88 unreachable and the check dead code.
+    const top = pool[0].rawScore;
+    const second = pool[1].rawScore;
     if (top > this.config.confidenceThreshold) return false;
     if (top - second > this.config.confidenceGap) return false;
     return true;
@@ -394,23 +421,30 @@ export class UnifiedRetriever {
         n,
       );
 
-      const controller = new AbortController();
-      // 10s timeout — accounts for llama-swap model swap (2-5s) + rerank inference
-      const timeout = setTimeout(() => controller.abort(), 10000);
-
-      const response = await fetch(rerankerConfig.endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
+      // Per-attempt 10s timeout; retried up to 4 times on transient upstream
+      // failures (502/503/504/AbortError). On persistent failure we fall back
+      // to the calibrated scores via the outer catch block.
+      const response = await withTransientRetry(async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+          const resp = await fetch(rerankerConfig.endpoint, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+          if (!resp.ok) {
+            // Throw with a status so withTransientRetry can decide to retry.
+            const err = new Error(`rerank endpoint returned ${resp.status}`) as Error & { status: number };
+            err.status = resp.status;
+            throw err;
+          }
+          return resp;
+        } finally {
+          clearTimeout(timeout);
+        }
       });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        console.warn(`Unified rerank API returned ${response.status}, falling back to calibrated scores`);
-        return pool;
-      }
 
       const data = await response.json() as Record<string, unknown>;
       const parsed = parseRerankResponse(provider, data);
@@ -420,12 +454,31 @@ export class UnifiedRetriever {
         return pool;
       }
 
-      // Blend: 0.7 * rerank_score + 0.3 * calibrated_score
+      // Blend: rerankBlendWeight * rerank_score + (1-weight) * calibrated_score
+      // Default: 0.7 reranker + 0.3 calibrated (see DEFAULT_CONFIG).
+      const blendWeight = this.config.rerankBlendWeight;
+      const fusionWeight = 1 - blendWeight;
+
+      // For rank-mode, convert raw rerank scores into rank-normalized values
+      // (top-1 = 1.0, top-k = 1 - (k-1)/N). See RetrievalConfig.rerankScoreMode
+      // in retriever.ts for the motivation — identical approach here.
+      const rerankScoreByIndex = new Map<number, number>();
+      if (this.config.rerankScoreMode === "rank") {
+        const sorted = [...parsed].sort((a, b) => b.score - a.score);
+        const n = sorted.length || 1;
+        sorted.forEach((item, rank) => {
+          rerankScoreByIndex.set(item.index, 1 - rank / n);
+        });
+      }
+
       const reranked = parsed
         .filter(item => item.index >= 0 && item.index < candidates.length)
         .map(item => {
           const original = candidates[item.index];
-          const blended = 0.7 * item.score + 0.3 * original.score;
+          const rerankScore = this.config.rerankScoreMode === "rank"
+            ? (rerankScoreByIndex.get(item.index) ?? 0)
+            : item.score;
+          const blended = blendWeight * rerankScore + fusionWeight * original.score;
           return { ...original, score: blended };
         });
 

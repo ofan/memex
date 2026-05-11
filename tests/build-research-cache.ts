@@ -12,7 +12,17 @@
  *   - Ground truth (answer session IDs, expected answer, question type)
  *
  * Usage:
- *   LLAMA_SWAP_API_KEY=... node --import jiti/register tests/build-research-cache.ts
+ *   EMBED_BASE_URL=... EMBED_MODEL=... EMBED_API_KEY=... \
+ *     node --import jiti/register tests/build-research-cache.ts
+ *
+ * Required env (no defaults):
+ *   EMBED_BASE_URL    — embedding endpoint
+ *   EMBED_MODEL       — embedding model identifier
+ *   EMBED_API_KEY     — auth (falls back to legacy LLAMA_SWAP_API_KEY)
+ *
+ * Tuning knobs (defaults OK):
+ *   LONGMEMEVAL_DATA   — path to dataset (default: ~/projects/LongMemEval/data/longmemeval_s_cleaned.json)
+ *   LONGMEMEVAL_SAMPLE — examples to cache (default: 50)
  */
 import { MemoryStore } from "../src/memory.js";
 import { createEmbedder } from "../src/embedder.js";
@@ -25,14 +35,27 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Tuning knobs — defaults OK
 const DATA_FILE =
   process.env.LONGMEMEVAL_DATA ||
   "/home/ubuntu/projects/LongMemEval/data/longmemeval_s_cleaned.json";
 const SAMPLE_SIZE = parseInt(process.env.LONGMEMEVAL_SAMPLE || "50");
-const EMBED_BASE_URL = process.env.EMBED_BASE_URL || process.env.EMBED_BASE_URL || "http://localhost:8090/v1";
-const EMBED_MODEL = process.env.EMBED_MODEL || "Qwen3-Embedding-4B-Q8_0";
-const EMBED_API_KEY = process.env.LLAMA_SWAP_API_KEY || "";
+
+// Config — no defaults
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "";
+const EMBED_MODEL = process.env.EMBED_MODEL || "";
+const EMBED_API_KEY = process.env.EMBED_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
 const VECTOR_DIM = 2560;
+
+if (!EMBED_BASE_URL || !EMBED_MODEL || !EMBED_API_KEY) {
+  const missing = [
+    !EMBED_BASE_URL && "EMBED_BASE_URL",
+    !EMBED_MODEL && "EMBED_MODEL",
+    !EMBED_API_KEY && "EMBED_API_KEY (or legacy LLAMA_SWAP_API_KEY)",
+  ].filter(Boolean).join(", ");
+  console.error(`ERROR: missing required env vars: ${missing}`);
+  process.exit(2);
+}
 
 const CACHE_DIR = join(__dirname, "fixtures", "longmemeval-cache");
 

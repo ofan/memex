@@ -4,12 +4,14 @@
  * Uses SQLite + sqlite-vec + FTS5 for conversation memory storage.
  * Shares the same database schema as QMD document search (SQLite consolidation).
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { existsSync, accessSync, constants, mkdirSync, realpathSync, lstatSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { openDatabase, loadSqliteVec } from "./db.js";
 import { buildFTS5Query } from "./search.js";
 import { chunkDocument } from "./chunker.js";
+import { extractEntities } from "./entities.js";
+import { ensureGraphSchema, createLinks, deleteLinks } from "./graph.js";
 // ============================================================================
 // Legacy LanceDB loader (for migration only)
 // ============================================================================
@@ -19,6 +21,9 @@ import { chunkDocument } from "./chunker.js";
  */
 export async function loadLanceDB() {
     try {
+        // @ts-expect-error - optional dependency; not declared in package.json,
+        // present only on hosts that did the legacy migration. Caught by try/catch
+        // when missing.
         return await import("@lancedb/lancedb");
     }
     catch {
@@ -108,6 +113,7 @@ export function validateStoragePath(dbPath) {
 // Memory Store
 // ============================================================================
 export class MemoryStore {
+    /** Underlying better-sqlite3 handle. Public so callers (cli, mcp-server, dreaming, retriever, etc.) can run their own queries against the shared DB. */
     db;
     config;
     _sqliteVecAvailable = false;
@@ -166,6 +172,29 @@ export class MemoryStore {
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp DESC)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)`);
+        // Dreaming schema: text_hash for dedup, recall tracking for deep sweep
+        this.migrateAddColumn("memories", "text_hash", "TEXT");
+        this.migrateAddColumn("memories", "recall_count", "INTEGER DEFAULT 0");
+        this.migrateAddColumn("memories", "last_recalled_at", "INTEGER");
+        // Backfill text_hash for existing entries (idempotent — only touches NULLs)
+        const nullHashes = this.db.prepare("SELECT COUNT(*) as c FROM memories WHERE text_hash IS NULL").get();
+        if (nullHashes.c > 0) {
+            const rows = this.db.prepare("SELECT id, text FROM memories WHERE text_hash IS NULL").all();
+            const update = this.db.prepare("UPDATE memories SET text_hash = ? WHERE id = ?");
+            for (const row of rows) {
+                const hash = createHash("sha256").update(row.text.trim()).digest("hex");
+                update.run(hash, row.id);
+            }
+        }
+        try {
+            this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
+        }
+        catch { /* index may already exist or duplicates prevent creation */ }
+        // Entity backfill for entries missing entities in metadata
+        this.backfillEntities();
+        // Entity graph (memory links)
+        ensureGraphSchema(this.db);
+        this.backfillLinks();
         // FTS5 for BM25 search
         this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -208,6 +237,13 @@ export class MemoryStore {
             this.ensureVecTable();
         }
     }
+    /** Add a column if it doesn't exist (idempotent migration). */
+    migrateAddColumn(table, column, type) {
+        const cols = this.db.prepare(`PRAGMA table_info(${table})`).all();
+        if (!cols.some(c => c.name === column)) {
+            this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        }
+    }
     ensureVecTable() {
         if (!this._sqliteVecAvailable)
             return;
@@ -238,25 +274,79 @@ export class MemoryStore {
         return row.c;
     }
     async store(entry) {
+        const text = entry.text?.trim();
+        // Guard: reject single-turn conversation fragments (raw dialogue dumps).
+        // Multi-turn windows from auto-capture contain multiple [user]/[assistant] lines — allow those.
+        if (!text)
+            return null;
+        const isConversationFragment = /^\[(user|assistant)\]/i.test(text)
+            && (text.match(/^\[/gm) || []).length <= 2; // single-turn: at most 2 role tags
+        if (isConversationFragment)
+            return null;
+        // Guard: reject exact text duplicates
+        const textHash = createHash("sha256").update(text).digest("hex");
+        const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+        if (existing)
+            return null;
+        // Extract entities and merge into metadata
+        const entities = extractEntities(text);
+        let meta = {};
+        try {
+            meta = JSON.parse(entry.metadata || "{}");
+        }
+        catch { }
+        meta.entities = entities;
         const fullEntry = {
             ...entry,
+            text,
             id: randomUUID(),
-            timestamp: Date.now(),
-            metadata: entry.metadata || "{}",
+            timestamp: entry.timestamp ?? Date.now(),
+            metadata: JSON.stringify(meta),
         };
-        this.insertMemory(fullEntry);
+        this.insertMemory(fullEntry, textHash);
+        // Create entity graph links
+        if (entities.length >= 2) {
+            try {
+                createLinks(this.db, fullEntry.id, entities);
+            }
+            catch { /* best effort */ }
+        }
         return fullEntry;
     }
     async bulkStore(entries) {
-        const fullEntries = entries.map((entry) => ({
+        // Filter: reject conversation fragments and dedup by text hash
+        const seenHashes = new Set();
+        const filtered = [];
+        for (const entry of entries) {
+            const text = entry.text?.trim();
+            if (!text)
+                continue;
+            const isFragment = /^\[(user|assistant)\]/i.test(text)
+                && (text.match(/^\[/gm) || []).length <= 2;
+            if (isFragment)
+                continue;
+            const textHash = createHash("sha256").update(text).digest("hex");
+            if (seenHashes.has(textHash))
+                continue;
+            // Check DB for existing hash
+            const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+            if (existing)
+                continue;
+            seenHashes.add(textHash);
+            filtered.push({ entry: { ...entry, text }, textHash });
+        }
+        if (filtered.length === 0)
+            return [];
+        const fullEntries = filtered.map(({ entry }) => ({
             ...entry,
             id: randomUUID(),
             timestamp: Date.now(),
             metadata: entry.metadata || "{}",
         }));
+        const hashes = filtered.map(f => f.textHash);
         const insertMem = this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
         const insertVec = this._sqliteVecAvailable
             ? this.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`)
@@ -266,8 +356,9 @@ export class MemoryStore {
     `);
         const tx = this.db.transaction(() => {
             const now = new Date().toISOString();
-            for (const entry of fullEntries) {
-                insertMem.run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata);
+            for (let i = 0; i < fullEntries.length; i++) {
+                const entry = fullEntries[i];
+                insertMem.run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata, hashes[i]);
                 if (insertVec) {
                     insertVec.run(`mem_${entry.id}`, new Float32Array(entry.vector));
                 }
@@ -478,6 +569,16 @@ export class MemoryStore {
         };
         return updated;
     }
+    /** Persist recall events to DB. Called after auto-recall injects memories. */
+    recordRecalls(ids) {
+        if (ids.length === 0)
+            return;
+        const now = Date.now();
+        const stmt = this.db.prepare(`UPDATE memories SET recall_count = COALESCE(recall_count, 0) + 1, last_recalled_at = ? WHERE id = ?`);
+        for (const id of ids) {
+            stmt.run(now, id);
+        }
+    }
     async delete(id, scopeFilter) {
         // Support both full UUID and short prefix (8+ hex chars)
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -518,6 +619,11 @@ export class MemoryStore {
             this.db.prepare(`DELETE FROM vectors_vec WHERE hash_seq = ?`).run(`mem_${resolvedId}`);
             this.db.prepare(`DELETE FROM vectors_vec WHERE hash_seq LIKE ?`).run(`mem_${resolvedId}_c%`);
         }
+        // Delete entity graph links
+        try {
+            deleteLinks(this.db, resolvedId);
+        }
+        catch { /* best effort */ }
         return true;
     }
     async bulkDelete(scopeFilter, beforeTimestamp) {
@@ -782,14 +888,56 @@ export class MemoryStore {
         const chunks = this.db.prepare(`SELECT COUNT(*) as cnt FROM vectors_vec WHERE hash_seq LIKE ?`).get(`mem_${memoryId}_c%`);
         return primary.cnt + chunks.cnt;
     }
+    /** Backfill entities for entries that don't have them in metadata. */
+    backfillEntities() {
+        try {
+            const rows = this.db.prepare("SELECT id, text, metadata FROM memories WHERE metadata NOT LIKE '%\"entities\"%'").all();
+            if (rows.length === 0)
+                return;
+            const update = this.db.prepare("UPDATE memories SET metadata = ? WHERE id = ?");
+            for (const row of rows) {
+                let meta = {};
+                try {
+                    meta = JSON.parse(row.metadata || "{}");
+                }
+                catch { }
+                meta.entities = extractEntities(row.text);
+                update.run(JSON.stringify(meta), row.id);
+            }
+        }
+        catch { /* best effort */ }
+    }
+    /** Backfill graph links for existing memories (only if no links exist yet). */
+    backfillLinks() {
+        try {
+            const linkCount = this.db.prepare("SELECT COUNT(*) as c FROM memory_links").get().c;
+            if (linkCount > 0)
+                return; // already have links
+            const rows = this.db.prepare("SELECT id, metadata FROM memories WHERE metadata LIKE '%\"entities\"%'").all();
+            for (const row of rows) {
+                let entities = [];
+                try {
+                    entities = JSON.parse(row.metadata).entities || [];
+                }
+                catch {
+                    continue;
+                }
+                if (entities.length >= 2) {
+                    createLinks(this.db, row.id, entities);
+                }
+            }
+        }
+        catch { /* best effort */ }
+    }
     // ========================================================================
     // Private helpers
     // ========================================================================
-    insertMemory(entry) {
+    insertMemory(entry, textHash) {
+        const hash = textHash || createHash("sha256").update(entry.text.trim()).digest("hex");
         this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata);
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata, hash);
         // Insert vector
         if (this._sqliteVecAvailable && entry.vector.length > 0) {
             this.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`).run(`mem_${entry.id}`, new Float32Array(entry.vector));

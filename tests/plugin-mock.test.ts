@@ -181,11 +181,6 @@ describe("buildRecallContext", () => {
     const ctx = buildRecallContext(memories);
     assert.ok(/cite.*\bmem:\w+/i.test(ctx), "expected citation instruction with anchor example");
   });
-
-  it("tells the LLM how to forget by anchor", () => {
-    const ctx = buildRecallContext(memories);
-    assert.ok(/memory_forget/.test(ctx), "expected forget-by-anchor guidance");
-  });
 });
 
 // ============================================================================

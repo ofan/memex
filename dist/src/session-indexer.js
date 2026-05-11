@@ -135,7 +135,7 @@ const DEFAULT_CONFIG = {
     minImportance: 0.1,
     maxTextLength: 2000,
     rerankEndpoint: undefined,
-    rerankModel: "bge-reranker-v2-m3-Q8_0",
+    rerankModel: "Qwen3-Reranker-0.6B-Q8_0",
     dryRun: false,
     embeddingBatchSize: 20,
     includeDeleted: false,

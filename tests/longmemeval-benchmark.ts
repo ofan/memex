@@ -39,6 +39,7 @@ import { createEmbedder } from "../src/embedder.js";
 import type { Embedder } from "../src/embedder.js";
 import { createRetriever } from "../src/retriever.js";
 import type { RetrievalConfig } from "../src/retriever.js";
+import { chunkDocument } from "../src/chunker.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -52,20 +53,23 @@ import { fileURLToPath } from "node:url";
 const DATA_FILE =
   process.env.LONGMEMEVAL_DATA ||
   "/home/ubuntu/projects/LongMemEval/data/longmemeval_s_cleaned.json";
-const SAMPLE_SIZE = parseInt(process.env.LONGMEMEVAL_SAMPLE || "50");
+const SAMPLE_SIZE = parseInt(process.env.LONGMEMEVAL_SAMPLE || "50");  // tuning knob
 const K = 10;
 const USE_VECTORS = process.env.LONGMEMEVAL_VECTORS !== "false"; // default: true
-const EMBED_BASE_URL = process.env.EMBED_BASE_URL || process.env.EMBED_BASE_URL || "http://localhost:8090/v1";
-const EMBED_MODEL = process.env.EMBED_MODEL || "Qwen3-Embedding-4B-Q8_0";
-const EMBED_API_KEY = process.env.LLAMA_SWAP_API_KEY || "";
+// No defaults for non-tuning-knob env (URLs, API keys, model names — config, not knobs).
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "";
+const EMBED_MODEL = process.env.EMBED_MODEL || "";
+const EMBED_API_KEY = process.env.EMBED_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
 const VECTOR_DIM = USE_VECTORS ? 2560 : 4;
-const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai";
-const LLM_MODEL = process.env.LLM_MODEL || "gemini-2.5-flash";
+const LLM_BASE_URL = process.env.LLM_BASE_URL || "";
+const LLM_MODEL = process.env.LLM_MODEL || "";
 const LLM_API_KEY = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || "";
 
-const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || process.env.EMBED_BASE_URL || "http://localhost:8090/v1/rerank";
-const RERANK_MODEL = process.env.RERANK_MODEL || "bge-reranker-v2-m3-Q8_0";
-const RERANK_API_KEY = process.env.RERANK_API_KEY || EMBED_API_KEY || "unused";
+const RERANK = process.env.RERANK === "1";
+const RERANK_ENDPOINT = process.env.RERANK_ENDPOINT || "";
+const RERANK_MODEL = process.env.RERANK_MODEL || "";
+const RERANK_API_KEY = process.env.RERANK_API_KEY || EMBED_API_KEY || "";
+const RERANK_PROVIDER = (process.env.RERANK_PROVIDER || "jina") as "jina" | "siliconflow" | "voyage" | "pinecone";  // tuning knob
 const LLM_DELAY_MS = parseInt(process.env.LLM_DELAY_MS || "0"); // delay between LLM calls to avoid rate limits
 const PHASE = (process.env.LONGMEMEVAL_PHASE || "both") as "retrieve" | "read" | "both" | "batch-submit" | "batch-collect";
 
@@ -105,6 +109,41 @@ interface CachedResult {
   hit_at_3: boolean;
   hit_at_5: boolean;
   hit_at_10: boolean;
+}
+
+/**
+ * Collapse chunked retrieval results to session-level top-K.
+ *
+ * Each chunk carries a parent sessionId in metadata. Results arrive sorted
+ * by score descending, so the first occurrence of each sessionId is the
+ * max-sim chunk for that session. Deduping by sessionId while iterating
+ * in score order is equivalent to "max-sim per session, then top-K".
+ *
+ * Exported for unit testing (see tests/longmemeval-chunked-dedupe.test.ts).
+ */
+export function dedupeChunkResultsBySession(
+  results: Array<{ entry: { text: string; metadata?: string | null } }>,
+  k: number,
+): { retrievedSessionIds: string[]; retrievedTexts: string[] } {
+  const retrievedSessionIds: string[] = [];
+  const retrievedTexts: string[] = [];
+  if (k <= 0) return { retrievedSessionIds, retrievedTexts };
+  const seenSessions = new Set<string>();
+  for (const r of results) {
+    let sessionId = "";
+    try {
+      const meta = JSON.parse(r.entry.metadata || "{}");
+      sessionId = (meta.sessionId as string) || "";
+    } catch {
+      // unparseable metadata — skip
+    }
+    if (!sessionId || seenSessions.has(sessionId)) continue;
+    seenSessions.add(sessionId);
+    retrievedSessionIds.push(sessionId);
+    retrievedTexts.push(r.entry.text);
+    if (retrievedSessionIds.length >= k) break;
+  }
+  return { retrievedSessionIds, retrievedTexts };
 }
 
 interface CacheFile {
@@ -239,21 +278,73 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
     const embedder = getEmbedder();
     const texts = example.haystack_sessions.map(s => sessionToText(s));
 
-    // Embed sessions if vectors enabled (truncate to ~2000 chars for embedding context)
-    let vectors: number[][] | null = null;
+    // Chunked embedding: split each session into overlapping 2000-char chunks,
+    // embed each chunk, store each chunk as its own memory entry with the
+    // parent sessionId in metadata. At retrieve time we dedupe by sessionId
+    // to get the session-level top-K (max-sim aggregation).
+    //
+    // This matches fast-benchmark's chunked embedding strategy and production
+    // memex behavior. Previous truncate-to-2000-chars approach left answer
+    // content beyond the window invisible to vector search, which is the
+    // +34pp gap documented in docs/research/005-longmemeval-baseline.md.
+    //
+    // Mini-batched into groups of 8 to stay under the host's embed-lane
+    // large-batch crash threshold (large single-request responses can still
+    // crash even with --parallel 1; see LEARNINGS.md).
+    interface SessionChunk {
+      text: string;
+      sessionId: string;
+      chunkIdx: number;
+    }
+    const sessionChunks: SessionChunk[] = [];
     if (USE_VECTORS) {
-      const truncated = texts.map(t => t.slice(0, 2000));
-      vectors = await embedder.embedBatchPassage(truncated);
+      for (let i = 0; i < texts.length; i++) {
+        const result = chunkDocument(texts[i], {
+          maxChunkSize: 2000,
+          overlapSize: 200,
+          minChunkSize: 200,
+          semanticSplit: true,
+          maxLinesPerChunk: 50,
+        });
+        const chunks = result.chunks.length > 0 ? result.chunks : [texts[i].slice(0, 2000)];
+        for (let j = 0; j < chunks.length; j++) {
+          sessionChunks.push({
+            text: chunks[j],
+            sessionId: example.haystack_session_ids[i],
+            chunkIdx: j,
+          });
+        }
+      }
+    } else {
+      // No-vector path: one chunk per session (used for BM25-only baselines)
+      for (let i = 0; i < texts.length; i++) {
+        sessionChunks.push({
+          text: texts[i],
+          sessionId: example.haystack_session_ids[i],
+          chunkIdx: 0,
+        });
+      }
     }
 
-    // Index all haystack sessions as memories
-    const entries = texts.map((text, i) => ({
-      text,
+    let vectors: number[][] | null = null;
+    if (USE_VECTORS) {
+      const EMBED_CHUNK = 8;
+      vectors = [];
+      for (let i = 0; i < sessionChunks.length; i += EMBED_CHUNK) {
+        const slice = sessionChunks.slice(i, i + EMBED_CHUNK).map(c => c.text);
+        const out = await embedder.embedBatchPassage(slice);
+        vectors.push(...out);
+      }
+    }
+
+    // Index each chunk as its own memory entry with parent sessionId
+    const entries = sessionChunks.map((sc, i) => ({
+      text: sc.text,
       vector: vectors ? vectors[i] : new Array(VECTOR_DIM).fill(0),
       category: "fact" as const,
       scope: "global",
       importance: 0.5,
-      metadata: JSON.stringify({ sessionId: example.haystack_session_ids[i] }),
+      metadata: JSON.stringify({ sessionId: sc.sessionId, chunkIdx: sc.chunkIdx }),
     }));
 
     await store.bulkStore(entries);
@@ -265,8 +356,19 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
       fusionMethod: "zscore",   // z-score normalized fusion — prevents BM25 noise from displacing vector hits
       vectorWeight: 0.8,        // z-score optimal: 0.8 vec + 0.2 bm25
       bm25Weight: 0.2,
-      rerank: "none",           // reranker hurts on long sessions (truncated context too short)
-      candidatePoolSize: K * 3,
+      // Reranker support: opt-in via RERANK=1 env var. Default off because the
+      // historical bge-reranker-v2-m3 hurt R@1 on long-session content (8K
+      // context truncated mid-session). Qwen3-Reranker-0.6B has 32K context
+      // and is a clear win on memex's workload (verified 2026-04-10).
+      rerank: RERANK ? "cross-encoder" : "none",
+      rerankEndpoint: RERANK_ENDPOINT,
+      rerankModel: RERANK_MODEL,
+      rerankApiKey: RERANK_API_KEY,
+      rerankProvider: RERANK_PROVIDER,
+      // With chunked embedding a single session produces multiple chunks.
+      // Pool 3× larger so that after dedupe by sessionId we still have
+      // room for K distinct sessions in the output.
+      candidatePoolSize: K * 6,
       minScore: 0.05,        // low initial filter — let reranker decide
       hardMinScore: 0.10,    // low adaptive floor for benchmark
       recencyHalfLifeDays: 0, // disable recency boost (all same time)
@@ -277,20 +379,11 @@ async function retrieveExample(example: LongMemEvalExample): Promise<CachedResul
     };
 
     const retriever = createRetriever(store, embedder, retrieverConfig);
-    const results = await retriever.retrieve({ query: example.question, limit: K });
-
-    // Extract session IDs and full texts from search results
-    const retrievedSessionIds: string[] = [];
-    const retrievedTexts: string[] = [];
-    for (const r of results) {
-      try {
-        const meta = JSON.parse(r.entry.metadata || "{}");
-        retrievedSessionIds.push(meta.sessionId as string);
-      } catch {
-        retrievedSessionIds.push("");
-      }
-      retrievedTexts.push(r.entry.text);
-    }
+    // Ask for 3× more results than K so dedupe has room. Retrieve from
+    // chunks, then collapse to sessions (max-sim: keep first occurrence
+    // because results are score-sorted descending).
+    const results = await retriever.retrieve({ query: example.question, limit: K * 3 });
+    const { retrievedSessionIds, retrievedTexts } = dedupeChunkResultsBySession(results, K);
 
     // Check if any answer session appears in top-K results
     const answerSet = new Set(example.answer_session_ids);
@@ -915,7 +1008,22 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("LongMemEval benchmark failed:", err);
-  process.exit(1);
-});
+// Only run main() when executed directly, not when imported for unit testing.
+// jiti's ESM loader sets import.meta.url to the transpiled file URL, which
+// doesn't equal process.argv[1], so compare the resolved file paths instead.
+const isDirectRun = (() => {
+  try {
+    const invokedPath = process.argv[1] ? fileURLToPath(new URL(`file://${process.argv[1]}`)).replace(/\\/g, "/") : "";
+    const selfPath = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+    return invokedPath && selfPath.endsWith(invokedPath.replace(/^.*\//, ""));
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("LongMemEval benchmark failed:", err);
+    process.exit(1);
+  });
+}

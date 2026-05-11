@@ -13,6 +13,7 @@
 
 import { openDatabase, loadSqliteVec } from "./db.js";
 import type { Database } from "./db.js";
+// @ts-expect-error - picomatch ships no types
 import picomatch from "picomatch";
 import { createHash } from "crypto";
 import { realpathSync, statSync, mkdirSync } from "node:fs";
@@ -782,7 +783,7 @@ function initializeDatabase(db: Database): void {
       WHERE d.active = 1
     `).all() as { id: number; collection: string; path: string; doc: string }[];
 
-    const backfill = db.transaction(() => {
+    const backfill = (db as any).transaction(() => {
       for (const doc of docs) {
         populateSectionsFTS(db, doc.id, doc.collection + '/' + doc.path, doc.doc);
       }
@@ -1886,7 +1887,7 @@ export async function chunkDocumentByTokens(
   const results: { text: string; pos: number; tokens: number }[] = [];
 
   for (const chunk of charChunks) {
-    const tokens = await llm.tokenize(chunk.text);
+    const tokens = await (llm as any).tokenize(chunk.text);
 
     if (tokens.length <= maxTokens) {
       results.push({ text: chunk.text, pos: chunk.pos, tokens: tokens.length });
@@ -1899,7 +1900,7 @@ export async function chunkDocumentByTokens(
       const subChunks = chunkDocument(chunk.text, safeMaxChars, Math.floor(overlapChars * actualCharsPerToken / 2), Math.floor(windowChars * actualCharsPerToken / 2));
 
       for (const subChunk of subChunks) {
-        const subTokens = await llm.tokenize(subChunk.text);
+        const subTokens = await (llm as any).tokenize(subChunk.text);
         results.push({
           text: subChunk.text,
           pos: chunk.pos + subChunk.pos,
