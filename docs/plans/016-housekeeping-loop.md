@@ -20,7 +20,7 @@ Each item is mechanically scoped. If any item hits a real conflict, surface imme
 ## In scope
 
 ### LOOP.M1 — Merge `memex-v0.7` → `main`
-- [ ] **M1.1** Verify branch divergence: `git log main ^memex-v0.7` shows v0.6.2 commits not in v0.7; `git log memex-v0.7 ^main` shows all v0.7 work. Decide merge direction is forward-only (no force push).
+- [x] **M1.1** Branch divergence confirmed: memex-v0.7 has 153 commits not in main (all v0.7 work); main has 22 commits not in memex-v0.7 (v0.6.2 release fixes). Common ancestor: `ebe1907 chore: bump version to 0.5.12`. **Real 3-way merge required** (not ff). Direction: memex-v0.7 → main, forward-only, no force push. Conflicts likely on `package.json`, `CHANGELOG.md`, `dist/`. If conflicts, M1.2 will stop and mark [?].
 - [ ] **M1.2** `git checkout main && git pull origin main`. Then `git merge --no-ff memex-v0.7 -m "merge: v0.7.1 work into main"`. If conflicts, **stop and mark [?]** — surface for user resolution.
 - [ ] **M1.3** Verify post-merge: `npm test` + `npm run build` on main. Both must pass.
 - [ ] **M1.4** Push main: `git push origin main`. Side-effect: 2 stale dependabot alerts may auto-close after dependabot re-scans (next scheduled scan; not synchronous).
