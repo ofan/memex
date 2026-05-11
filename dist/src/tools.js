@@ -2,7 +2,7 @@
  * Agent Tool Definitions
  * Memory management tools for AI agents
  */
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { stringEnum } from "openclaw/plugin-sdk/core";
 import { isNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";

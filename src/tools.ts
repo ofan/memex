@@ -3,7 +3,7 @@
  * Memory management tools for AI agents
  */
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { stringEnum } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { MemoryRetriever, RetrievalResult } from "./retriever.js";
@@ -79,7 +79,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
         query: Type.String({ description: "Search query for finding relevant memories" }),
         limit: Type.Optional(Type.Number({ description: "Max results to return (default: 5, max: 20)" })),
         scope: Type.Optional(Type.String({ description: "Specific memory scope to search in (optional)" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES) as unknown as Parameters<typeof Type.Optional>[0]),
+        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         ...(hasUnified ? {
           source: Type.Optional(Type.String({
             description: "Which sources to search: 'all' (default), 'conversation' (memories only), 'document' (workspace docs only)"
@@ -267,7 +267,7 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
       parameters: Type.Object({
         text: Type.String({ description: "Information to remember" }),
         importance: Type.Optional(Type.Number({ description: "Importance score 0-1 (default: 0.7)" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES) as unknown as Parameters<typeof Type.Optional>[0]),
+        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         scope: Type.Optional(Type.String({ description: "Memory scope (optional, defaults to agent scope)" })),
       }),
       async execute(_toolCallId, params) {
@@ -501,7 +501,7 @@ export function registerMemoryUpdateTool(api: OpenClawPluginApi, context: ToolCo
         memoryId: Type.String({ description: "ID of the memory to update (full UUID or 8+ char prefix)" }),
         text: Type.Optional(Type.String({ description: "New text content (triggers re-embedding)" })),
         importance: Type.Optional(Type.Number({ description: "New importance score 0-1" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES) as unknown as Parameters<typeof Type.Optional>[0]),
+        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
       }),
       async execute(_toolCallId, params) {
         const { memoryId, text, importance, category } = params as {
@@ -684,7 +684,7 @@ export function registerMemoryListTool(api: OpenClawPluginApi, context: ToolCont
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: "Max memories to list (default: 10, max: 50)" })),
         scope: Type.Optional(Type.String({ description: "Filter by specific scope (optional)" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES) as unknown as Parameters<typeof Type.Optional>[0]),
+        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         offset: Type.Optional(Type.Number({ description: "Number of memories to skip (default: 0)" })),
       }),
       async execute(_toolCallId, params) {

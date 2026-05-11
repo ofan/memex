@@ -30,12 +30,12 @@ Each item is mechanically scoped. If any item hits a real conflict, surface imme
 **Goal**: align memex with openclaw's typebox choice; eliminate the dual-package situation; remove the 4 type-bridge casts in `src/tools.ts`.
 
 - [x] **M2.1** Audit complete. **Single import surface**: `src/tools.ts:6` imports just `Type`. No `Static`, `TSchema`, or other types pulled. No existing imports of unscoped `typebox` in our code (it's only transitive via openclaw/pi-agent-core). Switch will be 1 import line + 4 cast removals + 1 package.json edit.
-- [ ] **M2.2** Edit `package.json`: replace `"@sinclair/typebox": "0.34.48"` with `"typebox": "^1.1.37"` (match openclaw's resolution). Run `npm install`.
-- [ ] **M2.3** Bulk update imports: `@sinclair/typebox` → `typebox` across all source/test files.
-- [ ] **M2.4** Remove the 4 casts in `src/tools.ts`: `Type.Optional(stringEnum(MEMORY_CATEGORIES) as unknown as Parameters<typeof Type.Optional>[0])` → `Type.Optional(stringEnum(MEMORY_CATEGORIES))`.
-- [ ] **M2.5** `npm run build` — surface any API drift between the two packages (`Type.Static` vs `Static`, optional argument shapes, etc.). If any incompat needs more than mechanical edits, **stop and mark [?]**.
-- [ ] **M2.6** `npm test` — 725 tests must still pass.
-- [ ] **M2.7** Commit + push.
+- [x] **M2.2** `package.json` updated: `@sinclair/typebox` removed, `typebox: ^1.1.37` added. `npm install` clean, 0 vulns.
+- [x] **M2.3** Single import in `src/tools.ts:6` switched to `from "typebox"`. (No other files needed updates per M2.1's audit.)
+- [x] **M2.4** All 4 casts removed in `src/tools.ts` — `Type.Optional(stringEnum(MEMORY_CATEGORIES))` works directly now since both `Type` and `stringEnum` come from the same `typebox` package.
+- [x] **M2.5** `npm run build` clean. No API drift surfaced — `Type` API is identical between the two packages for the surface memex uses (`Type.Object`, `Type.Optional`, `Type.String`, `Type.Number`).
+- [x] **M2.6** Tests 725/725 pass.
+- [x] **M2.7** Bundled commit covers M2.2-M2.6 (tightly coupled — splitting would leave broken-build commits between iterations).
 
 ### LOOP.M3 — CI: bump GitHub Actions to Node 24-compatible majors
 **Goal**: pre-empt June 2026 GitHub deadline; silence the 6+ deprecation warnings on every CI run.
