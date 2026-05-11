@@ -29,7 +29,14 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 ## In scope
 
 ### RES.30 — Issue #30: merge `autoRecallAgents` + `autoCaptureAgents` → `memoryAgents`
-- [ ] **30.1** Find call sites: `grep -rn "autoRecallAgents\|autoCaptureAgents" src/ index.ts tests/`. Map each to a kind (read / write / config-schema / docs).
+- [x] **30.1** Call site map (9 in code, 4 in docs):
+  - `index.ts:89,93` — PluginConfig interface declarations
+  - `index.ts:1076-1077` — validateAgentList() in config validation
+  - `index.ts:1213` — recallAgents read in `before_prompt_build` (recall logic)
+  - `index.ts:1343,1355` — captureAgents read in capture logic
+  - `index.ts:1831,1836` — normalization in createMemexConfig
+  - `SKILL.md:48,63,109,112` — config examples + table
+  - **No test files reference these keys directly** (tests use the normalized config object).
 - [ ] **30.2** Add `memoryAgents` config key + schema validation. Backward compat: if old keys present, merge them and log a one-line warning.
 - [ ] **30.3** Update README + AGENTS.md / CLAUDE.md examples to recommend `memoryAgents`.
 - [ ] **30.4** Tests: add a coverage test that the merged-config path matches old behavior. Existing tests must still pass.
