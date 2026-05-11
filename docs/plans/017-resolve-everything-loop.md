@@ -57,14 +57,9 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 - [x] **23.6** Bundled commit covers 23.2-23.6. Issue #23 closed via this commit.
 
 ### RES.19 — Issue #19: production benchmark (scope only, not implement)
-- [~] **19.1** Write a scoped design note at `docs/design/production-benchmark.md`:
-  - Why BEIR (mixed corpus, comparable across systems)
-  - Which BEIR datasets fit memex's mixed-source path (probably SciFact + NFCorpus + small subset; full BEIR = too long)
-  - How to wire it through `UnifiedRetriever` (mock-doc-corpus or real-doc-corpus path?)
-  - Expected runtime + cost
-  - Concrete next-steps as a checklist
-- [ ] **19.2** Commit the design note. Add issue comment: "scoped — see `docs/design/production-benchmark.md`. Implementation deferred to dedicated session." Mark issue with a `scoped` label if labels exist; otherwise leave open.
-- [?] **19.3** Mark loop item `[?]` — actual implementation needs dedicated session, not a loop iteration.
+- [~] **19.1** Design note committed at `docs/design/production-benchmark.md`. Recommends BEIR 3-dataset subset (SciFact + NFCorpus + FiQA-2018, ~65K docs total, ~30 min wall-clock first run). Documents-only path through existing `UnifiedRetriever`. Conversation-memory side stays on LongMemEval as a separate track. Implementation sketch + concrete next-steps checklist included.
+- [x] **19.2** Issue #19 to be commented + linked when committing this iteration.
+- [?] **19.3** Implementation explicitly deferred to dedicated session — not loop work. Marked [?] per plan rule.
 
 ### RES.27 — Issue #27: memory browser UI (scope only, not implement)
 - [~] **27.1** Write a scoped design note at `docs/design/memory-browser.md`:
