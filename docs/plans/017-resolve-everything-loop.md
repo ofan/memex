@@ -73,8 +73,8 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 - [?] **42.1** Confirmed PR #42 still OPEN with the rationale comment from loop 016 M4.2 (https://github.com/ofan/memex/pull/42#issuecomment-4417291235). Holding as tracker for upstream WiseLibs/better-sqlite3 Node 26 compat fix. No further action this loop.
 
 ### CLEAN — Final cleanup
-- [ ] **CLEAN.1** Re-run `npm audit` — must still be 0.
-- [ ] **CLEAN.2** Re-run `npm test` — 725+ tests must still pass.
+- [x] **CLEAN.1** `npm audit` → 0 vulnerabilities. Confirmed.
+- [x] **CLEAN.2** `npm test` → 740/740 pass (started loop at 725, gained 15 across RES.30 + RES.23). Build clean.
 - [ ] **CLEAN.3** Update PROGRESS.md with summary of resolved items.
 - [ ] **CLEAN.4** List any newly-discovered work surfaced during this loop and add issue stubs OR add to PROGRESS.md.
 
