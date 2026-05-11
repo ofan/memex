@@ -36,6 +36,7 @@ import {
 } from "./src/search.js";
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-indexer.js";
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
+import { anchor as memAnchor } from "./src/anchor.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry, Stopwatch } from "./src/telemetry.js";
 // Dreaming module — lazy-loaded to handle CJS/ESM interop across bundlers

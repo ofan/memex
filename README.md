@@ -93,6 +93,25 @@ This is why memex is a `memory` plugin instead of a plain search plugin: the goa
 - **Single SQLite database**: memories + documents + vectors in one file
 - **OpenAI-compatible embedding**: works with llama.cpp, llama-swap, Gemini, OpenAI, etc.
 
+## Citation anchors
+
+Recalled memories are rendered with a short stable handle:
+
+```
+- [mem:a3f1c0d2 · preference · global] User prefers tabs over spaces (87%)
+- [mem:7e9b4520 · fact · project:memex] We use pnpm in this project (82%)
+- [doc:8d2a91f4 · docs/RESEARCH.md] Vector model is Qwen3-Embedding-4B (75%)
+```
+
+The system prompt instructs the LLM to cite the anchor when it relies on a memory in its reasoning, and to call `memory_forget` with the anchor (or a longer prefix) to delete a stale entry. Inspired by ENGRAM-R (`arXiv:2511.12987`), which reports −85% input / −75% reasoning tokens vs full-context with this pattern at maintained accuracy.
+
+`memory_forget` accepts:
+- a full memory id (UUID),
+- an 8-char anchor (`a3f1c0d2`),
+- or any longer hex prefix.
+
+Ambiguous prefixes return an error listing the matches; non-matching prefixes return a clean "not found." See [`src/anchor.ts`](./src/anchor.ts).
+
 ## Performance
 
 | Operation | Latency |

@@ -40,9 +40,9 @@
     "better-sqlite3": "^11.10.0",
     "compromise": "^14.15.0",
     "fast-glob": "^3.3.0",
-    "openai": "^6.21.0",
-    "openclaw": "^2026.3.22",
-    "picomatch": "^4.0.0",
+    "openai": "^6.37.0",
+    "openclaw": "^2026.5.7",
+    "picomatch": "^4.0.4",
     "sqlite-vec": "^0.1.7-alpha.2",
     "typebox": "^1.1.37",
     "yaml": "^2.8.2"
@@ -74,6 +74,14 @@
   "bin": {
     "memex-mcp": "./dist/src/mcp-server.js"
   },
+  "files": [
+    "dist/**",
+    "openclaw.plugin.json",
+    "README.md",
+    "SKILL.md",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
   "scripts": {
     "test": "node --import jiti/register --test tests/*.test.ts",
     "mcp": "npx tsx src/mcp-server.ts",
@@ -84,7 +92,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
     "commander": "^14.0.0",
-    "jiti": "^2.6.0",
+    "jiti": "^2.7.0",
     "typescript": "^5.9.3"
   }
 }
