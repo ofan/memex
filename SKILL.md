@@ -45,7 +45,8 @@ Injects relevant memories into the prompt before each turn.
 openclaw config set plugins.entries.memex.config.autoRecall false
 
 # Limit to specific agents (default: all agents):
-openclaw config set plugins.entries.memex.config.autoRecallAgents '["main","cabbie"]'
+# Recommended: use the unified `memoryAgents` key (controls both recall + capture).
+openclaw config set plugins.entries.memex.config.memoryAgents '["main","cabbie"]'
 
 # Number of results per turn (default: 3, R@3=90%, R@5=96%):
 openclaw config set plugins.entries.memex.config.autoRecallLimit 5
@@ -59,9 +60,11 @@ Injects a system prompt nudging the LLM to store facts via `memory_store`.
 # On by default. To disable:
 openclaw config set plugins.entries.memex.config.autoCapture false
 
-# Limit to specific agents:
-openclaw config set plugins.entries.memex.config.autoCaptureAgents '["main"]'
+# Agent whitelist is shared with recall — set via `memoryAgents`:
+openclaw config set plugins.entries.memex.config.memoryAgents '["main","cabbie"]'
 ```
+
+> **Legacy keys.** `autoRecallAgents` and `autoCaptureAgents` still work for backward compat — when present alongside `memoryAgents`, the lists are unioned (legacy keys never restrict).
 
 ### Scopes (per-agent memory isolation)
 
@@ -106,10 +109,11 @@ openclaw config set plugins.entries.memex.config.reranker '{"enabled":true,"endp
 | `embedding.model` | text-embedding-3-small | Embedding model |
 | `embedding.baseURL` | — | OpenAI-compatible endpoint |
 | `autoRecall` | true | Inject memories before each turn |
-| `autoRecallAgents` | (all) | Agent whitelist for recall |
-| `autoRecallLimit` | 3 | Results per turn |
 | `autoCapture` | true | LLM-driven memory storage |
-| `autoCaptureAgents` | (all) | Agent whitelist for capture |
+| `memoryAgents` | (all) | Unified agent whitelist (recall + capture) |
+| `autoRecallAgents` | (all) | Legacy: recall-only whitelist (unioned with `memoryAgents`) |
+| `autoCaptureAgents` | (all) | Legacy: capture-only whitelist (unioned with `memoryAgents`) |
+| `autoRecallLimit` | 3 | Results per turn |
 | `scopes.default` | global | Default memory scope |
 | `scopes.agentAccess` | (all global) | Per-agent scope access |
 | `documents.enabled` | true | Document search |
