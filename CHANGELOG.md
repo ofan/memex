@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.7.1] — 2026-05-10
+
+**Theme: security bump.** Closes 18 transitive vulnerabilities (2 critical, 6 high, 10 moderate) surfaced by `npm audit` after v0.7.0 ship. No new features, no behavior change.
+
+### Fixed — security
+- **`npm audit fix` (non-force)** resolved all 18 transitive vulns in one shot: lockfile-only changes (added 121 packages, removed 26, changed 140). Final `npm audit` count: **0 vulnerabilities**. Affected upstream packages included `protobufjs` (critical RCE), `axios` (12 advisories: SSRF / prototype pollution / CRLF), `picomatch` (high+moderate ReDoS / glob method injection), `@anthropic-ai/sdk` (sandbox escape), `@hono/node-server` (middleware bypass), `path-to-regexp`, `fast-xml-parser`, `protobufjs`, `uuid`, and others — all transitive through `openclaw` / `openai` / `@ofan/telemetry-relay-sdk`.
+- **`src/tools.ts`** — added 4 type bridges (`as unknown as Parameters<typeof Type.Optional>[0]`) at the `stringEnum()` call sites. The audit-fix lockfile shift moved openclaw's transitive resolution from `@sinclair/typebox` onto unscoped `typebox@1.1.37`. Memex's own schema construction still uses `@sinclair/typebox@0.34.48`, so `Type.Optional()` and `stringEnum()` now come from two different typebox packages whose `TUnsafe`/`TSchema` types disagree at the TypeScript level (runtime is structurally compatible). Surgical cast — no code refactor.
+
+### Changed
+- Direct `dependencies` in `package.json` unchanged. All vulnerability fixes were achieved via lockfile-only resolution updates.
+
+### Plan
+- See [`docs/plans/015-v0.7.1-security-bump-loop.md`](docs/plans/015-v0.7.1-security-bump-loop.md) for the loop that produced this release.
+
+---
+
+## [0.7.0] — 2026-05-10
+
+**Theme: cross-device memory daemon, ready for self+others.** v0.7 builds on v0.6.2 (citation-anchored recall, build step) and adds the daemon / dreaming / Claude Code integration that turn memex from a per-project plugin into a personal cross-device memory layer. Architecture decisions are intentionally limited to "current implementation is one valid answer" — see `docs/plans/013-post-v0.6.2-roadmap.md` for the deferred questions.
+
+### Added — features
+- **Standalone MCP server with HTTP transport** (`src/mcp-server.ts`) — runs as a daemon (per-session transports + bearer auth) so multiple devices and platforms (OpenClaw, Claude Code, future MCP clients) can share a single SQLite memory pool. stdio mode preserved for local subprocess.
+- **Claude Code plugin** at `plugin/memex-claude-code/` — bundled `SessionStart` / `UserPromptSubmit` / `Stop` hooks plus `.mcp.json` referencing `${MEMEX_ENDPOINT}` / `${MEMEX_AUTH_TOKEN}` env vars.
+- **Dreaming consolidation** (`src/dreaming.ts`) — light sweep + deep sweep + LLM reflection (DeepSeek v4-pro by default). `/dream` slash command replaces the previous timer-based scheduler.
+- **Entity graph** (`src/graph.ts`, `src/entities.ts`) — entity extraction as 3rd retrieval signal (ACT-R spreading activation), adjacency links, one-hop expansion, link-backfill on startup.
+- **Temporal query detection** (`src/temporal.ts`) — regex date-range filtering wired into the retriever.
+- **Intake guards** — text-hash dedup, conversation-fragment rejection, schema migration.
+- **Reranker upgrade**: Qwen3-Reranker-0.6B-Q8_0 replaces bge-reranker-v2-m3-Q8_0. R@1 78% → 82%, E2E 90% → 94% on `LongMemEval_s` N=50.
+- **Eval harness** — model-bakeoff (`scripts/bakeoff`), domain-eval (`tests/domain-eval.ts`), BEIR benchmark, latency probe.
+
+### Added — citation feature parity with v0.6.2
+- **`src/anchor.ts`** — citation-anchor helpers (`anchor()`, `expandAnchor()`, `looksLikeAnchor()`, `AnchorAmbiguityError`). Backported from main.
+- **MCP server `memory_recall`** — results include `anchor` + `scope` fields and a citation-guidance `note` in the response payload.
+- **MCP server `memory_forget`** — accepts a citation anchor (8+ hex chars) or any longer prefix; returns `anchor_ambiguous` / `anchor_not_found` errors.
+- **Plugin README** — new "Citation anchors" section.
+
+### Fixed — sensitive-references audit (cleanup before wider sharing)
+- **`plugin/memex-claude-code/README.md`** — Tailscale IP and 1Password vault name in examples replaced with `<your-memex-host>` / `<your-vault>` placeholders.
+- **`scripts/bakeoff`, `tests/latency-probe.ts`, `docs/architecture.html`** — `op://` references genericized to `op://<vault>/<item>/...`.
+- **`docs/research/embed-rerank-upgrade-brief.md`, `docs/design/model-bakeoff.md`** — `~/homeinfra/...` paths replaced with `~/<infra-repo>/...`; explicit vault/item naming removed.
+- **`docs/plans/2026-04-10-loop-report.md`, `CHANGELOG.md`** — private-infra repo references in commit citations replaced with `infra-repo`.
+- **`docs/plans/012-memex-dreaming.md`** — telemetry-relay worker subdomain replaced with `<your-telemetry-relay>` placeholder.
+- **`docs/design/mcp-server.md`** — Tailscale CGNAT example IP replaced with `<embed-host>:<port>`.
+- **`docs/research/003-memory-retrieval-sota.md`** — example metadata strings switched from `homelab/infra` to `myproject/infra`.
+- **Test fixtures + docs (~25 files)** — homelab-named host fixtures (`host-a` / `host-b` etc.) and persona names (`Alex` / `Jordan`) replace previous personal naming. Public model names like Gemma/Qwen kept as-is.
+- **`.githooks/pre-commit`** — sensitive pattern list moved to gitignored `.githooks/secret-patterns.local`; hook now sources patterns from there with a committed `.example` template. Universal secret prefixes (OpenAI / GitHub / etc.) kept inline.
+
+### Changed
+- Inherits all v0.6.2 changes (see below).
+- `package.json` `openclaw.compat.pluginApi` and `runtimeExtensions` set to current openclaw version.
+- `package.json` `bin.memex-mcp` points at compiled `./dist/src/mcp-server.js`.
+
+---
+
 ## [0.6.2] — 2026-05-10
 
 **Add `runtimeExtensions` and `files` to package.json — what clawhub actually wanted.** The "requires compiled runtime output" error from clawhub validator was misleading — the file was always present in `dist/`, but clawhub finds it via the `openclaw.runtimeExtensions` field, not by inferring `./dist/index.js` from the source `./index.ts` entry. `@openclaw/lobster` has this field; memex was missing it. Verified locally with `clawhub package pack`.

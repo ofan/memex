@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#
+# bakeoff — quick go/no-go for a candidate reranker or embedder model.
+#
+# See docs/design/model-bakeoff.md for the full spec.
+#
+# Usage:
+#   ./scripts/bakeoff reranker <endpoint-url> <model-name> [--provider jina]
+#   ./scripts/bakeoff reranker <endpoint-url> <model-name> --skip-e2e
+#   ./scripts/bakeoff embedder <endpoint-url> <model-name> <vector-dim>   # not yet
+#
+# Required env (no defaults — fail fast if missing):
+#   MEMEX_LLAMA_SWAP_API_KEY  (from 1Password — for the embed/rerank endpoint)
+#   MEMEX_BENCHMARK_OPENAI_API_KEY  (from 1Password — for GPT-4o e2e judging)
+#   MEMEX_DB                  (path to live memex sqlite, read-only)
+#   EMBED_MODEL               (current embedding model — used as the constant in reranker swaps)
+#   EMBED_BASE_URL            (base URL of the inference host — read from openclaw config or set explicitly)
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+print_help() {
+  cat <<'HELP'
+bakeoff — quick go/no-go evaluation for a candidate reranker or embedder model.
+
+USAGE
+  bakeoff reranker <endpoint-url> <model-name> [--provider <name>] [--skip-e2e]
+  bakeoff embedder <endpoint-url> <model-name> <vector-dim> \
+    --cache <path> --chunk-scores <path> [--skip-e2e]
+  bakeoff -h | --help
+
+MODES
+  reranker    Swap the reranker, keep the embedder. Runs in ~5 min for the
+              cheap stage (stage 1); ~4 more min for the optional stage 2
+              with GPT-4o reader + gpt-4o-mini judge. Safe because the
+              cached vectors are unaffected — no corpus re-embed required.
+
+  embedder    Swap the embedder. The candidate research-cache-{N}.json and
+              chunk-scores-{N}.json must be pre-built by pointing
+              tests/build-research-cache.ts + tests/build-chunk-cache.ts at
+              the candidate's endpoint/model. Pass the paths to the
+              pre-built files via --cache and --chunk-scores. Bakeoff runs
+              fast-benchmark against both baseline and candidate caches.
+              Domain-eval is skipped because it queries the live memex DB
+              whose vectors are built with the BASELINE embedder.
+
+ARGS (reranker mode)
+  <endpoint-url>      Full URL of the candidate's /v1/rerank endpoint, e.g.
+                      http://inference-host:8090/v1/rerank
+  <model-name>        Exact model identifier the candidate endpoint expects,
+                      e.g. Qwen3-Reranker-0.6B-Q8_0
+
+FLAGS (reranker mode)
+  --provider <name>   Reranker API shape (jina|siliconflow|voyage|pinecone).
+                      Default: jina. Most llama.cpp --rerank servers are
+                      jina-compatible.
+  --skip-e2e          Skip stage 2 (GPT-4o reader + judge) entirely. Useful
+                      for fast iteration during tuning — decision is based
+                      on stage 1 metrics alone.
+
+REQUIRED ENV (no silent fallbacks — bakeoff exits 2 if any are missing)
+  MEMEX_LLAMA_SWAP_API_KEY
+      Auth header for the inference host. Fetch from 1Password:
+        $(op read "op://<vault>/<item>/MEMEX_LLAMA_SWAP_API_KEY")
+  MEMEX_BENCHMARK_OPENAI_API_KEY
+      OpenAI key for the GPT-4o reader + gpt-4o-mini judge in stage 2.
+        $(op read "op://<vault>/<item>/MEMEX_BENCHMARK_OPENAI_API_KEY")
+  MEMEX_DB
+      Path to the production memex sqlite (read-only), e.g.
+        $HOME/.openclaw/memory/memex/memex.sqlite
+  EMBED_MODEL
+      Name of the current embedding model (constant during reranker swaps)
+  EMBED_BASE_URL
+      Base URL of the inference host, e.g. http://inference-host:8090/v1
+      Usually read from ~/.openclaw/openclaw.json
+
+EXIT CODES
+  0   PASS — candidate beats baseline, ship it
+  1   HOLD / FAIL — candidate is neutral, regresses, or fails hard
+  2   Usage error, missing env, or internal failure
+
+EXAMPLES
+  # Read env from 1Password + openclaw config, then run:
+  export MEMEX_LLAMA_SWAP_API_KEY=$(op read "op://<vault>/<item>/MEMEX_LLAMA_SWAP_API_KEY")
+  export MEMEX_BENCHMARK_OPENAI_API_KEY=$(op read "op://<vault>/<item>/MEMEX_BENCHMARK_OPENAI_API_KEY")
+  export EMBED_BASE_URL=$(python3 -c "import json; print(json.load(open('$HOME/.openclaw/openclaw.json'))['plugins']['entries']['memex']['config']['embedding']['baseURL'])")
+  export MEMEX_DB=$HOME/.openclaw/memory/memex/memex.sqlite
+  export EMBED_MODEL=Qwen3-Embedding-4B-Q8_0
+
+  ./scripts/bakeoff reranker "${EMBED_BASE_URL}/rerank" Qwen3-Reranker-0.6B-Q8_0
+  ./scripts/bakeoff reranker "${EMBED_BASE_URL}/rerank" candidate-v2 --skip-e2e
+
+See docs/design/model-bakeoff.md for the full spec.
+HELP
+}
+
+# Help flag — check before env validation so `--help` works without secrets
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+  esac
+done
+
+# Validate required env up front (no silent fallbacks)
+require_env() {
+  local var="$1"
+  if [ -z "${!var:-}" ]; then
+    echo "ERROR: required env var $var is unset" >&2
+    echo "       run with --help for the full list" >&2
+    exit 2
+  fi
+}
+
+require_env MEMEX_LLAMA_SWAP_API_KEY
+require_env MEMEX_BENCHMARK_OPENAI_API_KEY
+require_env MEMEX_DB
+require_env EMBED_MODEL
+require_env EMBED_BASE_URL
+
+# Argument parsing
+if [ $# -lt 1 ]; then
+  echo "ERROR: missing mode (reranker|embedder)" >&2
+  echo "       run 'bakeoff --help' for usage" >&2
+  exit 2
+fi
+MODE="$1"
+shift
+
+PROVIDER="jina"
+SKIP_E2E="false"
+VECTOR_DIM_ARG=""
+CANDIDATE_CACHE_PATH=""
+CANDIDATE_CHUNK_SCORES_PATH=""
+
+case "$MODE" in
+  reranker)
+    if [ $# -lt 2 ]; then
+      echo "ERROR: bakeoff reranker <endpoint> <model> [flags]" >&2
+      exit 2
+    fi
+    ENDPOINT="$1"
+    MODEL="$2"
+    shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --provider) PROVIDER="$2"; shift 2 ;;
+        --skip-e2e) SKIP_E2E="true"; shift ;;
+        *) echo "ERROR: unknown flag $1" >&2; exit 2 ;;
+      esac
+    done
+    ;;
+  embedder)
+    if [ $# -lt 3 ]; then
+      echo "ERROR: bakeoff embedder <endpoint> <model> <vector-dim> --cache <path> --chunk-scores <path>" >&2
+      echo "       (pre-build the candidate cache with tests/build-research-cache.ts + tests/build-chunk-cache.ts)" >&2
+      exit 2
+    fi
+    ENDPOINT="$1"
+    MODEL="$2"
+    VECTOR_DIM_ARG="$3"
+    shift 3
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --cache)        CANDIDATE_CACHE_PATH="$2"; shift 2 ;;
+        --chunk-scores) CANDIDATE_CHUNK_SCORES_PATH="$2"; shift 2 ;;
+        --skip-e2e)     SKIP_E2E="true"; shift ;;
+        *) echo "ERROR: unknown flag $1" >&2; exit 2 ;;
+      esac
+    done
+    if [ -z "$CANDIDATE_CACHE_PATH" ] || [ -z "$CANDIDATE_CHUNK_SCORES_PATH" ]; then
+      echo "ERROR: embedder mode requires --cache <path> and --chunk-scores <path>" >&2
+      echo "       Pre-build them with:" >&2
+      echo "         EMBED_BASE_URL=<candidate> EMBED_MODEL=<candidate> EMBED_API_KEY=<candidate> \\" >&2
+      echo "           node --import jiti/register tests/build-research-cache.ts" >&2
+      echo "         EMBED_BASE_URL=<candidate> EMBED_MODEL=<candidate> EMBED_API_KEY=<candidate> \\" >&2
+      echo "           node --import jiti/register tests/build-chunk-cache.ts" >&2
+      exit 2
+    fi
+    if [ ! -f "$CANDIDATE_CACHE_PATH" ]; then
+      echo "ERROR: candidate cache file does not exist: $CANDIDATE_CACHE_PATH" >&2
+      exit 2
+    fi
+    if [ ! -f "$CANDIDATE_CHUNK_SCORES_PATH" ]; then
+      echo "ERROR: candidate chunk-scores file does not exist: $CANDIDATE_CHUNK_SCORES_PATH" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "ERROR: unknown mode $MODE (expected reranker|embedder)" >&2
+    exit 2
+    ;;
+esac
+
+# Set up env that the benchmarks expect (mapping 1P → benchmark vars)
+export EVAL_DB="$MEMEX_DB"
+export EMBED_API_KEY="$MEMEX_LLAMA_SWAP_API_KEY"
+export VECTOR_DIM="${VECTOR_DIM:-2560}"  # only set if not already set
+export LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com/v1}"
+export LLM_MODEL="${LLM_MODEL:-gpt-4o}"
+export LLM_API_KEY="$MEMEX_BENCHMARK_OPENAI_API_KEY"
+export OPENAI_API_KEY="$MEMEX_BENCHMARK_OPENAI_API_KEY"
+export RERANK_API_KEY="$MEMEX_LLAMA_SWAP_API_KEY"
+export MEMEX_RERANK_API_KEY="$MEMEX_LLAMA_SWAP_API_KEY"
+
+# Pass args to the TS entry point via env (avoids shell-escaping fragility)
+export BAKEOFF_MODE="$MODE"
+export BAKEOFF_ENDPOINT="$ENDPOINT"
+export BAKEOFF_MODEL="$MODEL"
+export BAKEOFF_PROVIDER="$PROVIDER"
+export BAKEOFF_SKIP_E2E="$SKIP_E2E"
+export BAKEOFF_VECTOR_DIM="$VECTOR_DIM_ARG"
+export BAKEOFF_CANDIDATE_CACHE_PATH="$CANDIDATE_CACHE_PATH"
+export BAKEOFF_CANDIDATE_CHUNK_SCORES_PATH="$CANDIDATE_CHUNK_SCORES_PATH"
+
+exec node --import jiti/register "$REPO_ROOT/tests/bakeoff/main.ts"

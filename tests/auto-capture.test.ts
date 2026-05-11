@@ -102,8 +102,8 @@ describe("end-to-end: sliding window + storage + retrieval", () => {
 
       const results = await store.vectorSearch(vec, 5, 0.0);
       assert.ok(results.length > 0, "Should retrieve the stored window");
-      assert.equal(results[0].entry.id, entry.id);
-      assert.ok(results[0].entry.text.includes("Uplift"));
+      assert.equal(results[0].entry!.id, entry!.id);
+      assert.ok(results[0].entry!.text.includes("Uplift"));
       assert.ok(results[0].score > 0.9);
 
       await store.close();

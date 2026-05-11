@@ -24,10 +24,30 @@ import { initializeLLM, disposeDefaultLlamaCpp } from "./src/llm.js";
 import { createStore as createSearchStore, getStatus as getDocumentIndexStatus, hybridQuery as searchHybridQuery, searchFTS, } from "./src/search.js";
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./src/doc-indexer.js";
 import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instructions.js";
-import { anchor as memAnchor } from "./src/anchor.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry, Stopwatch } from "./src/telemetry.js";
+// Dreaming module — lazy-loaded to handle CJS/ESM interop across bundlers
+let _runDreamCycle = null;
+function getDreamCycle() {
+    if (!_runDreamCycle) {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const mod = require("./src/dreaming.js");
+            _runDreamCycle = mod.runDreamCycle || mod.default?.runDreamCycle;
+        }
+        catch {
+            try {
+                const mod = require("./src/dreaming.ts");
+                _runDreamCycle = mod.runDreamCycle || mod.default?.runDreamCycle;
+            }
+            catch { /* dreaming not available */ }
+        }
+    }
+    return _runDreamCycle;
+}
 import { extractRecallQuery } from "./src/recall-query.js";
+import { InTurnRecallCache } from "./src/recall-cache.js";
+import { probeReranker } from "./src/rerank-probe.js";
 import { aggregateHealthStatus, buildAuditPrompt, collectMemexLogEvidence, extractAuditConclusion, } from "./src/health.js";
 // ============================================================================
 // Default Configuration
@@ -255,6 +275,12 @@ const memoryUnifiedPlugin = {
             if (!retrievalConfig.rerankProvider && config.reranker.provider) {
                 retrievalConfig.rerankProvider = config.reranker.provider;
             }
+            if (retrievalConfig.rerankBlendWeight === undefined && typeof config.reranker.blendWeight === "number") {
+                retrievalConfig.rerankBlendWeight = config.reranker.blendWeight;
+            }
+            if (retrievalConfig.rerankScoreMode === undefined && (config.reranker.scoreMode === "raw" || config.reranker.scoreMode === "rank")) {
+                retrievalConfig.rerankScoreMode = config.reranker.scoreMode;
+            }
         }
         const retriever = createRetriever(store, embedder, retrievalConfig);
         const scopeManager = createScopeManager(config.scopes);
@@ -401,6 +427,23 @@ const memoryUnifiedPlugin = {
                         ].filter(Boolean).join("; "),
                 });
             }
+            // Reranker configuration check — always reports whether it's set up,
+            // independently of the probe. Per docs/plans/011-reranker-modes-and-fallback.md,
+            // "reranker configured but unavailable" should be `warn`, not `fail` —
+            // retrieval still works via the fusion-only path.
+            const rerankerEnabled = config.reranker?.enabled !== false && !!config.reranker?.endpoint;
+            checks.push({
+                name: "reranker_configured",
+                status: "ok",
+                detail: rerankerEnabled
+                    ? `${config.reranker?.model || "unknown"} @ ${config.reranker?.endpoint}`
+                    : "disabled",
+                meta: {
+                    enabled: rerankerEnabled,
+                    model: config.reranker?.model,
+                    provider: config.reranker?.provider,
+                },
+            });
             if (opts?.probe) {
                 const embeddingProbe = await runWithTimeout(embedder.test(), 8_000, "memex.health embedder.test()");
                 checks.push({
@@ -418,6 +461,19 @@ const memoryUnifiedPlugin = {
                         ? `${retrievalProbe.mode}, FTS ${retrievalProbe.hasFtsSupport ? "enabled" : "disabled"}`
                         : (retrievalProbe.error ?? "retrieval probe failed"),
                 });
+                // Reranker liveness probe — only runs when --probe is requested
+                // because it costs one /v1/rerank HTTP call. Failure is `warn`, not
+                // `fail`, because retrieval still works without the reranker.
+                if (rerankerEnabled && config.reranker?.endpoint && config.reranker?.model) {
+                    const rerankerProbe = await runWithTimeout(probeReranker(config.reranker.endpoint, config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "", config.reranker.model), 8_000, "memex.health rerank.probe");
+                    checks.push({
+                        name: "rerank_probe",
+                        status: rerankerProbe.ok ? "ok" : "warn",
+                        detail: rerankerProbe.ok
+                            ? "endpoint responded with a valid rerank response"
+                            : `endpoint unavailable: ${rerankerProbe.reason} (retrieval falls back to fusion only)`,
+                    });
+                }
             }
             const logs = opts?.logLines
                 ? await collectMemexLogEvidence({ logPath: opts.logPath, logDir: opts.logDir, maxLines: opts.logLines })
@@ -540,7 +596,7 @@ const memoryUnifiedPlugin = {
                         apiKey: config.generation.apiKey ? resolveEnvVars(config.generation.apiKey) : resolveEnvVars(config.embedding.apiKey),
                         model: config.generation.model,
                     } : undefined,
-                    queryExpansion: config.documents.queryExpansion ?? false,
+                    queryExpansion: config.documents?.queryExpansion ?? false,
                 };
                 // Initialize shared LLM (replaces node-llama-cpp with HTTP)
                 initializeLLM(llmConfig);
@@ -582,7 +638,7 @@ const memoryUnifiedPlugin = {
                     // Fire-and-forget initial indexing
                     void runDocIndex();
                     // Periodic re-indexing (default: every 30 minutes, 0 = disabled)
-                    const reindexMinutes = config.documents.reindexIntervalMinutes ?? 30;
+                    const reindexMinutes = config.documents?.reindexIntervalMinutes ?? 30;
                     if (reindexMinutes > 0) {
                         reindexTimer = setInterval(() => void runDocIndex(true), reindexMinutes * 60_000);
                     }
@@ -634,15 +690,22 @@ const memoryUnifiedPlugin = {
             }));
         };
         // Create unified retriever (replaces dual-pipeline)
-        const unifiedRetriever = new UnifiedRetriever(store, documentSearchFn, embedder, {
+        const unifiedRetrieverConfig = {
             reranker: (config.reranker?.enabled !== false && config.reranker?.endpoint) ? {
                 endpoint: config.reranker.endpoint,
                 apiKey: config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "unused",
-                model: config.reranker.model || "bge-reranker-v2-m3-Q8_0",
+                model: config.reranker.model || "Qwen3-Reranker-0.6B-Q8_0",
                 provider: config.reranker.provider || "jina",
             } : null,
             queryExpansion: false,
-        });
+        };
+        if (typeof config.reranker?.blendWeight === "number") {
+            unifiedRetrieverConfig.rerankBlendWeight = config.reranker.blendWeight;
+        }
+        if (config.reranker?.scoreMode === "raw" || config.reranker?.scoreMode === "rank") {
+            unifiedRetrieverConfig.rerankScoreMode = config.reranker.scoreMode;
+        }
+        const unifiedRetriever = new UnifiedRetriever(store, documentSearchFn, embedder, unifiedRetrieverConfig);
         api.registerMemoryRuntime({
             async getMemorySearchManager() {
                 const manager = {
@@ -741,12 +804,22 @@ const memoryUnifiedPlugin = {
             },
             async closeAllMemorySearchManagers() { },
         });
-        // Everything below runs once — api.on() is additive and OpenClaw
-        // calls register() multiple times during startup phases.
-        if (_registered)
-            return;
-        _registered = true;
-        api.logger.info(`memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`);
+        if (!_registered) {
+            let docsStatus;
+            if (unifiedRecall.hasDocumentSearch) {
+                docsStatus = "enabled";
+            }
+            else if (config.documents?.enabled === false) {
+                docsStatus = "disabled (config.documents.enabled = false)";
+            }
+            else if (docPaths.length === 0) {
+                docsStatus = "disabled (no doc paths discovered — check api.config.agents.list and config.documents.paths)";
+            }
+            else {
+                docsStatus = "disabled (initialization failed — check earlier 'document initialization failed' warning; common cause: better-sqlite3 native binding missing for this Node version)";
+            }
+            api.logger.info(`memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, node: ${process.version}, documents: ${docsStatus})`);
+        }
         // Config warnings
         if (!isCli) {
             const recallLimit = config.autoRecallLimit ?? 3;
@@ -828,171 +901,232 @@ const memoryUnifiedPlugin = {
         // ========================================================================
         // Lifecycle Hooks
         // ========================================================================
-        // Cross-turn recall tracking: avoid returning the same memories every turn
-        // Maps agentId → last N turns of recalled memory IDs
-        const recentRecalls = new Map();
-        const RECALL_HISTORY_TURNS = 5;
-        // Auto-recall: inject relevant memories into prompt context
-        // Default ON — LLM needs recalled context to make good memory decisions.
-        // Uses before_prompt_build (not legacy before_agent_start) per SDK recommendation.
-        if (config.autoRecall !== false) {
-            api.on("before_prompt_build", async (event, ctx) => {
-                const recallQuery = extractRecallQuery(event);
-                if (!recallQuery || shouldSkipRetrieval(recallQuery, config.autoRecallMinLength)) {
-                    return;
-                }
-                try {
-                    const sw = new Stopwatch();
-                    // Determine agent ID and accessible scopes
-                    const agentId = ctx?.agentId || "main";
-                    // Skip recall for agents not in the whitelist (if configured)
-                    const recallAgents = config.autoRecallAgents;
-                    if (recallAgents && recallAgents.length > 0 && !recallAgents.includes(agentId)) {
-                        return;
+        // ========================================================================
+        // Lifecycle Hooks (api.on() is additive — only register once)
+        // ========================================================================
+        if (!_registered) {
+            _registered = true;
+            // /dream command — memory consolidation, triggered by user or cron
+            const dreamLogPath = join(dirname(unifiedDbFile), "memex.log");
+            api.registerCommand({
+                name: "dream",
+                description: "Run memory consolidation (dedup, noise removal, re-scoring). Args: light, deep, or blank for full cycle. Use --dry-run to preview.",
+                acceptsArgs: true,
+                handler: async (ctx) => {
+                    const args = (ctx.args || "").trim().toLowerCase();
+                    const dryRun = args.includes("--dry-run");
+                    const dreamFn = getDreamCycle();
+                    if (!dreamFn) {
+                        return { text: "Dreaming module not available." };
                     }
-                    // Spread to avoid mutating scope manager's internal array
-                    const accessibleScopes = [...scopeManager.getAccessibleScopes(agentId)];
-                    // Include current session scope so the agent sees its own session's memories
-                    const sessionScope = ctx?.sessionKey || ctx?.sessionId;
-                    if (sessionScope) {
-                        accessibleScopes.push(`session:${sessionScope}`);
+                    if (dryRun) {
+                        const db = getStore().db;
+                        const total = db.prepare("SELECT COUNT(*) as c FROM memories").get().c;
+                        const dupes = db.prepare("SELECT COUNT(*) as c FROM (SELECT text, COUNT(*) as cnt FROM memories GROUP BY text HAVING cnt > 1)").get().c;
+                        const fragments = db.prepare("SELECT COUNT(*) as c FROM memories WHERE (text LIKE '[assistant]%' OR text LIKE '[user]%')").get().c;
+                        return { text: `Dry run — ${total} memories:\n  Duplicates: ${dupes}\n  Fragments: ${fragments}` };
                     }
-                    // Build recentlyRecalled set from last N turns for diversity
-                    const agentHistory = recentRecalls.get(agentId) || [];
-                    const recentlyRecalled = new Set();
-                    for (const turnIds of agentHistory) {
-                        for (const id of turnIds)
-                            recentlyRecalled.add(id);
-                    }
-                    // Use unified recall (memory + docs) when available, fallback to memory-only
-                    let memoryContext;
-                    let resultCount = 0;
-                    const recalledIds = [];
-                    if (unifiedRecall.hasDocumentSearch) {
-                        // Filter document to current agent's workspace collection to prevent cross-agent context pollution
-                        const docCollection = (config.autoRecallDocFilter !== false && ctx?.workspaceDir)
-                            ? workspaceToCollection.get(ctx.workspaceDir)
-                            : undefined;
-                        const results = await unifiedRecall.recall(recallQuery, {
-                            // Use only the latest user turn for retrieval. The full built prompt can
-                            // exceed local embedding backend context limits and pollute recall intent.
-                            limit: config.autoRecallLimit ?? 3,
-                            scopeFilter: accessibleScopes,
-                            collection: docCollection,
-                            recentlyRecalled,
-                        });
-                        if (results.length === 0) {
-                            return;
-                        }
-                        resultCount = results.length;
-                        for (const r of results)
-                            recalledIds.push(r.id);
-                        memoryContext = results
-                            .map((r) => {
-                            const a = memAnchor(r.id);
-                            if (r.source === "conversation") {
-                                const meta = r.metadata;
-                                return `- [mem:${a} · ${meta.category || "other"} · ${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
-                            }
-                            else {
-                                const meta = r.metadata;
-                                return `- [doc:${a} · ${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
-                            }
-                        })
-                            .join("\n");
-                    }
-                    else {
-                        const results = await retriever.retrieve({
-                            query: recallQuery,
-                            limit: config.autoRecallLimit ?? 3,
-                            scopeFilter: accessibleScopes,
-                            recentlyRecalled,
-                        });
-                        if (results.length === 0) {
-                            return;
-                        }
-                        resultCount = results.length;
-                        for (const r of results)
-                            recalledIds.push(r.entry.id);
-                        memoryContext = results
-                            .map((r) => `- [mem:${memAnchor(r.entry.id)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
-                            .join("\n");
-                    }
-                    // Record recalled IDs for cross-turn diversity
-                    if (recalledIds.length > 0) {
-                        const history = recentRecalls.get(agentId) || [];
-                        history.push(recalledIds);
-                        if (history.length > RECALL_HISTORY_TURNS)
-                            history.shift();
-                        recentRecalls.set(agentId, history);
-                        // Also record recall frequency in retriever
-                        retriever.recordRecall(recalledIds);
-                    }
-                    api.logger.info?.(`memex: injecting ${resultCount} memories into context for agent ${agentId}`);
-                    track("recall", { results: resultCount, source: "auto", ...retriever.lastTimings, ...sw.timings });
-                    return {
-                        prependContext: buildRecallContext(memoryContext),
+                    const phases = {
+                        light: !args || args.includes("light"),
+                        deep: !args || args.includes("deep"),
+                        reflection: args.includes("reflect"),
                     };
-                }
-                catch (err) {
-                    track("error", { operation: "auto_recall", message: String(err) });
-                    api.logger.warn(`memex: recall failed: ${String(err)}`);
-                }
+                    const result = await dreamFn(getStore(), { enabled: true, phases, logPath: dreamLogPath }, track);
+                    const parts = [
+                        result.light ? `Light: deduped=${result.light.deduped}, noise=${result.light.noiseRemoved}, fragments=${result.light.fragmentsRemoved}` : null,
+                        result.deep ? `Deep: rescored=${result.deep.rescored}, decayed=${result.deep.decayed}` : null,
+                    ].filter(Boolean);
+                    return { text: `Dream cycle done (${result.duration_ms}ms):\n  ${parts.join("\n  ")}` };
+                },
             });
-        }
-        // Auto-capture: inject memory instruction into system prompt
-        // Nudges the LLM to store facts via memory_store tool
-        // Supports both new `autoCapture` and legacy `memoryInstructions` config
-        api.registerMemoryPromptSection(({ availableTools }) => {
-            if (config.autoCapture === false || config.memoryInstructions === "off") {
-                return [];
-            }
-            if (!availableTools.has("memory_store")) {
-                return [];
-            }
-            const captureAgents = config.autoCaptureAgents;
-            if (captureAgents && captureAgents.length > 0) {
-                return ["Memex memory tools are active for configured agents."];
-            }
-            return [`<memory-instructions>\n${MEMORY_INSTRUCTION}\n</memory-instructions>`];
-        });
-        if (typeof api.registerMemoryFlushPlan === "function") {
-            api.registerMemoryFlushPlan(buildMemoryFlushPlan);
-        }
-        if (config.autoCapture !== false && config.memoryInstructions !== "off") {
-            const captureAgents = config.autoCaptureAgents;
-            api.on("before_prompt_build", async (_event, ctx) => {
-                if (captureAgents && captureAgents.length > 0) {
-                    const agentId = ctx?.agentId || "main";
-                    if (!captureAgents.includes(agentId))
+            // Cross-turn recall tracking: avoid returning the same memories every turn
+            // Maps agentId → last N turns of recalled memory IDs
+            const recentRecalls = new Map();
+            const RECALL_HISTORY_TURNS = 5;
+            // In-turn recall cache: see src/recall-cache.ts.
+            const recallCache = new InTurnRecallCache({ ttlMs: 60_000, maxSize: 32 });
+            // Auto-recall: inject relevant memories into prompt context
+            // Default ON — LLM needs recalled context to make good memory decisions.
+            // Uses before_prompt_build (not legacy before_agent_start) per SDK recommendation.
+            if (config.autoRecall !== false) {
+                api.on("before_prompt_build", async (event, ctx) => {
+                    const recallQuery = extractRecallQuery(event);
+                    if (!recallQuery || shouldSkipRetrieval(recallQuery, config.autoRecallMinLength)) {
                         return;
+                    }
+                    try {
+                        const sw = new Stopwatch();
+                        // Determine agent ID and accessible scopes
+                        const agentId = ctx?.agentId || "main";
+                        // Skip recall for agents not in the whitelist (if configured)
+                        const recallAgents = config.autoRecallAgents;
+                        if (recallAgents && recallAgents.length > 0 && !recallAgents.includes(agentId)) {
+                            return;
+                        }
+                        // In-turn dedup: if the same recallQuery was processed recently for
+                        // this session+agent, reuse the computed context without re-running
+                        // retrieval. This avoids redundant rerank calls during tool-use loops.
+                        const sessionKeyForCache = ctx?.sessionKey || ctx?.sessionId;
+                        const cachedEntry = recallCache.get(agentId, sessionKeyForCache, recallQuery);
+                        if (cachedEntry) {
+                            track("recall", { results: cachedEntry.recalledIds.length, source: "auto_cached", ...sw.timings });
+                            return {
+                                prependContext: buildRecallContext(cachedEntry.context),
+                            };
+                        }
+                        // Spread to avoid mutating scope manager's internal array
+                        const accessibleScopes = [...scopeManager.getAccessibleScopes(agentId)];
+                        // Include current session scope so the agent sees its own session's memories
+                        const sessionScope = ctx?.sessionKey || ctx?.sessionId;
+                        if (sessionScope) {
+                            accessibleScopes.push(`session:${sessionScope}`);
+                        }
+                        // Build recentlyRecalled set from last N turns for diversity
+                        const agentHistory = recentRecalls.get(agentId) || [];
+                        const recentlyRecalled = new Set();
+                        for (const turnIds of agentHistory) {
+                            for (const id of turnIds)
+                                recentlyRecalled.add(id);
+                        }
+                        // Use unified recall (memory + docs) when available, fallback to memory-only
+                        let memoryContext;
+                        let resultCount = 0;
+                        const recalledIds = [];
+                        if (unifiedRecall.hasDocumentSearch) {
+                            // Filter document to current agent's workspace collection to prevent cross-agent context pollution
+                            const docCollection = (config.autoRecallDocFilter !== false && ctx?.workspaceDir)
+                                ? workspaceToCollection.get(ctx.workspaceDir)
+                                : undefined;
+                            const results = await unifiedRecall.recall(recallQuery, {
+                                // Use only the latest user turn for retrieval. The full built prompt can
+                                // exceed local embedding backend context limits and pollute recall intent.
+                                limit: config.autoRecallLimit ?? 3,
+                                scopeFilter: accessibleScopes,
+                                collection: docCollection,
+                                recentlyRecalled,
+                            });
+                            if (results.length === 0) {
+                                return;
+                            }
+                            resultCount = results.length;
+                            for (const r of results)
+                                recalledIds.push(r.id);
+                            memoryContext = results
+                                .map((r) => {
+                                const anchor = String(r.id).slice(0, 8);
+                                if (r.source === "conversation") {
+                                    const meta = r.metadata;
+                                    return `- [mem:${anchor} · ${meta.category || "other"} · ${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                                }
+                                else {
+                                    const meta = r.metadata;
+                                    return `- [doc:${anchor} · ${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                                }
+                            })
+                                .join("\n");
+                        }
+                        else {
+                            const results = await retriever.retrieve({
+                                query: recallQuery,
+                                limit: config.autoRecallLimit ?? 3,
+                                scopeFilter: accessibleScopes,
+                                recentlyRecalled,
+                            });
+                            if (results.length === 0) {
+                                return;
+                            }
+                            resultCount = results.length;
+                            for (const r of results)
+                                recalledIds.push(r.entry.id);
+                            memoryContext = results
+                                .map((r) => `- [mem:${String(r.entry.id).slice(0, 8)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
+                                .join("\n");
+                        }
+                        // Record recalled IDs for cross-turn diversity
+                        if (recalledIds.length > 0) {
+                            const history = recentRecalls.get(agentId) || [];
+                            history.push(recalledIds);
+                            if (history.length > RECALL_HISTORY_TURNS)
+                                history.shift();
+                            recentRecalls.set(agentId, history);
+                            // Record recall frequency in retriever (ephemeral) and DB (persistent)
+                            retriever.recordRecall(recalledIds);
+                            try {
+                                store.recordRecalls(recalledIds);
+                            }
+                            catch { /* best effort */ }
+                        }
+                        api.logger.info?.(`memex: injecting ${resultCount} memories into context for agent ${agentId}`);
+                        track("recall", { results: resultCount, source: "auto", ...retriever.lastTimings, ...sw.timings });
+                        // Cache result so subsequent prompt rebuilds in the same turn reuse it.
+                        recallCache.set(agentId, sessionKeyForCache, recallQuery, {
+                            context: memoryContext,
+                            recalledIds,
+                        });
+                        return {
+                            prependContext: buildRecallContext(memoryContext),
+                        };
+                    }
+                    catch (err) {
+                        track("error", { operation: "auto_recall", message: String(err) });
+                        api.logger.warn(`memex: recall failed: ${String(err)}`);
+                    }
+                });
+            }
+            // Auto-capture: inject memory instruction into system prompt
+            // Nudges the LLM to store facts via memory_store tool
+            // Supports both new `autoCapture` and legacy `memoryInstructions` config
+            api.registerMemoryPromptSection(({ availableTools }) => {
+                if (config.autoCapture === false || config.memoryInstructions === "off") {
+                    return [];
                 }
-                return {
-                    appendSystemContext: `<memory-instructions>\n${MEMORY_INSTRUCTION}\n</memory-instructions>`,
-                };
+                if (!availableTools.has("memory_store")) {
+                    return [];
+                }
+                const captureAgents = config.autoCaptureAgents;
+                if (captureAgents && captureAgents.length > 0) {
+                    return ["Memex memory tools are active for configured agents."];
+                }
+                return [`<memory-instructions>\n${MEMORY_INSTRUCTION}\n</memory-instructions>`];
             });
-        }
-        // Embedding mismatch warning: inject into agent context so user is informed
-        if (!isCli) {
-            api.on("before_prompt_build", async () => {
-                if (!embeddingStatusChecked) {
-                    refreshEmbeddingMismatchWarning();
-                }
-                if (!embeddingMismatchWarning) {
-                    return {};
-                }
-                // Clear warning once re-embed completes (check live state)
-                if (!store.needsReEmbed(embeddingModel)) {
-                    embeddingMismatchWarning = null;
-                    return {};
-                }
-                return {
-                    prependContext: `<system-warning>\n${embeddingMismatchWarning}\n</system-warning>`,
-                };
-            });
-        }
-        // Auto-capture removed — LLM-driven storage via memory_store tool is preferred.
-        // Future: compaction-based extraction via session_before_compact hook.
+            if (typeof api.registerMemoryFlushPlan === "function") {
+                api.registerMemoryFlushPlan(buildMemoryFlushPlan);
+            }
+            if (config.autoCapture !== false && config.memoryInstructions !== "off") {
+                const captureAgents = config.autoCaptureAgents;
+                api.on("before_prompt_build", async (_event, ctx) => {
+                    if (captureAgents && captureAgents.length > 0) {
+                        const agentId = ctx?.agentId || "main";
+                        if (!captureAgents.includes(agentId))
+                            return;
+                    }
+                    return {
+                        appendSystemContext: `<memory-instructions>\n${MEMORY_INSTRUCTION}\n</memory-instructions>`,
+                    };
+                });
+            }
+            // Embedding mismatch warning: inject into agent context so user is informed
+            if (!isCli) {
+                api.on("before_prompt_build", async () => {
+                    if (!embeddingStatusChecked) {
+                        refreshEmbeddingMismatchWarning();
+                    }
+                    if (!embeddingMismatchWarning) {
+                        return {};
+                    }
+                    // Clear warning once re-embed completes (check live state)
+                    if (!store.needsReEmbed(embeddingModel)) {
+                        embeddingMismatchWarning = null;
+                        return {};
+                    }
+                    return {
+                        prependContext: `<system-warning>\n${embeddingMismatchWarning}\n</system-warning>`,
+                    };
+                });
+            }
+            // Auto-capture removed — LLM-driven storage via memory_store tool is preferred.
+            // Future: compaction-based extraction via session_before_compact hook.
+        } // end _registered guard for api.on() hooks
         api.registerGatewayMethod("memex.health", async ({ params, respond }) => {
             try {
                 const probe = params?.probe === true;
@@ -1108,7 +1242,7 @@ const memoryUnifiedPlugin = {
         const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
         async function runBackup() {
             try {
-                const backupDir = api.resolvePath(join(resolvedDbPath, "..", "backups"));
+                const backupDir = join(dirname(unifiedDbFile), "backups");
                 await mkdir(backupDir, { recursive: true });
                 const allMemories = await store.list(undefined, undefined, 10000, 0);
                 if (allMemories.length === 0) {
@@ -1157,7 +1291,8 @@ const memoryUnifiedPlugin = {
             }
         }
         // ========================================================================
-        // Service Registration
+        // Service Registration (must run on every register() call — OpenClaw
+        // may only start the service registered in the matching loading phase)
         // ========================================================================
         api.registerService({
             id: "memex",
@@ -1216,6 +1351,8 @@ const memoryUnifiedPlugin = {
                 // Run initial backup after a short delay, then schedule daily
                 setTimeout(() => void runBackup(), 60_000); // 1 min after start
                 backupTimer = setInterval(() => void runBackup(), BACKUP_INTERVAL_MS);
+                // Dreaming timer moved to register() body (inside _registered guard)
+                // because service.start() is not reliably called by OpenClaw.
                 // Auto-index sessions on startup (if configured)
                 if (config.sessionIndexing?.enabled) {
                     const runSessionIndex = async () => {
@@ -1415,6 +1552,14 @@ function parsePluginConfig(value) {
                 minImportance: typeof cfg.sessionIndexing.minImportance === "number"
                     ? cfg.sessionIndexing.minImportance : undefined,
                 autoIndexOnce: cfg.sessionIndexing.autoIndexOnce !== false,
+            }
+            : undefined,
+        dreaming: typeof cfg.dreaming === "object" && cfg.dreaming !== null
+            ? {
+                enabled: cfg.dreaming.enabled !== false,
+                phases: typeof cfg.dreaming.phases === "object"
+                    ? cfg.dreaming.phases
+                    : undefined,
             }
             : undefined,
     };

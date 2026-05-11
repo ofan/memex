@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { splitSections, CHUNK_SIZE_CHARS } from "../src/search.ts";
+import { splitSections, CHUNK_SIZE_CHARS } from "../src/search.js";
 
 describe("splitSections", () => {
   it("returns empty array for empty string", () => {

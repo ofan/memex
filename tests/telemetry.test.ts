@@ -3,7 +3,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Stopwatch } from "../src/telemetry.ts";
+import { Stopwatch } from "../src/telemetry.js";
 
 describe("Stopwatch", () => {
   it("records lap times as {name}_ms properties", () => {

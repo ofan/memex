@@ -39,7 +39,26 @@ import { buildRecallContext, MEMORY_INSTRUCTION } from "./src/memory-instruction
 import { anchor as memAnchor } from "./src/anchor.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { initTelemetry, Stopwatch } from "./src/telemetry.js";
+// Dreaming module — lazy-loaded to handle CJS/ESM interop across bundlers
+let _runDreamCycle: ((store: any, config: any, track?: any) => Promise<any>) | null = null;
+function getDreamCycle() {
+  if (!_runDreamCycle) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require("./src/dreaming.js");
+      _runDreamCycle = mod.runDreamCycle || mod.default?.runDreamCycle;
+    } catch {
+      try {
+        const mod = require("./src/dreaming.ts");
+        _runDreamCycle = mod.runDreamCycle || mod.default?.runDreamCycle;
+      } catch { /* dreaming not available */ }
+    }
+  }
+  return _runDreamCycle;
+}
 import { extractRecallQuery } from "./src/recall-query.js";
+import { InTurnRecallCache } from "./src/recall-cache.js";
+import { probeReranker } from "./src/rerank-probe.js";
 import {
   aggregateHealthStatus,
   buildAuditPrompt,
@@ -110,6 +129,24 @@ interface PluginConfig {
     apiKey?: string;
     model?: string;
     provider?: string;
+    /**
+     * Blend weight for the cross-encoder rerank score vs the source-calibrated
+     * fused score. Higher = reranker dominates. Lower = fusion has more say.
+     * Default: 0.7 for the unified retriever path, 0.8 for the legacy path.
+     * Tuning this down (e.g. to 0.5 or 0.6) protects fusion winners when
+     * the reranker is overconfident on semantically-similar-but-wrong matches.
+     */
+    blendWeight?: number;
+    /**
+     * How to interpret the reranker's output score for blending.
+     * - "raw" (default): use the raw relevance_score
+     * - "rank": normalize to 1 - (rank-1)/N so top-1 always gets 1.0.
+     *   Recommended for saturating rerankers like Qwen3-Reranker where
+     *   the raw scores cluster near 1.0 and get dissolved by blend math.
+     *   On memex's domain eval + TIER=pipeline fast-benchmark, rank mode
+     *   recovered +1 / +7 queries over raw mode.
+     */
+    scoreMode?: "raw" | "rank";
   };
   /** Document search (document) config */
   documents?: {
@@ -395,6 +432,12 @@ const memoryUnifiedPlugin = {
       if (!retrievalConfig.rerankProvider && config.reranker.provider) {
         retrievalConfig.rerankProvider = config.reranker.provider as any;
       }
+      if (retrievalConfig.rerankBlendWeight === undefined && typeof config.reranker.blendWeight === "number") {
+        retrievalConfig.rerankBlendWeight = config.reranker.blendWeight;
+      }
+      if (retrievalConfig.rerankScoreMode === undefined && (config.reranker.scoreMode === "raw" || config.reranker.scoreMode === "rank")) {
+        retrievalConfig.rerankScoreMode = config.reranker.scoreMode;
+      }
     }
     const retriever = createRetriever(store, embedder, retrievalConfig);
     const scopeManager = createScopeManager(config.scopes);
@@ -456,7 +499,7 @@ const memoryUnifiedPlugin = {
       try {
         const liveSearchStore = getSearchStore();
         const db = liveSearchStore.db;
-        const quickCheck = String(db.prepare("PRAGMA quick_check").pluck().get() ?? "unknown");
+        const quickCheck = String((db.prepare("PRAGMA quick_check") as any).pluck().get() ?? "unknown");
         const exists = existsSync(unifiedDbFile);
         checks.push({
           name: "db",
@@ -562,6 +605,24 @@ const memoryUnifiedPlugin = {
         });
       }
 
+      // Reranker configuration check — always reports whether it's set up,
+      // independently of the probe. Per docs/plans/011-reranker-modes-and-fallback.md,
+      // "reranker configured but unavailable" should be `warn`, not `fail` —
+      // retrieval still works via the fusion-only path.
+      const rerankerEnabled = config.reranker?.enabled !== false && !!config.reranker?.endpoint;
+      checks.push({
+        name: "reranker_configured",
+        status: "ok",
+        detail: rerankerEnabled
+          ? `${config.reranker?.model || "unknown"} @ ${config.reranker?.endpoint}`
+          : "disabled",
+        meta: {
+          enabled: rerankerEnabled,
+          model: config.reranker?.model,
+          provider: config.reranker?.provider,
+        },
+      });
+
       if (opts?.probe) {
         const embeddingProbe = await runWithTimeout(embedder.test(), 8_000, "memex.health embedder.test()");
         checks.push({
@@ -580,6 +641,28 @@ const memoryUnifiedPlugin = {
             ? `${retrievalProbe.mode}, FTS ${retrievalProbe.hasFtsSupport ? "enabled" : "disabled"}`
             : (retrievalProbe.error ?? "retrieval probe failed"),
         });
+
+        // Reranker liveness probe — only runs when --probe is requested
+        // because it costs one /v1/rerank HTTP call. Failure is `warn`, not
+        // `fail`, because retrieval still works without the reranker.
+        if (rerankerEnabled && config.reranker?.endpoint && config.reranker?.model) {
+          const rerankerProbe = await runWithTimeout(
+            probeReranker(
+              config.reranker.endpoint,
+              config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "",
+              config.reranker.model,
+            ),
+            8_000,
+            "memex.health rerank.probe"
+          );
+          checks.push({
+            name: "rerank_probe",
+            status: rerankerProbe.ok ? "ok" : "warn",
+            detail: rerankerProbe.ok
+              ? "endpoint responded with a valid rerank response"
+              : `endpoint unavailable: ${rerankerProbe.reason} (retrieval falls back to fusion only)`,
+          });
+        }
       }
 
       const logs = opts?.logLines
@@ -707,7 +790,7 @@ const memoryUnifiedPlugin = {
             apiKey: config.generation.apiKey ? resolveEnvVars(config.generation.apiKey) : resolveEnvVars(config.embedding.apiKey),
             model: config.generation.model,
           } : undefined,
-          queryExpansion: config.documents.queryExpansion ?? false,
+          queryExpansion: config.documents?.queryExpansion ?? false,
         };
 
         // Initialize shared LLM (replaces node-llama-cpp with HTTP)
@@ -764,7 +847,7 @@ const memoryUnifiedPlugin = {
           void runDocIndex();
 
           // Periodic re-indexing (default: every 30 minutes, 0 = disabled)
-          const reindexMinutes = config.documents.reindexIntervalMinutes ?? 30;
+          const reindexMinutes = config.documents?.reindexIntervalMinutes ?? 30;
           if (reindexMinutes > 0) {
             reindexTimer = setInterval(() => void runDocIndex(true), reindexMinutes * 60_000);
           }
@@ -830,22 +913,29 @@ const memoryUnifiedPlugin = {
     };
 
     // Create unified retriever (replaces dual-pipeline)
+    const unifiedRetrieverConfig: Partial<import("./src/unified-retriever.js").UnifiedRetrieverConfig> = {
+      reranker: (config.reranker?.enabled !== false && config.reranker?.endpoint) ? {
+        endpoint: config.reranker.endpoint,
+        apiKey: config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "unused",
+        model: config.reranker.model || "Qwen3-Reranker-0.6B-Q8_0",
+        provider: config.reranker.provider || "jina",
+      } : null,
+      queryExpansion: false,
+    };
+    if (typeof config.reranker?.blendWeight === "number") {
+      unifiedRetrieverConfig.rerankBlendWeight = config.reranker.blendWeight;
+    }
+    if (config.reranker?.scoreMode === "raw" || config.reranker?.scoreMode === "rank") {
+      unifiedRetrieverConfig.rerankScoreMode = config.reranker.scoreMode;
+    }
     const unifiedRetriever = new UnifiedRetriever(
       store,
       documentSearchFn,
       embedder,
-      {
-        reranker: (config.reranker?.enabled !== false && config.reranker?.endpoint) ? {
-          endpoint: config.reranker.endpoint,
-          apiKey: config.reranker.apiKey ? resolveEnvVars(config.reranker.apiKey) : "unused",
-          model: config.reranker.model || "bge-reranker-v2-m3-Q8_0",
-          provider: config.reranker.provider || "jina",
-        } : null,
-        queryExpansion: false,
-      }
+      unifiedRetrieverConfig,
     );
 
-    api.registerMemoryRuntime({
+    (api as any).registerMemoryRuntime({
       async getMemorySearchManager() {
         const manager = {
           status() {
@@ -943,14 +1033,21 @@ const memoryUnifiedPlugin = {
       async closeAllMemorySearchManagers() {},
     });
 
-    // Everything below runs once — api.on() is additive and OpenClaw
-    // calls register() multiple times during startup phases.
-    if (_registered) return;
-    _registered = true;
-
-    api.logger.info(
-      `memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, documents: ${unifiedRecall.hasDocumentSearch ? "enabled" : "disabled"})`
-    );
+    if (!_registered) {
+      let docsStatus: string;
+      if (unifiedRecall.hasDocumentSearch) {
+        docsStatus = "enabled";
+      } else if (config.documents?.enabled === false) {
+        docsStatus = "disabled (config.documents.enabled = false)";
+      } else if (docPaths.length === 0) {
+        docsStatus = "disabled (no doc paths discovered — check api.config.agents.list and config.documents.paths)";
+      } else {
+        docsStatus = "disabled (initialization failed — check earlier 'document initialization failed' warning; common cause: better-sqlite3 native binding missing for this Node version)";
+      }
+      api.logger.info(
+        `memex@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"}, node: ${process.version}, documents: ${docsStatus})`
+      );
+    }
 
     // Config warnings
     if (!isCli) {
@@ -1044,10 +1141,58 @@ const memoryUnifiedPlugin = {
     // Lifecycle Hooks
     // ========================================================================
 
+    // ========================================================================
+    // Lifecycle Hooks (api.on() is additive — only register once)
+    // ========================================================================
+
+    if (!_registered) {
+    _registered = true;
+
+    // /dream command — memory consolidation, triggered by user or cron
+    const dreamLogPath = join(dirname(unifiedDbFile), "memex.log");
+    api.registerCommand({
+      name: "dream",
+      description: "Run memory consolidation (dedup, noise removal, re-scoring). Args: light, deep, or blank for full cycle. Use --dry-run to preview.",
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        const args = (ctx.args || "").trim().toLowerCase();
+        const dryRun = args.includes("--dry-run");
+        const dreamFn = getDreamCycle();
+        if (!dreamFn) {
+          return { text: "Dreaming module not available." };
+        }
+
+        if (dryRun) {
+          const db = getStore().db;
+          const total = (db.prepare("SELECT COUNT(*) as c FROM memories").get() as any).c;
+          const dupes = (db.prepare("SELECT COUNT(*) as c FROM (SELECT text, COUNT(*) as cnt FROM memories GROUP BY text HAVING cnt > 1)").get() as any).c;
+          const fragments = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE (text LIKE '[assistant]%' OR text LIKE '[user]%')").get() as any).c;
+          return { text: `Dry run — ${total} memories:\n  Duplicates: ${dupes}\n  Fragments: ${fragments}` };
+        }
+
+        const phases = {
+          light: !args || args.includes("light"),
+          deep: !args || args.includes("deep"),
+          reflection: args.includes("reflect"),
+        };
+
+        const result = await dreamFn(getStore(), { enabled: true, phases, logPath: dreamLogPath }, track);
+        const parts = [
+          result.light ? `Light: deduped=${result.light.deduped}, noise=${result.light.noiseRemoved}, fragments=${result.light.fragmentsRemoved}` : null,
+          result.deep ? `Deep: rescored=${result.deep.rescored}, decayed=${result.deep.decayed}` : null,
+        ].filter(Boolean);
+
+        return { text: `Dream cycle done (${result.duration_ms}ms):\n  ${parts.join("\n  ")}` };
+      },
+    });
+
     // Cross-turn recall tracking: avoid returning the same memories every turn
     // Maps agentId → last N turns of recalled memory IDs
     const recentRecalls = new Map<string, string[][]>();
     const RECALL_HISTORY_TURNS = 5;
+
+    // In-turn recall cache: see src/recall-cache.ts.
+    const recallCache = new InTurnRecallCache({ ttlMs: 60_000, maxSize: 32 });
 
     // Auto-recall: inject relevant memories into prompt context
     // Default ON — LLM needs recalled context to make good memory decisions.
@@ -1068,6 +1213,18 @@ const memoryUnifiedPlugin = {
           const recallAgents = config.autoRecallAgents as string[] | undefined;
           if (recallAgents && recallAgents.length > 0 && !recallAgents.includes(agentId)) {
             return;
+          }
+
+          // In-turn dedup: if the same recallQuery was processed recently for
+          // this session+agent, reuse the computed context without re-running
+          // retrieval. This avoids redundant rerank calls during tool-use loops.
+          const sessionKeyForCache = ctx?.sessionKey || ctx?.sessionId;
+          const cachedEntry = recallCache.get(agentId, sessionKeyForCache, recallQuery);
+          if (cachedEntry) {
+            track("recall", { results: cachedEntry.recalledIds.length, source: "auto_cached", ...sw.timings });
+            return {
+              prependContext: buildRecallContext(cachedEntry.context),
+            };
           }
           // Spread to avoid mutating scope manager's internal array
           const accessibleScopes = [...scopeManager.getAccessibleScopes(agentId)];
@@ -1111,13 +1268,13 @@ const memoryUnifiedPlugin = {
 
             memoryContext = results
               .map((r) => {
-                const a = memAnchor(r.id);
+                const anchor = String(r.id).slice(0, 8);
                 if (r.source === "conversation") {
                   const meta = r.metadata as { category?: string; scope?: string };
-                  return `- [mem:${a} · ${meta.category || "other"} · ${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                  return `- [mem:${anchor} · ${meta.category || "other"} · ${meta.scope || "global"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
                 } else {
                   const meta = r.metadata as { displayPath?: string; title?: string };
-                  return `- [doc:${a} · ${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
+                  return `- [doc:${anchor} · ${meta.displayPath || "unknown"}] ${sanitizeForContext(r.text)} (${(r.score * 100).toFixed(0)}%)`;
                 }
               })
               .join("\n");
@@ -1136,7 +1293,7 @@ const memoryUnifiedPlugin = {
             for (const r of results) recalledIds.push(r.entry.id);
 
             memoryContext = results
-              .map((r) => `- [mem:${memAnchor(r.entry.id)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
+              .map((r) => `- [mem:${String(r.entry.id).slice(0, 8)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
               .join("\n");
           }
 
@@ -1146,8 +1303,9 @@ const memoryUnifiedPlugin = {
             history.push(recalledIds);
             if (history.length > RECALL_HISTORY_TURNS) history.shift();
             recentRecalls.set(agentId, history);
-            // Also record recall frequency in retriever
+            // Record recall frequency in retriever (ephemeral) and DB (persistent)
             retriever.recordRecall(recalledIds);
+            try { store.recordRecalls(recalledIds); } catch { /* best effort */ }
           }
 
           api.logger.info?.(
@@ -1155,6 +1313,12 @@ const memoryUnifiedPlugin = {
           );
 
           track("recall", { results: resultCount, source: "auto", ...retriever.lastTimings, ...sw.timings });
+
+          // Cache result so subsequent prompt rebuilds in the same turn reuse it.
+          recallCache.set(agentId, sessionKeyForCache, recallQuery, {
+            context: memoryContext,
+            recalledIds,
+          });
 
           return {
             prependContext: buildRecallContext(memoryContext),
@@ -1222,6 +1386,8 @@ const memoryUnifiedPlugin = {
 
     // Auto-capture removed — LLM-driven storage via memory_store tool is preferred.
     // Future: compaction-based extraction via session_before_compact hook.
+
+    } // end _registered guard for api.on() hooks
 
     api.registerGatewayMethod("memex.health", async ({ params, respond }) => {
       try {
@@ -1348,7 +1514,7 @@ const memoryUnifiedPlugin = {
 
     async function runBackup() {
       try {
-        const backupDir = api.resolvePath(join(resolvedDbPath, "..", "backups"));
+        const backupDir = join(dirname(unifiedDbFile), "backups");
         await mkdir(backupDir, { recursive: true });
 
         const allMemories = await store.list(undefined, undefined, 10000, 0);
@@ -1403,7 +1569,8 @@ const memoryUnifiedPlugin = {
     }
 
     // ========================================================================
-    // Service Registration
+    // Service Registration (must run on every register() call — OpenClaw
+    // may only start the service registered in the matching loading phase)
     // ========================================================================
 
     api.registerService({
@@ -1470,6 +1637,9 @@ const memoryUnifiedPlugin = {
         // Run initial backup after a short delay, then schedule daily
         setTimeout(() => void runBackup(), 60_000); // 1 min after start
         backupTimer = setInterval(() => void runBackup(), BACKUP_INTERVAL_MS);
+
+        // Dreaming timer moved to register() body (inside _registered guard)
+        // because service.start() is not reliably called by OpenClaw.
 
         // Auto-index sessions on startup (if configured)
         if (config.sessionIndexing?.enabled) {
@@ -1669,12 +1839,12 @@ function parsePluginConfig(value: unknown): PluginConfig {
     scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes as any : undefined,
     enableManagementTools: cfg.enableManagementTools === true,
     sessionMemory: typeof cfg.sessionMemory === "object" && cfg.sessionMemory !== null
-      ? {
+      ? ({
         enabled: (cfg.sessionMemory as Record<string, unknown>).enabled !== false,
         messageCount: typeof (cfg.sessionMemory as Record<string, unknown>).messageCount === "number"
           ? (cfg.sessionMemory as Record<string, unknown>).messageCount as number
           : undefined,
-      }
+      } as any)
       : undefined,
     reranker,
     documents,
@@ -1691,7 +1861,15 @@ function parsePluginConfig(value: unknown): PluginConfig {
         autoIndexOnce: (cfg.sessionIndexing as Record<string, unknown>).autoIndexOnce !== false,
       }
       : undefined,
-  };
+    dreaming: typeof cfg.dreaming === "object" && cfg.dreaming !== null
+      ? ({
+        enabled: (cfg.dreaming as Record<string, unknown>).enabled !== false,
+        phases: typeof (cfg.dreaming as Record<string, unknown>).phases === "object"
+          ? (cfg.dreaming as Record<string, unknown>).phases as { light?: boolean; deep?: boolean; reflection?: boolean }
+          : undefined,
+      } as any)
+      : undefined,
+  } as PluginConfig;
 }
 
 /** @internal Reset module-level registration guard (test use only). */

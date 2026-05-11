@@ -92,13 +92,16 @@ Measured on LongMemEval_s (ICLR 2025). N=50 for memex, published numbers for oth
 
 | System | R@1 | R@3 | R@5 | E2E Accuracy | Reader LLM | Latency | Architecture |
 |---|---|---|---|---|---|---|---|
+| **memex (+Qwen3-Reranker)** | **82%** | **90%** | **96%** | **94%** | GPT-4o | **~1050ms p50** | Z-score fusion + chunked Qwen3-Embedding-4B + Qwen3-Reranker-0.6B |
 | Hindsight/TEMPR | — | — | — | **91.4%** | GPT-4o | ~400ms | 4-way parallel, entity-aware |
-| **memex** (hybrid) | **78%** | **90%** | **96%** | **90%** | GPT-4o | **~150ms** | Z-score fusion + chunked Qwen3-Embedding-4B |
+| memex (no reranker) | 78% | 90% | 96% | 90% | GPT-4o | ~150ms | Z-score fusion + chunked Qwen3-Embedding-4B |
 | Zep/Graphiti | — | — | ~85% | GPT-4o | ~300ms | Bitemporal graph (Neo4j) |
 | mem0 (graph) | — | — | ~78% | GPT-4o | ~200ms | Cloud API + knowledge graph |
 | MemGPT/Letta | — | — | ~75% | GPT-4o | ~500ms+ | LLM-managed paging |
 
-Evaluated using official LongMemEval prompts and GPT-4o-mini LLM-judge (same methodology as published systems). memex retrieves the correct session at R@3=90% and achieves 90% E2E accuracy with GPT-4o reader — within 1.4pp of the best system (Hindsight/TEMPR). In production memex returns ≤3 results, making R@3 the most relevant retrieval metric.
+Evaluated using official LongMemEval prompts and GPT-4o-mini LLM-judge (same methodology as published systems). Numbers from `tests/fast-benchmark.ts` with chunked embeddings. The Qwen3-Reranker variant is the current production configuration (upgraded 2026-04-10); the "no reranker" row is kept for comparison because the reranker adds meaningful latency. In production memex returns ≤3 results, making R@3 the most relevant retrieval metric.
+
+N=50 is small enough that a ±2 query swing is within noise. The reranker improvement was reproduced independently on two runs and is supported by a mechanistic argument (Qwen3-Reranker has 32K context vs bge-reranker-v2-m3's 8K-truncation on long chunked sessions — see `docs/research/embed-rerank-upgrade-brief.md`).
 
 ## Performance Profile
 

@@ -236,7 +236,7 @@ describe("tool track() calls include _ms timing fields", () => {
       },
     } as any);
 
-    await api.executeTool("memory_forget", { memoryId: entry.id });
+    await api.executeTool("memory_forget", { memoryId: entry!.id });
 
     const forgetEvent = tracked.find(t => t.event === "forget");
     assert.ok(forgetEvent, "should have tracked a forget event");

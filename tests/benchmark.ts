@@ -9,6 +9,16 @@
  * 5. Adaptive retrieval decision
  *
  * Usage: node --import jiti/register tests/benchmark.ts
+ *
+ * Required env (no defaults — fails fast if missing):
+ *   EMBED_BASE_URL    — embedding endpoint
+ *   EMBEDDING_MODEL   — embedding model identifier
+ *   EMBED_API_KEY     — auth for embedding endpoint (falls back to legacy LLAMA_SWAP_API_KEY)
+ *   RERANKER_MODEL    — rerank model identifier
+ *   RERANK_ENDPOINT   — rerank endpoint (optional; inferred from EMBED_BASE_URL + /rerank if unset)
+ *
+ * Tuning knobs (defaults OK):
+ *   EMBEDDING_DIMS    — vector dimensions (default: 2560)
  */
 
 import { performance } from "node:perf_hooks";
@@ -20,12 +30,27 @@ import { tmpdir } from "node:os";
 // Config
 // ============================================================================
 
-const EMBEDDING_BASE_URL = process.env.EMBED_BASE_URL || "http://localhost:8090/v1";
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "Qwen3-Embedding-4B-Q8_0";
+// Config — no defaults
+const EMBEDDING_BASE_URL = process.env.EMBED_BASE_URL || "";
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "";
+const RERANKER_ENDPOINT = process.env.RERANK_ENDPOINT || (EMBEDDING_BASE_URL ? `${EMBEDDING_BASE_URL.replace(/\/$/, "")}/rerank` : "");
+const RERANKER_MODEL = process.env.RERANKER_MODEL || "";
+const API_KEY = process.env.EMBED_API_KEY || process.env.LLAMA_SWAP_API_KEY || "";
+
+// Tuning knob — default OK
 const EMBEDDING_DIMS = parseInt(process.env.EMBEDDING_DIMS || "2560");
-const RERANKER_ENDPOINT = process.env.EMBED_BASE_URL || "http://localhost:8090/v1/rerank";
-const RERANKER_MODEL = "bge-reranker-v2-m3-Q8_0";
-const API_KEY = process.env.LLAMA_SWAP_API_KEY || "";
+
+function assertBenchmarkConfig(): void {
+  const missing: string[] = [];
+  if (!EMBEDDING_BASE_URL) missing.push("EMBED_BASE_URL");
+  if (!EMBEDDING_MODEL) missing.push("EMBEDDING_MODEL");
+  if (!RERANKER_MODEL) missing.push("RERANKER_MODEL");
+  if (!API_KEY) missing.push("EMBED_API_KEY (or legacy LLAMA_SWAP_API_KEY)");
+  if (missing.length > 0) {
+    console.error(`ERROR: missing required env vars: ${missing.join(", ")}`);
+    process.exit(2);
+  }
+}
 
 // ============================================================================
 // Helpers
@@ -115,6 +140,7 @@ function memUsage(): { heapMB: number; rssMB: number } {
 // ============================================================================
 
 async function main() {
+  assertBenchmarkConfig();
   console.log("=== memex Benchmark Suite ===\n");
   console.log(`Date: ${new Date().toISOString()}`);
   console.log(`Node: ${process.version}`);
@@ -131,7 +157,7 @@ async function main() {
   const { createEmbedder } = await import("../src/embedder.js");
   const embedder = createEmbedder({
     provider: "openai-compatible",
-    apiKey: process.env.LLAMA_SWAP_API_KEY || "",
+    apiKey: API_KEY,
     model: EMBEDDING_MODEL,
     baseURL: EMBEDDING_BASE_URL,
     dimensions: EMBEDDING_DIMS,

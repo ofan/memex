@@ -1,12 +1,13 @@
 # Session Import v2: Full-Transcript LLM Extraction
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: Open.** Not started. Highest-ROI quality project — 76% of memories are low-quality session imports.
+> Note: tech stack references below are stale (LanceDB → SQLite, model names may have changed).
 
-**Goal:** Redesign the `import-sessions` pipeline to feed complete conversation transcripts (both user and assistant turns) into a capable LLM (Qwen3.5-4B) using session bin-packing into ~190K token windows, producing high-quality extracted memories with global scope and rich metadata provenance.
+**Goal:** Redesign the `import-sessions` pipeline to feed complete conversation transcripts (both user and assistant turns) into a capable LLM using session bin-packing into ~190K token windows, producing high-quality extracted memories with global scope and rich metadata provenance.
 
-**Architecture:** Sessions are read from all agents (with optional `--include-deleted` for rotated `.jsonl.deleted.*` files), envelope-stripped but NOT noise-filtered, bin-packed into ~190K token windows (one session never split across windows), and sent to Qwen3.5-4B-Q8_0 via llama.cpp's OpenAI-compatible API with `cache_prompt: true`. Extracted memories are stored with `scope: global` and metadata containing `source`, `sessionKey`, and `agentId`. The heuristic path remains as fallback when no LLM is configured.
+**Architecture:** Sessions are read from all agents (with optional `--include-deleted` for rotated `.jsonl.deleted.*` files), envelope-stripped but NOT noise-filtered, bin-packed into ~190K token windows (one session never split across windows), and sent to an extraction LLM via llama.cpp's OpenAI-compatible API with `cache_prompt: true`. Extracted memories are stored with `scope: global` and metadata containing `source`, `sessionKey`, and `agentId`. The heuristic path remains as fallback when no LLM is configured.
 
-**Tech Stack:** TypeScript (no build step, jiti), LanceDB (vector store), llama.cpp/llama-swap (model serving), Qwen3.5-4B-Q8_0 (extraction model), Qwen3-Embedding-0.6B-Q8_0 (embedder)
+**Tech Stack:** TypeScript (no build step, jiti), SQLite + sqlite-vec (vector store), llama.cpp/llama-swap (model serving)
 
 ---
 
