@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.2] — 2026-05-11
+
+**Theme: configuration ergonomics + debug visibility.** Three user-visible improvements on top of v0.7.1, all backward-compatible. Test count 725 → 740 (+15). `npm audit` still 0.
+
+### Added
+- **`memoryAgents` unified config key** (issue #30, `src/agent-merge.ts`) — single agent whitelist that controls both recall and capture. Replaces the separate `autoRecallAgents` + `autoCaptureAgents` pair. Backward compat via union semantics: legacy keys never restrict, only extend.
+- **`MEMEX_DEBUG_RECALL` env flag** (issue #23, `src/debug-recall.ts`) — when set, every auto-recall turn writes a JSON snapshot of the formatted text prepended to the prompt plus per-item metadata. Lets you answer "what low-quality items actually made it into the context this turn?" — otherwise impossible from logs alone. Off by default; zero overhead. Truthy values (`1`/`true`/`on`) → `${tmpdir}/memex-debug-recall/`; other strings → literal path.
+- **Two design notes** committed for future-session work: `docs/design/production-benchmark.md` (BEIR 3-subset for externally-comparable IR quality, issue #19) and `docs/design/memory-browser.md` (HTML playground served via existing `api.registerHttpRoute`, issue #27).
+
+### Changed
+- **`typescript` dev-dep bumped 5.9 → 6.0.3** (closes PR #43). Zero-friction bump; no code changes needed. Real `tsc` build still clean.
+- **`@sinclair/typebox` replaced by unscoped `typebox`** in direct deps. Eliminates a dual-package situation surfaced by v0.7.1's `npm audit fix` — memex's `Type` and openclaw's `stringEnum` now come from the same package. Removes 4 type-bridge casts from `src/tools.ts`.
+- **`memex-v0.7` merged into `main`** via PR #73 (squash) — main was stuck at v0.6.2; the 2 dependabot UI alerts on default branch should auto-close on next scan.
+
+### Plans
+- See `docs/plans/017-resolve-everything-loop.md` for the loop that produced this release.
+- 016 housekeeping loop summary recorded in `docs/plans/PROGRESS.md` (branch count 27 → 3).
+
+---
+
 ## [0.7.1] — 2026-05-10
 
 **Theme: security bump.** Closes 18 transitive vulnerabilities (2 critical, 6 high, 10 moderate) surfaced by `npm audit` after v0.7.0 ship. No new features, no behavior change.
