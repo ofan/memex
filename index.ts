@@ -24,6 +24,7 @@ import { UnifiedRecall } from "./src/unified-recall.js";
 import { UnifiedRetriever } from "./src/unified-retriever.js";
 import type { DocumentCandidate } from "./src/unified-retriever.js";
 import { createMemoryCLI } from "./src/cli.js";
+import { mergeAgentLists } from "./src/agent-merge.js";
 
 // Import search components
 import { initializeLLM, disposeDefaultLlamaCpp } from "./src/llm.js";
@@ -91,6 +92,12 @@ interface PluginConfig {
   autoRecallMinLength?: number;
   autoCapture?: boolean;
   autoCaptureAgents?: string[];
+  /**
+   * Unified agent whitelist that controls both recall and capture.
+   * When set, applies to both. If `autoRecallAgents` / `autoCaptureAgents`
+   * are also set, the lists are unioned (legacy keys never restrict).
+   */
+  memoryAgents?: string[];
   /** Set to 'off' to disable memory instruction injection */
   /** @deprecated use autoCapture instead */
   memoryInstructions?: "off" | string;
@@ -1073,6 +1080,7 @@ const memoryUnifiedPlugin = {
           }
         }
       };
+      validateAgentList(config.memoryAgents as string[] | undefined, "memoryAgents");
       validateAgentList(config.autoRecallAgents as string[] | undefined, "autoRecallAgents");
       validateAgentList(config.autoCaptureAgents as string[] | undefined, "autoCaptureAgents");
     }
@@ -1828,12 +1836,14 @@ function parsePluginConfig(value: unknown): PluginConfig {
     },
     dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : undefined,
     autoRecall: cfg.autoRecall !== false,
-    autoRecallAgents: Array.isArray(cfg.autoRecallAgents) ? cfg.autoRecallAgents as string[] : undefined,
+    // memoryAgents unifies both lists. If old autoRecallAgents / autoCaptureAgents
+    // are also present, union them (legacy keys never restrict access).
+    autoRecallAgents: mergeAgentLists(cfg.memoryAgents, cfg.autoRecallAgents),
     autoRecallLimit: parsePositiveInt(cfg.autoRecallLimit),
     autoRecallMinLength: parsePositiveInt(cfg.autoRecallMinLength),
     autoRecallDocFilter: cfg.autoRecallDocFilter !== false,
     autoCapture: cfg.autoCapture !== false,
-    autoCaptureAgents: Array.isArray(cfg.autoCaptureAgents) ? cfg.autoCaptureAgents as string[] : undefined,
+    autoCaptureAgents: mergeAgentLists(cfg.memoryAgents, cfg.autoCaptureAgents),
     autoFixNoise: cfg.autoFixNoise === true,
     retrieval: typeof cfg.retrieval === "object" && cfg.retrieval !== null ? cfg.retrieval as any : undefined,
     scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes as any : undefined,

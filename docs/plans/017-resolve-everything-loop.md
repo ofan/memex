@@ -37,10 +37,10 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
   - `index.ts:1831,1836` — normalization in createMemexConfig
   - `SKILL.md:48,63,109,112` — config examples + table
   - **No test files reference these keys directly** (tests use the normalized config object).
-- [ ] **30.2** Add `memoryAgents` config key + schema validation. Backward compat: if old keys present, merge them and log a one-line warning.
-- [ ] **30.3** Update README + AGENTS.md / CLAUDE.md examples to recommend `memoryAgents`.
-- [ ] **30.4** Tests: add a coverage test that the merged-config path matches old behavior. Existing tests must still pass.
-- [ ] **30.5** Commit + push. Close issue #30 with PR-link comment (no PR — direct commit on memex-v0.7).
+- [x] **30.2** `memoryAgents` field added to PluginConfig interface; new `mergeAgentLists()` helper extracted to `src/agent-merge.ts` (extraction was forced by jiti only exposing `default` from index.ts to test imports). Validation extended to cover `memoryAgents`. Backward compat: union semantics — legacy keys never restrict.
+- [x] **30.3** SKILL.md updated: examples show `memoryAgents`, settings table has the new key + legacy keys clearly labeled. README+AGENTS.md+CLAUDE.md don't reference these specific keys, so no updates needed there.
+- [x] **30.4** New test file `tests/memory-agents-config.test.ts` — 7 cases covering union, dedup, undefined fallback, legacy-only path. Total: **725 → 732 tests, all pass.**
+- [x] **30.5** Bundled commit covers 30.2-30.5 (tightly coupled — splitting would leave broken-build commits between iterations). Closing issue #30 from this commit.
 
 ### RES.43 — PR #43: typescript 5.9 → 6.0
 - [ ] **43.1** Try the bump locally: `npm install --save-dev typescript@6.0.3 && npm run build && npm test`.
