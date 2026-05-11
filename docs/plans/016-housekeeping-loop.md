@@ -41,9 +41,9 @@ Each item is mechanically scoped. If any item hits a real conflict, surface imme
 **Goal**: pre-empt June 2026 GitHub deadline; silence the 6+ deprecation warnings on every CI run.
 
 - [x] **M3.1** Two workflows audited: `release.yml` and `ci.yml`. Seven `uses:` lines total — 4× `actions/checkout@v4`, 2× `actions/setup-node@v4`, 1× `softprops/action-gh-release@v2`. All are v4-or-older and trigger Node 20 deprecation warnings per CI annotation.
-- [ ] **M3.2** Bump `actions/checkout@v4` → `@v5`, `actions/setup-node@v4` → `@v5`. For `softprops/action-gh-release@v2`, check the GitHub releases page (or `gh api`) for the latest major; bump if a newer one exists that supports Node 24.
-- [ ] **M3.3** Don't trigger CI by editing the workflow alone — the workflow only fires on `v*` tag push (per existing config). Verify by inspecting the `on:` block. If the workflow would auto-trigger on push to memex-v0.7, surface and pause.
-- [ ] **M3.4** Commit + push. Next tag push (whenever) will exercise the new action versions.
+- [x] **M3.2** Bumped to current latest majors (newer than plan's "v5" assumption): `actions/checkout@v6` (latest v6.0.2), `actions/setup-node@v6` (latest v6.4.0), `softprops/action-gh-release@v3` (latest v3.0.0). All 7 `uses:` lines updated across `ci.yml` + `release.yml`.
+- [x] **M3.3** Verified workflows won't auto-fire from memex-v0.7 push: `release.yml` triggers only on `push: tags: ['v*']` + `workflow_dispatch`; `ci.yml` triggers only on `push/pull_request: branches: [main]`. Editing on memex-v0.7 is safe — no CI burn.
+- [x] **M3.4** Bundled M3.2 + M3.3 + M3.4 in one commit (tightly coupled).
 
 ### LOOP.M4 — Cosmetic branch/tag cleanup
 **Goal**: clean repo browsing surface. No functional change.
