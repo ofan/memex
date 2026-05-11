@@ -2,12 +2,17 @@
 
 ## v0.7.1 security bump — vulnerability deltas
 
-Tracking transitive-dependency vulnerability counts as the security-bump loop progresses. Baseline captured 2026-05-10 right after v0.7.0 ship.
+Tracking transitive-dependency vulnerability counts across the security-bump loop. Baseline captured 2026-05-10 right after v0.7.0 ship; final state captured the same day before tagging v0.7.1.
 
 | Stage | critical | high | moderate | low | total |
 |---|---|---|---|---|---|
 | **baseline (v0.7.0)** | 2 | 6 | 10 | 0 | **18** |
 | **after `npm audit fix`** | 0 | 0 | 0 | 0 | **0** |
+| **final (v0.7.1)** | 0 | 0 | 0 | 0 | **0** ✓ |
+
+**Lesson: `npm audit fix` (non-force) is genuinely useful when all flagged advisories have lockfile-only resolution paths.** The plan was conservative and budgeted SEC.3 (umbrella bumps) and SEC.4 (overrides) as fallback strategies; neither was needed. When direct deps are clean and only transitive resolutions are vulnerable, the lockfile mutation approach works in one shot. The trap to avoid is `--force`, which downgrades to old majors to satisfy peer ranges — that's where stability regresses.
+
+**Lesson: lockfile mutations can surface latent dual-package situations.** The audit fix shifted openclaw's transitive resolution from `@sinclair/typebox` onto unscoped `typebox@1.1.37`. Memex's own code still pins `@sinclair/typebox@0.34.48`. Runtime is fine because both packages have structurally compatible objects, but TypeScript's nominal typing flagged the mismatch. The fix is a 4-site cast through `unknown` — small, but it's a maintenance debt to remember if either package's API ever drifts.
 
 ## Technical Learnings
 
