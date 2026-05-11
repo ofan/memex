@@ -157,10 +157,24 @@ Add to your OpenClaw config:
 }
 ```
 
+## Debugging
+
+When recall quality looks off and you need to see *what actually got injected* into the prompt this turn — not just what the retriever returned — set `MEMEX_DEBUG_RECALL`:
+
+```bash
+# Default location: $TMPDIR/memex-debug-recall/
+MEMEX_DEBUG_RECALL=1 openclaw gateway
+
+# Custom path:
+MEMEX_DEBUG_RECALL=/var/log/memex-debug openclaw gateway
+```
+
+Each auto-recall turn writes a JSON snapshot containing the formatted text that was prepended to the prompt plus per-item metadata (id, score, source, category, scope). Disabled by default — zero overhead when off.
+
 ## Development
 
 ```bash
-# Run tests (~680)
+# Run tests (~740)
 node --import jiti/register --test tests/*.test.ts
 
 # Run benchmarks

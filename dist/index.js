@@ -20,6 +20,7 @@ import { UnifiedRecall } from "./src/unified-recall.js";
 import { UnifiedRetriever } from "./src/unified-retriever.js";
 import { createMemoryCLI } from "./src/cli.js";
 import { mergeAgentLists } from "./src/agent-merge.js";
+import { writeDebugRecall, buildPayloadFromUnifiedRecall, buildPayloadFromMemoryOnly, resolveDebugDir, } from "./src/debug-recall.js";
 // Import search components
 import { initializeLLM, disposeDefaultLlamaCpp } from "./src/llm.js";
 import { createStore as createSearchStore, getStatus as getDocumentIndexStatus, hybridQuery as searchHybridQuery, searchFTS, } from "./src/search.js";
@@ -1026,6 +1027,16 @@ const memoryUnifiedPlugin = {
                                 }
                             })
                                 .join("\n");
+                            // Debug capture (issue #23) — fire-and-forget when MEMEX_DEBUG_RECALL is set
+                            if (resolveDebugDir()) {
+                                writeDebugRecall(buildPayloadFromUnifiedRecall({
+                                    agentId,
+                                    sessionId: sessionKeyForCache ?? null,
+                                    query: recallQuery,
+                                    injectedContext: memoryContext,
+                                    results: results,
+                                })).catch(() => { });
+                            }
                         }
                         else {
                             const results = await retriever.retrieve({
@@ -1043,6 +1054,16 @@ const memoryUnifiedPlugin = {
                             memoryContext = results
                                 .map((r) => `- [mem:${String(r.entry.id).slice(0, 8)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
                                 .join("\n");
+                            // Debug capture (issue #23) — memory-only fallback path
+                            if (resolveDebugDir()) {
+                                writeDebugRecall(buildPayloadFromMemoryOnly({
+                                    agentId,
+                                    sessionId: sessionKeyForCache ?? null,
+                                    query: recallQuery,
+                                    injectedContext: memoryContext,
+                                    results,
+                                })).catch(() => { });
+                            }
                         }
                         // Record recalled IDs for cross-turn diversity
                         if (recalledIds.length > 0) {
