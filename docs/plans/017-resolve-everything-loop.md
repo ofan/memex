@@ -43,10 +43,10 @@ Verification gates same as previous loops: `npm test` + `npm run build` for code
 - [x] **30.5** Bundled commit covers 30.2-30.5 (tightly coupled — splitting would leave broken-build commits between iterations). Closing issue #30 from this commit.
 
 ### RES.43 — PR #43: typescript 5.9 → 6.0
-- [ ] **43.1** Try the bump locally: `npm install --save-dev typescript@6.0.3 && npm run build && npm test`.
-- [ ] **43.2a** If build + tests pass clean: merge PR #43 (squash). Mark [x].
-- [ ] **43.2b** If build fails with mechanical fixes (e.g. `as const` widening, `verbatimModuleSyntax`): apply the fixes, verify, then merge.
-- [ ] **43.2c** If build fails with non-mechanical issues (large refactor needed): close PR #43 with explanatory comment; revert local change; mark [?].
+- [x] **43.1** Tried bump: `npm install --save-dev typescript@6.0.3` → build clean + 732/732 tests + 0 vulns under TS 6.0.3. No code changes needed.
+- [x] **43.2a** Path (a) taken: zero-friction bump, no mechanical fixes needed. Resolved via direct commit `4d1b364` on memex-v0.7 (cleaner than merging dependabot PR — same outcome). PR #43 closed with explanatory comment, dependabot branch deleted. Bonus: npm install canonicalized a duplicate `files` block in package.json that was a merge artifact from PR #73.
+- [x] **43.2b** N/A — path (a) succeeded.
+- [x] **43.2c** N/A — path (a) succeeded.
 
 ### RES.23 — Issue #23: debug mode for injected recall
 - [ ] **23.1** Identify the injection site: `before_prompt_build` hook in `index.ts` (where memories actually become context).
