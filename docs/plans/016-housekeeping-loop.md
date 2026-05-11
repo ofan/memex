@@ -29,7 +29,7 @@ Each item is mechanically scoped. If any item hits a real conflict, surface imme
 ### LOOP.M2 — Switch `@sinclair/typebox` → unscoped `typebox`
 **Goal**: align memex with openclaw's typebox choice; eliminate the dual-package situation; remove the 4 type-bridge casts in `src/tools.ts`.
 
-- [ ] **M2.1** Find all current `@sinclair/typebox` imports: `grep -rn "@sinclair/typebox" src/ index.ts tests/`. Audit the import surface — record what's used (`Type`, `Static`, `TSchema`, etc.).
+- [x] **M2.1** Audit complete. **Single import surface**: `src/tools.ts:6` imports just `Type`. No `Static`, `TSchema`, or other types pulled. No existing imports of unscoped `typebox` in our code (it's only transitive via openclaw/pi-agent-core). Switch will be 1 import line + 4 cast removals + 1 package.json edit.
 - [ ] **M2.2** Edit `package.json`: replace `"@sinclair/typebox": "0.34.48"` with `"typebox": "^1.1.37"` (match openclaw's resolution). Run `npm install`.
 - [ ] **M2.3** Bulk update imports: `@sinclair/typebox` → `typebox` across all source/test files.
 - [ ] **M2.4** Remove the 4 casts in `src/tools.ts`: `Type.Optional(stringEnum(MEMORY_CATEGORIES) as unknown as Parameters<typeof Type.Optional>[0])` → `Type.Optional(stringEnum(MEMORY_CATEGORIES))`.
