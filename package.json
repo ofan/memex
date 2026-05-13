@@ -44,8 +44,8 @@
     "openclaw": "^2026.5.7",
     "picomatch": "^4.0.4",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "typebox": "^1.1.37",
-    "yaml": "^2.8.2"
+    "typebox": "^1.1.38",
+    "yaml": "^2.9.0"
   },
   "openclaw": {
     "extensions": [
