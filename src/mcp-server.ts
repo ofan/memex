@@ -335,6 +335,12 @@ async function main() {
   };
   const { server, store } = createMemexMcpServer(sharedOptions);
 
+  // Dreaming timer handles — captured so shutdown() can clear them. Without this
+  // the repeating setInterval pins the Node event loop forever, orphaning this
+  // process when its MCP client dies (keeps dreaming against the shared DB).
+  let dreamStartupTimer: NodeJS.Timeout | undefined;
+  let dreamTimer: NodeJS.Timeout | undefined;
+
   // Background dreaming — periodic schedule
   if (!noDream) {
     const dreamConfig = {
@@ -358,8 +364,8 @@ async function main() {
     };
 
     // Initial run shortly after startup, then on interval
-    setTimeout(() => runDream("startup"), 5 * 60_000);
-    setInterval(() => runDream("scheduled"), dreamInterval);
+    dreamStartupTimer = setTimeout(() => runDream("startup"), 5 * 60_000);
+    dreamTimer = setInterval(() => runDream("scheduled"), dreamInterval);
     console.error(`memex-mcp: dreaming scheduled (first in 5m, then every ${Math.round(dreamInterval / 3600_000)}h)`);
   }
 
@@ -368,13 +374,38 @@ async function main() {
   const httpHost = flagValue("--http-host") || process.env.MEMEX_HTTP_HOST || "127.0.0.1";
   const authToken = flagValue("--auth-token") || process.env.MEMEX_AUTH_TOKEN || "";
 
+  // Graceful shutdown: clear dreaming timers, stop the HTTP listener, close the
+  // DB, exit. SIGTERM/SIGINT are always handled (systemd stop/restart, Ctrl-C).
+  // For stdio we ALSO exit on client disconnect (stdin EOF) — otherwise a dead
+  // MCP client leaves this subprocess orphaned and dreaming against the shared DB.
+  let httpServer: ReturnType<typeof createHttpServer> | undefined;
+  let shuttingDown = false;
+  const shutdown = (reason: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.error(`memex-mcp: shutting down (${reason})`);
+    if (dreamStartupTimer) clearTimeout(dreamStartupTimer);
+    if (dreamTimer) clearInterval(dreamTimer);
+    httpServer?.close();
+    // Safety net: force exit if the DB close stalls (e.g. an in-flight transaction).
+    setTimeout(() => process.exit(0), 2000).unref();
+    store.close().finally(() => process.exit(0));
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
   if (httpPort > 0) {
     // For HTTP, each session gets its own McpServer instance (stateful sessions).
     // The first one constructed above is used for the dreaming timer; HTTP creates fresh.
     const factory = () => createMemexMcpServer(sharedOptions).server;
-    await startHttpServer(factory, { port: httpPort, host: httpHost, authToken });
+    httpServer = await startHttpServer(factory, { port: httpPort, host: httpHost, authToken });
   } else {
     const transport = new StdioServerTransport();
+    // stdio: the MCP client owns this process. When it goes away, stdin closes —
+    // exit rather than orphaning. The HTTP daemon intentionally does NOT do this;
+    // it is long-lived and managed by systemd.
+    process.stdin.on("end", () => shutdown("client-disconnect"));
+    process.stdin.on("close", () => shutdown("client-disconnect"));
     await server.connect(transport);
   }
 }
@@ -382,7 +413,7 @@ async function main() {
 async function startHttpServer(
   serverFactory: () => McpServer,
   opts: { port: number; host: string; authToken: string },
-): Promise<void> {
+): Promise<ReturnType<typeof createHttpServer>> {
   const { port, host, authToken } = opts;
   const { randomUUID } = await import("node:crypto");
 
@@ -468,6 +499,7 @@ async function startHttpServer(
   if (!authToken) {
     console.error(`memex-mcp: WARNING — no --auth-token set, daemon is open to anyone on ${host}`);
   }
+  return httpServer;
 }
 
 function isInitializeRequest(body: unknown): boolean {
