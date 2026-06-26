@@ -20,3 +20,4 @@ memex.log
 
 # Local pre-commit hook patterns (operational fingerprints)
 .githooks/secret-patterns.local
+restore-memories.js
