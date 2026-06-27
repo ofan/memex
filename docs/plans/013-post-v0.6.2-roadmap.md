@@ -160,10 +160,10 @@ Defer indefinitely:
 | MCP/HTTP/CLI process model | Tentative: single daemon, HTTP transport, CLI as thin client | Earlier in conversation |
 | Shared DB | Tentative: daemon-owned single SQLite | Earlier in conversation |
 | Memory categories | Partially settled: episodic/semantic/procedural × device/project/agent + source-of-truth | `two-problems-architecture.md` |
-| Doc corpus location | **Open** | T2.1 |
-| Daemon location | **Open** | T2.2 |
-| Offline behavior | **Open** | T2.3 |
-| Correction semantics | **Open (Camp C-ish currently)** | T2.4 |
+| Doc corpus location | **Decided** — per-device docs, shared memory only (Option B) | [`v0.8-architecture-decisions.md`](../design/v0.8-architecture-decisions.md) §T2.1 |
+| Daemon location | **Decided** — Mac mini (co-located w/ embed+rerank); migrate off dev VM | §T2.2 |
+| Offline behavior | **Decided** — fail-closed (no local cache) | §T2.3 |
+| Correction semantics | **Decided** — Camp C (append-only learnings via dreaming) | §T2.4 |
 | Protocol choice | Settled: MCP for v0.6, REST for v0.7+ | Earlier in conversation |
 | Citation feature | Complete on v0.6.2; partial on v0.7 (T1.2 closes this) | `docs/research/003-memory-retrieval-sota.md` |
 
