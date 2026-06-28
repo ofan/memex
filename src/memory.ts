@@ -24,6 +24,9 @@ export interface MemoryEntry {
   vector: number[];
   category: "preference" | "fact" | "decision" | "entity" | "other";
   scope: string;
+  /** Multi-valued scope tags (source of truth for scoping).
+   *  If omitted, defaults to [scope]. Must not contain `device:` prefix. */
+  scopes?: string[];
   importance: number;
   timestamp: number;
   metadata?: string; // JSON string for extensible metadata
@@ -362,6 +365,15 @@ export class MemoryStore {
     const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
     if (existing) return null;
 
+    // Guard: reject `device:` prefix in scope tags (device is metadata-only)
+    if (entry.scopes) {
+      for (const tag of entry.scopes) {
+        if (tag.startsWith("device:")) {
+          throw new Error(`"device:" is not a valid scope tag (device is metadata-only)`);
+        }
+      }
+    }
+
     // Extract entities and merge into metadata
     const entities = extractEntities(text);
     let meta: Record<string, unknown> = {};
@@ -421,7 +433,7 @@ export class MemoryStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const insertScope = this.db.prepare(
+    const insertScopeTag = this.db.prepare(
       "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
     );
 
@@ -441,8 +453,13 @@ export class MemoryStore {
           entry.id, entry.text, entry.category, entry.scope,
           entry.importance, entry.timestamp, entry.metadata, hashes[i]
         );
-        // Write scope tag (default to 'global')
-        insertScope.run(entry.id, entry.scope || "global");
+        // Write scope tags (default to [scope] if no scopes array)
+        const tags = entry.scopes && entry.scopes.length > 0
+          ? entry.scopes
+          : [entry.scope || "global"];
+        for (const tag of tags) {
+          insertScopeTag.run(entry.id, tag);
+        }
         if (insertVec) {
           insertVec.run(`mem_${entry.id}`, new Float32Array(entry.vector));
         }
@@ -1095,10 +1112,16 @@ export class MemoryStore {
       fullEntry.importance, fullEntry.timestamp, fullEntry.metadata
     );
 
-    // Write scope tag
-    this.db.prepare(
+    // Write scope tags
+    const tags = fullEntry.scopes && fullEntry.scopes.length > 0
+      ? fullEntry.scopes
+      : [fullEntry.scope || "global"];
+    const insertTag = this.db.prepare(
       "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
-    ).run(fullEntry.id, fullEntry.scope || "global");
+    );
+    for (const tag of tags) {
+      insertTag.run(fullEntry.id, tag);
+    }
 
     // Insert chunk vectors
     if (this._sqliteVecAvailable) {
@@ -1200,11 +1223,11 @@ export class MemoryStore {
 
     // Write scope tags to memory_scopes (source of truth for multi-valued tags).
     // The old `memories.scope` column is kept for backward compatibility but
-    // memory_scopes is authoritative. Default to 'global' when scope is unset.
-    const scope = entry.scope || "global";
-    this.db.prepare(
-      "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
-    ).run(entry.id, scope);
+    // memory_scopes is authoritative.
+    const tagList = entry.scopes && entry.scopes.length > 0
+      ? entry.scopes
+      : [entry.scope || "global"];
+    this.writeScopeTags(entry.id, tagList);
 
     // Insert vector
     if (this._sqliteVecAvailable && entry.vector.length > 0) {
@@ -1217,5 +1240,18 @@ export class MemoryStore {
     this.db.prepare(
       `INSERT INTO memory_vectors (memory_id, embedded_at) VALUES (?, ?)`
     ).run(entry.id, new Date().toISOString());
+  }
+
+  /** Validate and write scope tags for a memory. Rejects `device:` prefix. */
+  private writeScopeTags(memoryId: string, tags: string[]): void {
+    const insert = this.db.prepare(
+      "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+    );
+    for (const tag of tags) {
+      if (tag.startsWith("device:")) {
+        throw new Error(`"device:" is not a valid scope tag (device is metadata-only)`);
+      }
+      insert.run(memoryId, tag);
+    }
   }
 }
