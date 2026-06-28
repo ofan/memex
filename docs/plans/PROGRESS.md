@@ -1,6 +1,38 @@
 # Progress
 
-## Last Updated: 2026-05-11
+## Last Updated: 2026-06-28
+
+## Memory Scoping — Implementation (018)
+
+Implemented multi-valued scope tags on `feat/memory-scoping` (off `memex-v0.7`). See `docs/design/memory-scoping.md` (design) and `docs/plans/018-memory-scoping-impl.md` (plan).
+
+### Phases completed
+
+- **P1-P3 (foundation)**: `memory_scopes(memory_id, scope)` table + migration, `src/scope-derive.ts` with `deriveScopes()` (server-authoritative: auto-tags global + project:<git_remote-hash>; opt-in client/agent/session; device metadata-only), store writes multi-valued tags.
+- **P4 (recall)**: Tag-intersection filter on `memory_scopes` in `vectorSearch`, `bm25Search`, `list`, `stats`, `bulkDelete`, `update`, `delete`. `retriever.retrieve()` accepts `scopes` override.
+- **P5 (dreaming)**: Scope-aware dedup (GROUP BY text, scope-set). Reflection learnings inherit tags (single-context => those tags; mixed => global).
+- **P6 (MCP tool surface)**: `memory_store` and `memory_recall` accept `agent_id`, `session_id`, `scopes` params. `memory_store` calls `deriveScopes()` for server-authoritative derivation.
+- **P7 (E2E integration)**: Store under multiple contexts (projects A/B, clients, sessions, agents), recall from each, assert no cross-project leak, global surfaces, sparse behavior, dreaming respects scope. 21 new E2E tests.
+- **P8 (sync)**: Design doc unchanged (implementation matches spec).
+
+### Interface drift reconciled
+
+- `mcp-server.ts`: `memory_store` now calls `deriveScopes()` with process cwd/env, client name detection, and explicit `agent_id`/`session_id` params. Passes derived multi-valued `scopes` to `store.store()`. `memory_recall` accepts `agent_id`/`session_id` params.
+- `tools.ts`: Plugin-side `memory_store` and `memory_recall` updated with same `deriveScopes()` integration and `agent_id`/`session_id` params.
+- Store and dreaming needed no changes — their interfaces were already correct.
+
+### Test counts
+
+- **Before**: 830 tests (foundation baseline)
+- **After**: 851 tests (830 + 21 E2E)
+- All green, no regressions.
+- Domain eval: cannot run (no embedding endpoint configured in this environment). Retrieval path unchanged for empty scopeFilter — `addScopeFilter` returns early.
+
+### Deviations from design
+
+- The plugin-side auto-recall hook (`index.ts`) still uses the legacy `scopeManager.getAccessibleScopes(agentId)` for the active-context scope set. It does not yet derive `project:` tags for the auto-recall filter. This is a known gap: the design calls for server-authoritative derivation in the recall path, but the plugin hook runs inside the OpenClaw gateway process where `process.cwd()` is the gateway's directory, not the agent's project directory. See design: stdio has access to client cwd; HTTP needs client-supplied tags. The standalone MCP server (stdio) correctly derives project tags. The plugin (effectively HTTP backend) needs the OpenClaw client to supply project context — deferred to T2.1/T2.2.
+
+### No blockers
 
 ## Resolve-everything loop (017) — same-day post-housekeeping
 

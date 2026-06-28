@@ -44,20 +44,45 @@ export async function lightSweep(
   let noiseRemoved = 0;
   let fragmentsRemoved = 0;
 
-  // 1. Exact text dedup: group by text, keep newest (highest timestamp)
-  const dupes = db.prepare(`
-    SELECT text, COUNT(*) as cnt, MAX(timestamp) as max_ts
-    FROM memories
-    GROUP BY text
-    HAVING cnt > 1
-  `).all() as { text: string; cnt: number; max_ts: number }[];
+  // 1. Scope-aware exact text dedup: group by (text, scope-set), keep newest
+  // within each (text, scope-set) group. Identical text under different
+  // tag-sets is NOT a duplicate.
+  //
+  // Build a map: (text, scope_set) → { maxTs, entries }
+  const allMemories = db.prepare(`
+    SELECT m.id, m.text, m.timestamp,
+           COALESCE(GROUP_CONCAT(ms.scope ORDER BY ms.scope), 'global') as scope_set
+    FROM memories m
+    LEFT JOIN memory_scopes ms ON ms.memory_id = m.id
+    GROUP BY m.id
+  `).all() as { id: string; text: string; timestamp: number; scope_set: string }[];
 
-  for (const dupe of dupes) {
-    // Delete all but the newest
-    const deleted = db.prepare(`
-      DELETE FROM memories WHERE text = ? AND timestamp < ?
-    `).run(dupe.text, dupe.max_ts);
-    deduped += (deleted as any).changes || 0;
+  // Group by (text, scope_set)
+  const groups = new Map<string, { maxTs: number; entries: { id: string; ts: number }[] }>();
+  for (const row of allMemories) {
+    const key = `${row.text}::${row.scope_set}`;
+    const group = groups.get(key);
+    if (group) {
+      group.entries.push({ id: row.id, ts: row.timestamp });
+      if (row.timestamp > group.maxTs) group.maxTs = row.timestamp;
+    } else {
+      groups.set(key, {
+        maxTs: row.timestamp,
+        entries: [{ id: row.id, ts: row.timestamp }],
+      });
+    }
+  }
+
+  // Delete non-survivors in each group
+  for (const [, group] of groups) {
+    if (group.entries.length > 1) {
+      for (const entry of group.entries) {
+        if (entry.ts < group.maxTs) {
+          db.prepare("DELETE FROM memories WHERE id = ?").run(entry.id);
+          deduped++;
+        }
+      }
+    }
   }
 
   // 2. Conversation fragment purge: single-turn [user]/[assistant] entries
@@ -211,6 +236,64 @@ SUPERSEDED:<older_memory_id>|<newer_memory_id>|<reason>
 If no useful learnings can be synthesized, output: NONE`;
 
 /**
+ * Derive inherited scope tags for reflection learnings.
+ *
+ * Single-context batch (all memories share the same non-global tag set)
+ * inherits those tags. Mixed-context batch (memories from different projects
+ * or contexts) defaults to global only.
+ *
+ * Memories that are global-only (no non-global tags) do not define a context
+ * and are ignored for the purpose of determining mixed vs single context.
+ * Having some global-only memories alongside project-scoped ones counts as
+ * single context — the project-scoped memories provide the context.
+ */
+function deriveReflectionTags(
+  db: { prepare: (sql: string) => any },
+  memoryIds: string[],
+): string[] {
+  if (memoryIds.length === 0) return ["global"];
+
+  // Fetch all scope tags for the batch memories (excluding 'global')
+  const placeholders = memoryIds.map(() => "?").join(",");
+  const scopeRows = db.prepare(`
+    SELECT memory_id, scope FROM memory_scopes
+    WHERE memory_id IN (${placeholders}) AND scope != 'global'
+  `).all(...memoryIds) as { memory_id: string; scope: string }[];
+
+  // Build map: memory_id → Set of non-global tags
+  const memTags = new Map<string, Set<string>>();
+  for (const row of scopeRows) {
+    let tags = memTags.get(row.memory_id);
+    if (!tags) {
+      tags = new Set();
+      memTags.set(row.memory_id, tags);
+    }
+    tags.add(row.scope);
+  }
+
+  // Collect unique non-empty tag sets across the batch
+  const uniqueTagSets = new Set<string>();
+  for (const id of memoryIds) {
+    const tags = memTags.get(id);
+    if (tags && tags.size > 0) {
+      // Create a canonical representation of the tag set
+      uniqueTagSets.add([...tags].sort().join("\x00"));
+    }
+    // Memories without non-global tags are context-agnostic; they don't
+    // contribute a tag set and don't cause a "mixed context" determination.
+  }
+
+  if (uniqueTagSets.size === 1) {
+    // Single context: all scoped memories share the same tag set
+    const tags = [...uniqueTagSets][0].split("\x00").filter(Boolean);
+    return ["global", ...tags];
+  }
+
+  // Mixed context (or all global-only): use global only
+  return ["global"];
+}
+
+/**
  * Reflection phase: LLM-driven synthesis of learnings from recent memories.
  * Stanford Generative Agents pattern: send memories → generate questions → synthesize.
  *
@@ -245,6 +328,11 @@ export async function reflectionSweep(
     log(logPath, "dream:reflect", { skipped: true, reason: "too_few_memories", count: memories.length });
     return { learnings: 0, contradictions: 0, errors: [] };
   }
+
+  // Determine inherited scope tags for learnings (scope-aware reflection).
+  // Single-context batch → inherit those tags; mixed-context → global only.
+  const memoryIds = memories.map(m => m.id);
+  const inheritedTags = deriveReflectionTags(db, memoryIds);
 
   // Build the memory block for the LLM
   const memoryBlock = memories
@@ -306,7 +394,7 @@ export async function reflectionSweep(
         continue;
       }
 
-      // Store learning as a new memory
+      // Store learning as a new memory with inherited scope tags
       if (line.length >= 20) {
         const hash = createHash("sha256").update(line).digest("hex");
         // Check if already exists (idempotent)
@@ -317,6 +405,15 @@ export async function reflectionSweep(
             INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash)
             VALUES (?, ?, 'learning', 'global', 0.85, ?, ?)
           `).run(id, line, Date.now(), hash);
+
+          // Write inherited scope tags to memory_scopes
+          const insertScope = db.prepare(
+            "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+          );
+          for (const tag of inheritedTags) {
+            insertScope.run(id, tag);
+          }
+
           learnings++;
         }
       }
