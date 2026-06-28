@@ -56,23 +56,38 @@ export function hashValue(value: string): string {
 /**
  * Normalize a git remote URL for identity comparison:
  * - Strip trailing `.git`
+ * - Strip trailing slashes
  * - Convert SSH form (`git@host:path`) to HTTPS (`https://host/path`)
+ * - Convert ssh:// form (`ssh://git@host[:port]/path`) to HTTPS (`https://host/path`)
+ * - Strip default SSH port (:22) from ssh:// URLs
  * - Lowercase hostname
  */
 export function normalizeGitRemote(remote: string): string {
   let normalized = remote.trim();
   if (!normalized) return "";
 
-  // Strip trailing .git
-  normalized = normalized.replace(/\.git$/, "");
+  // Convert ssh:// form to HTTPS: ssh://git@host[:port]/path → https://host/path
+  // Strip the default SSH port (:22) since it carries no identity information.
+  const sshUrlMatch = normalized.match(/^ssh:\/\/git@([^:\/]+)(?::22)?(\/.+)$/i);
+  if (sshUrlMatch) {
+    const host = sshUrlMatch[1].toLowerCase();
+    const path = sshUrlMatch[2];
+    normalized = `https://${host}${path}`;
+  }
 
-  // Convert SSH form to HTTPS: git@github.com:user/repo → https://github.com/user/repo
+  // Convert SCP-style SSH form to HTTPS: git@github.com:user/repo → https://github.com/user/repo
   const sshMatch = normalized.match(/^git@([^:]+):(.+)$/);
   if (sshMatch) {
     const host = sshMatch[1].toLowerCase();
     const path = sshMatch[2];
     normalized = `https://${host}/${path}`;
   }
+
+  // Strip trailing .git
+  normalized = normalized.replace(/\.git$/, "");
+
+  // Strip trailing slashes
+  normalized = normalized.replace(/\/+$/, "");
 
   // Lowercase hostname in HTTPS URLs
   const httpsMatch = normalized.match(/^(https?:\/\/)([^\/]+)(.*)$/i);
@@ -192,11 +207,26 @@ export function deriveScopes(input: DeriveScopesInput): DeriveScopesOutput {
   }
   // If cwd doesn't exist either — no project tag (global still set)
 
-  // --- client tag (opt-in — only when explicitly specific) ---
+  // --- client identity resolution ---
+  // clientName (auto-detected by callers, e.g. "claude-code", "openclaw")
+  // is provenance metadata ONLY. It does NOT become a scope tag.
+  //
+  // Contract: callers (mcp-server.ts detectClientName, tools.ts detectPluginClientName)
+  // pass clientName as provenance. deriveScopes stores it in metadata.client but does
+  // NOT auto-tag `client:<name>`. This prevents general facts from being walled into
+  // a capturing client (e.g. "I like dark mode" captured in Claude Code would be
+  // hidden from Codex if auto-tagged). Only explicit.client creates a scope tag.
+  //
+  // The client identity is also used for the session tag hash prefix (if available).
   const client = input.explicit?.client || input.clientName;
-  if (client) {
-    tags.push(`client:${client}`);
-    metadata.client = client;
+  if (input.clientName) {
+    metadata.client = input.clientName;
+  }
+
+  // --- client tag (opt-in — only when explicitly requested) ---
+  if (input.explicit?.client) {
+    tags.push(`client:${input.explicit.client}`);
+    metadata.client = input.explicit.client; // explicit overrides auto-detected in metadata
   }
 
   // --- agent tag (opt-in, explicit only) ---
@@ -215,7 +245,12 @@ export function deriveScopes(input: DeriveScopesInput): DeriveScopesOutput {
   }
 
   // --- device (metadata only, never a tag) ---
-  const deviceId = input.explicit?.device || deriveDeviceId();
+  // In stdio mode, deriveDeviceId() hashes hostname+HOME. In HTTP mode,
+  // the client supplies a device_id — it must also be hashed for symmetry.
+  // Raw device identifiers are never stored.
+  const deviceId = input.explicit?.device
+    ? hashValue(input.explicit.device)
+    : deriveDeviceId();
   metadata.device_id = deviceId;
 
   // --- timestamp ---
