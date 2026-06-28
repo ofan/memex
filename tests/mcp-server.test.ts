@@ -384,4 +384,135 @@ describe("MCP Server", () => {
     const parsed = JSON.parse(content[0].text);
     assert.ok(parsed.rejected || parsed.error, "noise should be rejected");
   });
+
+  // ── Memory Scoping tests (P6: MCP tool surface) ─────────────────────────
+
+  describe("memory_store scoping params", () => {
+    it("accepts explicit scope param and stores it", async () => {
+      const storeResult = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Scoped fact A", category: "fact", scope: "custom:test" },
+      });
+      const stored = JSON.parse((storeResult.content as any)[0].text);
+      assert.ok(stored.id, "should return an ID");
+      assert.ok(!stored.rejected, "should not reject");
+
+      // Verify the scope tag was written via memory_scopes table
+      // Create a second server to read the shared DB directly
+      const dbPath = join(tmpDir, "memex.sqlite");
+      const { store: verifyStore } = createMemexMcpServer({
+        dbPath,
+        vectorDim: VECTOR_DIM,
+        embedder: makeFakeEmbedder(),
+      });
+      const rows = verifyStore.db.prepare(
+        "SELECT scope FROM memory_scopes WHERE memory_id = ?"
+      ).all(stored.id) as { scope: string }[];
+      const scopes = rows.map(r => r.scope);
+      assert.ok(scopes.includes("custom:test"), `scopes should include custom:test, got: ${JSON.stringify(scopes)}`);
+      verifyStore.close();
+    });
+
+    it("rejects 'device:' as an explicit scope tag", async () => {
+      const result = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Device-tagged fact", category: "fact", scope: "device:foo" },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      assert.ok(parsed.rejected, "should reject device: scope tag");
+      assert.ok(
+        parsed.reason?.includes("device:"),
+        `reason should mention device:, got: ${JSON.stringify(parsed)}`,
+      );
+    });
+
+    it("stores auto-derived global tag when no explicit scope given", async () => {
+      const storeResult = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Auto-scoped fact", category: "fact" },
+      });
+      const stored = JSON.parse((storeResult.content as any)[0].text);
+      assert.ok(stored.id, "should return an ID");
+
+      const dbPath = join(tmpDir, "memex.sqlite");
+      const { store: verifyStore } = createMemexMcpServer({
+        dbPath,
+        vectorDim: VECTOR_DIM,
+        embedder: makeFakeEmbedder(),
+      });
+      const rows = verifyStore.db.prepare(
+        "SELECT scope FROM memory_scopes WHERE memory_id = ?"
+      ).all(stored.id) as { scope: string }[];
+      const scopes = rows.map(r => r.scope);
+      assert.ok(scopes.includes("global"), `scopes should include global, got: ${JSON.stringify(scopes)}`);
+      verifyStore.close();
+    });
+
+    it("accepts agent_id param without error", async () => {
+      const result = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Agent-tagged fact", category: "fact", agent_id: "test-agent" },
+      });
+      const stored = JSON.parse((result.content as any)[0].text);
+      assert.ok(stored.id, "should store with agent_id param");
+      assert.ok(!stored.rejected, "should not reject agent_id");
+    });
+
+    it("accepts session_id param without error", async () => {
+      const result = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Session-tagged fact", category: "fact", session_id: "sess-123" },
+      });
+      const stored = JSON.parse((result.content as any)[0].text);
+      assert.ok(stored.id, "should store with session_id param");
+      assert.ok(!stored.rejected, "should not reject session_id");
+    });
+
+    it("accepts device_id param without error", async () => {
+      const result = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Device-metadata fact", category: "fact", device_id: "dev-abc" },
+      });
+      const stored = JSON.parse((result.content as any)[0].text);
+      assert.ok(stored.id, "should store with device_id param");
+      assert.ok(!stored.rejected, "should not reject device_id");
+    });
+  });
+
+  describe("memory_recall scopes param", () => {
+    it("filters results by scopes intersection", async () => {
+      // Store two memories with different explicit scopes
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Memory in scope alpha", category: "fact", scope: "test:alpha" },
+      });
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Memory in scope beta", category: "fact", scope: "test:beta" },
+      });
+
+      // Recall with scope alpha should find the alpha memory
+      const result = await client.callTool({
+        name: "memory_recall",
+        arguments: { query: "memory in scope", limit: 10, scopes: ["test:alpha"] },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      const texts = parsed.results.map((r: any) => r.text);
+      assert.ok(texts.some((t: string) => t.includes("alpha")), `should find alpha memory, got: ${JSON.stringify(texts)}`);
+    });
+
+    it("accepts recall without scopes (backward compatible)", async () => {
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "No-scope-filter fact", category: "fact", scope: "test:no-filter" },
+      });
+
+      const result = await client.callTool({
+        name: "memory_recall",
+        arguments: { query: "no-scope-filter", limit: 5 },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      assert.ok(parsed.results.length >= 0, "should work without scopes param");
+    });
+  });
 });

@@ -1,6 +1,6 @@
 # Memory Scoping and Provenance Design (Problem 2)
 
-**Status:** Design (revised 2026-06-28 after review). Not implemented.
+**Status:** Implemented on `feat/memory-scoping` (2026-06-28). Matches spec.
 **Scope:** Problem 2 from `docs/plans/two-problems-architecture.md` — make the shared memory pool context-aware so memories don't leak across contexts.
 **Siblings:** `docs/design/v0.8-architecture-decisions.md` (T2.1 per-device docs, T2.2 Mac mini daemon, T2.3 fail-closed, T2.4 Camp C).
 

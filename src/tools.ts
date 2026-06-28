@@ -15,6 +15,7 @@ import type { UnifiedRecall, UnifiedResult, ResultSource } from "./unified-recal
 import type { UnifiedRetriever, UnifiedResult as UnifiedRetrieverResult } from "./unified-retriever.js";
 import { Stopwatch, type TrackFn } from "./telemetry.js";
 import { anchor, expandAnchor, AnchorAmbiguityError, ANCHOR_LEN } from "./anchor.js";
+import { deriveScopes } from "./scope-derive.js";
 
 // ============================================================================
 // Types
@@ -50,6 +51,16 @@ function clamp01(value: number, fallback = 0.7): number {
   return Math.min(1, Math.max(0, value));
 }
 
+/** Detect the MCP client name from environment for the plugin path. */
+function detectPluginClientName(): string | undefined {
+  if (process.env.MEMEX_CLIENT_NAME) return process.env.MEMEX_CLIENT_NAME;
+  if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
+  if (process.env.CODEX_HOME) return "codex";
+  if (process.env.OPEN_CODE_LOGS_DIR) return "opencode";
+  if (process.env.OPENCLAW_HOME) return "openclaw";
+  return undefined;
+}
+
 function sanitizeMemoryForSerialization(results: RetrievalResult[]) {
   return results.map(r => ({
     id: r.entry.id,
@@ -80,7 +91,10 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
         query: Type.String({ description: "Search query for finding relevant memories" }),
         limit: Type.Optional(Type.Number({ description: "Max results to return (default: 5, max: 20)" })),
         scope: Type.Optional(Type.String({ description: "Specific memory scope to search in (optional)" })),
+        scopes: Type.Optional(Type.Array(Type.String(), { description: "Explicit scope tags to filter by (tag-intersection)" })),
         category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+        agent_id: Type.Optional(Type.String({ description: "Agent identifier (optional, for agent-specific recall)" })),
+        session_id: Type.Optional(Type.String({ description: "Session identifier (optional, for session-specific recall)" })),
         ...(hasUnified ? {
           source: Type.Optional(Type.String({
             description: "Which sources to search: 'all' (default), 'conversation' (memories only), 'document' (workspace docs only)"
@@ -88,12 +102,16 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
         } : {}),
       }),
       async execute(_toolCallId, params) {
-        const { query, limit = 5, scope, category, source = "all" } = params as {
+        const { query, limit = 5, scope, scopes, category, source = "all",
+                agent_id, session_id } = params as {
           query: string;
           limit?: number;
           scope?: string;
+          scopes?: string[];
           category?: string;
           source?: string;
+          agent_id?: string;
+          session_id?: string;
         };
 
         try {
@@ -270,6 +288,8 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
         importance: Type.Optional(Type.Number({ description: "Importance score 0-1 (default: 0.7)" })),
         category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         scope: Type.Optional(Type.String({ description: "Memory scope (optional, defaults to agent scope)" })),
+        agent_id: Type.Optional(Type.String({ description: "Agent identifier (optional, for agent-scoped memories)" })),
+        session_id: Type.Optional(Type.String({ description: "Session identifier (optional, for session-scoped memories)" })),
       }),
       async execute(_toolCallId, params) {
         const {
@@ -277,16 +297,20 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
           importance = 0.7,
           category = "other",
           scope,
+          agent_id,
+          session_id,
         } = params as {
           text: string;
           importance?: number;
           category?: string;
           scope?: string;
+          agent_id?: string;
+          session_id?: string;
         };
 
         try {
           const sw = new Stopwatch();
-          // Determine target scope
+          // Determine target scope (backward compat with legacy scopeManager)
           let targetScope = scope || context.scopeManager.getDefaultScope(context.agentId);
 
           // Validate scope access
@@ -307,6 +331,29 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
 
           const safeImportance = clamp01(importance, 0.7);
 
+          // Derive scope tags from server environment (server-authoritative derivation).
+          // Uses CLAUDE_PROJECT_DIR or process.cwd() for project signal.
+          const effectiveAgentId = agent_id || context.agentId;
+          const derivResult = deriveScopes({
+            cwd: process.cwd(),
+            env: process.env as Record<string, string | undefined>,
+            clientName: detectPluginClientName(),
+            sessionId: session_id,
+            explicit: effectiveAgentId ? { agent: effectiveAgentId } : undefined,
+          });
+
+          // Build multi-valued scope tags (merge explicit scope with derived)
+          let tags = derivResult.tags;
+          if (targetScope && targetScope !== "global" && !tags.includes(targetScope)) {
+            tags = [...tags, targetScope];
+          }
+
+          // Build combined metadata (provenance + agent source)
+          const metaObj: Record<string, unknown> = {
+            source: "agent",
+            ...derivResult.metadata,
+          };
+
           // Chunk long text for multi-vector embedding
           const chunks = context.store.chunkForEmbedding(text);
           let entry;
@@ -326,7 +373,8 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             entry = await context.store.store({
               text, vector, importance: safeImportance,
               category: category as any, scope: targetScope,
-              metadata: JSON.stringify({ source: "agent" }),
+              scopes: tags,
+              metadata: JSON.stringify(metaObj),
             });
           } else {
             const chunkVectors = await context.embedder.embedBatchPassage(chunks);
@@ -342,7 +390,8 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             entry = await context.store.storeWithChunks({
               text, chunkVectors, importance: safeImportance,
               category: category as any, scope: targetScope,
-              metadata: JSON.stringify({ source: "agent" }),
+              scopes: tags,
+              metadata: JSON.stringify(metaObj),
             });
           }
 

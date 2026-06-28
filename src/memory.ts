@@ -542,18 +542,15 @@ export class MemoryStore {
       }
     }
 
-    // Step 3: Look up memory entries
+    // Step 3: Look up memory entries, filtered by tag-intersection on memory_scopes
     const ids = [...bestPerMemory.keys()];
-    const placeholders = ids.map(() => '?').join(',');
-    let sql = `SELECT id, text, category, scope, importance, timestamp, metadata FROM memories WHERE id IN (${placeholders})`;
+    const idPlaceholders = ids.map(() => '?').join(',');
+    const conditions: string[] = [`m.id IN (${idPlaceholders})`];
     const params: any[] = [...ids];
 
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-      sql += ` AND scope IN (${scopePlaceholders})`;
-      params.push(...scopeFilter);
-    }
+    this.addScopeFilter(conditions, params, scopeFilter, "m");
 
+    const sql = `SELECT m.id, m.text, m.category, m.scope, m.importance, m.timestamp, m.metadata FROM memories m WHERE ${conditions.join(" AND ")}`;
     const rows = this.db.prepare(sql).all(...params) as any[];
     const mapped: MemorySearchResult[] = [];
 
@@ -593,21 +590,19 @@ export class MemoryStore {
     if (!ftsQuery) return [];
 
     try {
-      // Query FTS table and join with memories
+      // Query FTS table and join with memories, filtered by tag-intersection on memory_scopes
+      const conditions: string[] = ["memories_fts MATCH ?"];
+      const params: any[] = [ftsQuery];
+
+      this.addScopeFilter(conditions, params, scopeFilter, "m");
+
       let sql = `
         SELECT m.id, m.text, m.category, m.scope, m.importance, m.timestamp, m.metadata,
                bm25(memories_fts) as bm25_score
         FROM memories_fts f
         JOIN memories m ON m.rowid = f.rowid
-        WHERE memories_fts MATCH ?
+        WHERE ${conditions.join(" AND ")}
       `;
-      const params: any[] = [ftsQuery];
-
-      if (scopeFilter && scopeFilter.length > 0) {
-        const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-        sql += ` AND m.scope IN (${scopePlaceholders})`;
-        params.push(...scopeFilter);
-      }
 
       sql += ` LIMIT ?`;
       params.push(safeLimit);
@@ -683,10 +678,8 @@ export class MemoryStore {
 
     if (!row) return null;
 
-    const rowScope = row.scope ?? "global";
-
-    // Check scope permissions
-    if (scopeFilter && scopeFilter.length > 0 && !scopeFilter.includes(rowScope)) {
+    // Check scope permissions against memory_scopes (tag-intersection)
+    if (scopeFilter && scopeFilter.length > 0 && !this.memoryInScope(row.id, scopeFilter)) {
       throw new Error(`Memory ${id} is outside accessible scopes`);
     }
 
@@ -723,7 +716,7 @@ export class MemoryStore {
       text: updatedText,
       vector: resultVector,
       category: updatedCategory as MemoryEntry["category"],
-      scope: rowScope,
+      scope: row.scope ?? "global",
       importance: updatedImportance,
       timestamp: row.timestamp,
       metadata: updatedMetadata,
@@ -756,17 +749,15 @@ export class MemoryStore {
     }
 
     let resolvedId: string;
-    let rowScope: string;
 
     if (isFullId) {
-      const row = this.db.prepare(`SELECT id, scope FROM memories WHERE id = ?`).get(id) as any;
+      const row = this.db.prepare(`SELECT id FROM memories WHERE id = ?`).get(id) as any;
       if (!row) return false;
       resolvedId = row.id;
-      rowScope = row.scope ?? "global";
     } else {
       // Prefix match
       const candidates = this.db.prepare(
-        `SELECT id, scope FROM memories WHERE id LIKE ?`
+        `SELECT id FROM memories WHERE id LIKE ?`
       ).all(`${id}%`) as any[];
 
       if (candidates.length > 1) {
@@ -774,11 +765,10 @@ export class MemoryStore {
       }
       if (candidates.length === 0) return false;
       resolvedId = candidates[0].id;
-      rowScope = candidates[0].scope ?? "global";
     }
 
-    // Check scope permissions
-    if (scopeFilter && scopeFilter.length > 0 && !scopeFilter.includes(rowScope)) {
+    // Check scope permissions against memory_scopes (tag-intersection)
+    if (scopeFilter && scopeFilter.length > 0 && !this.memoryInScope(resolvedId, scopeFilter)) {
       throw new Error(`Memory ${resolvedId} is outside accessible scopes`);
     }
 
@@ -801,14 +791,10 @@ export class MemoryStore {
     const conditions: string[] = [];
     const params: any[] = [];
 
-    if (scopeFilter.length > 0) {
-      const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-      conditions.push(`scope IN (${scopePlaceholders})`);
-      params.push(...scopeFilter);
-    }
+    this.addScopeFilter(conditions, params, scopeFilter, "m");
 
     if (beforeTimestamp) {
-      conditions.push(`timestamp < ?`);
+      conditions.push(`m.timestamp < ?`);
       params.push(beforeTimestamp);
     }
 
@@ -820,13 +806,14 @@ export class MemoryStore {
 
     // Get IDs to delete (for vector cleanup)
     const rows = this.db.prepare(
-      `SELECT id FROM memories WHERE ${whereClause}`
+      `SELECT m.id FROM memories m WHERE ${whereClause}`
     ).all(...params) as { id: string }[];
 
     if (rows.length === 0) return 0;
 
-    // Delete memories (CASCADE handles memory_vectors)
-    this.db.prepare(`DELETE FROM memories WHERE ${whereClause}`).run(...params);
+    // Delete memories by IDs (CASCADE handles memory_vectors + memory_scopes)
+    const idPlaceholders = rows.map(() => "?").join(",");
+    this.db.prepare(`DELETE FROM memories WHERE id IN (${idPlaceholders})`).run(...rows.map(r => r.id));
 
     // Delete corresponding vectors (primary + chunks)
     if (this._sqliteVecAvailable) {
@@ -848,22 +835,18 @@ export class MemoryStore {
     const conditions: string[] = [];
     const params: any[] = [];
 
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-      conditions.push(`scope IN (${scopePlaceholders})`);
-      params.push(...scopeFilter);
-    }
+    this.addScopeFilter(conditions, params, scopeFilter, "m");
 
     if (category) {
-      conditions.push(`category = ?`);
+      conditions.push(`m.category = ?`);
       params.push(category);
     }
 
-    let sql = `SELECT id, text, category, scope, importance, timestamp, metadata FROM memories`;
+    let sql = `SELECT m.id, m.text, m.category, m.scope, m.importance, m.timestamp, m.metadata FROM memories m`;
     if (conditions.length > 0) {
       sql += ` WHERE ${conditions.join(" AND ")}`;
     }
-    sql += ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+    sql += ` ORDER BY m.timestamp DESC LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
     const rows = this.db.prepare(sql).all(...params) as any[];
@@ -889,13 +872,9 @@ export class MemoryStore {
     const conditions: string[] = [];
     const params: any[] = [];
 
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-      conditions.push(`scope IN (${scopePlaceholders})`);
-      params.push(...scopeFilter);
-    }
+    this.addScopeFilter(conditions, params, scopeFilter, "m");
 
-    let sql = `SELECT scope, category, metadata FROM memories`;
+    let sql = `SELECT m.scope, m.category, m.metadata FROM memories m`;
     if (conditions.length > 0) {
       sql += ` WHERE ${conditions.join(" AND ")}`;
     }
@@ -1240,6 +1219,38 @@ export class MemoryStore {
     this.db.prepare(
       `INSERT INTO memory_vectors (memory_id, embedded_at) VALUES (?, ?)`
     ).run(entry.id, new Date().toISOString());
+  }
+
+  /**
+   * Append a scope-filter EXISTS clause to a WHERE condition list.
+   * Uses tag-intersection against `memory_scopes` (the authoritative source).
+   * scopeFilter is a set of scope tags — a memory matches if it has ANY of them.
+   */
+  private addScopeFilter(
+    conditions: string[],
+    params: any[],
+    scopeFilter: string[] | undefined,
+    alias: string,
+  ): void {
+    if (!scopeFilter || scopeFilter.length === 0) return;
+    const placeholders = scopeFilter.map(() => "?").join(",");
+    conditions.push(
+      `EXISTS (SELECT 1 FROM memory_scopes ms WHERE ms.memory_id = ${alias}.id AND ms.scope IN (${placeholders}))`,
+    );
+    params.push(...scopeFilter);
+  }
+
+  /**
+   * Check whether a memory has a scope tag in the given filter set.
+   * Used for permission checks in update/delete.
+   */
+  private memoryInScope(memoryId: string, scopeFilter: string[]): boolean {
+    if (scopeFilter.length === 0) return true;
+    const placeholders = scopeFilter.map(() => "?").join(",");
+    const row = this.db.prepare(
+      `SELECT 1 FROM memory_scopes WHERE memory_id = ? AND scope IN (${placeholders})`,
+    ).get(memoryId, ...scopeFilter);
+    return row != null;
   }
 
   /** Validate and write scope tags for a memory. Rejects `device:` prefix. */

@@ -515,3 +515,595 @@ describe("P3: store with scopes", () => {
     assert.equal(rows[0].scope, "global");
   });
 });
+
+// ============================================================================
+// P4 — Recall tag-intersection
+// ============================================================================
+
+describe("P4: recall tag-intersection", () => {
+  let store4: MemoryStore;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "mem-p4-test-"));
+    store4 = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: DIM });
+  });
+
+  afterEach(async () => {
+    await store4.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // Helper: create a memory with specific scope tags
+  async function storeWithTags(
+    text: string,
+    tags: string[],
+    vector?: number[],
+  ): Promise<MemoryEntry> {
+    const entry = await store4.store({
+      text,
+      vector: vector || seedVec(text.length),
+      category: "fact",
+      scope: tags[0] || "global",
+      importance: 0.5,
+      scopes: tags,
+    });
+    assert.ok(entry, `store should succeed for "${text}"`);
+    return entry!;
+  }
+
+  function seedVec(seed: number, dim: number = DIM): number[] {
+    const v = Array.from({ length: dim }, (_, i) => Math.sin(seed * (i + 1)));
+    const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+    return v.map((x) => x / norm);
+  }
+
+  // ==========================================================================
+  // vectorSearch with tag-intersection
+  // ==========================================================================
+
+  describe("vectorSearch tag-intersection", () => {
+    it("finds memory by global tag", async () => {
+      const vec = seedVec(1);
+      await storeWithTags("global-only memory", ["global"], vec);
+
+      const results = await store4.vectorSearch(vec, 5, 0.0, ["global"]);
+      assert.ok(results.length >= 1, "should find global-tagged memory");
+    });
+
+    it("does not find memory when tag set does not intersect", async () => {
+      const vec = seedVec(2);
+      // Memory with ONLY project:aaa111 (no global — project-isolated)
+      await storeWithTags("proj-A-only memory", ["project:aaa111"], vec);
+
+      const results = await store4.vectorSearch(vec, 5, 0.0, ["project:bbb222"]);
+      assert.equal(results.length, 0,
+        "should not find project:aaa111 memory when filtering by project:bbb222");
+    });
+
+    it("global always surfaces regardless of other filter tags", async () => {
+      const vec = seedVec(30);
+      await storeWithTags("global fact", ["global"], vec);
+
+      // Even with a project scope that has nothing to do with this memory,
+      // the global tag ensures it surfaces.
+      const results = await store4.vectorSearch(vec, 5, 0.0,
+        ["global", "project:some-random-project"]);
+      assert.ok(results.length >= 1, "global memory should surface everywhere");
+    });
+
+    it("memory with only global tag surfaces with project-specific filters", async () => {
+      const vec = seedVec(31);
+      await storeWithTags("global-only fact", ["global"], vec);
+
+      const results = await store4.vectorSearch(vec, 5, 0.0,
+        ["global", "project:any-proj", "client:any-client"]);
+      assert.ok(results.length >= 1,
+        "global-tagged memory should surface regardless of other tags in filter");
+    });
+
+    it("no cross-project leak for project-isolated memories (no global tag)", async () => {
+      const vecA = seedVec(10);
+      const vecB = seedVec(20);
+
+      // Project-isolated: NO global tag — these are scoped to a specific project
+      await storeWithTags("project A fact", ["project:aaa111"], vecA);
+      await storeWithTags("project B fact", ["project:bbb222"], vecB);
+
+      // Recall with project A scope only
+      const resultsA = await store4.vectorSearch(vecA, 5, 0.0, ["project:aaa111"]);
+      const textsA = resultsA.map(r => r.entry.text);
+      assert.ok(textsA.includes("project A fact"), "should find project A memory");
+      assert.ok(!textsA.includes("project B fact"),
+        "should NOT leak project B memory into project A recall");
+
+      // Recall with project B scope only
+      const resultsB = await store4.vectorSearch(vecB, 5, 0.0, ["project:bbb222"]);
+      const textsB = resultsB.map(r => r.entry.text);
+      assert.ok(textsB.includes("project B fact"), "should find project B memory");
+      assert.ok(!textsB.includes("project A fact"),
+        "should NOT leak project A memory into project B recall");
+    });
+
+    it("project-isolated memory does not leak via global filter", async () => {
+      const vec = seedVec(11);
+      // This memory does NOT have global tag
+      await storeWithTags("isolated fact", ["project:secretProj"], vec);
+
+      // Filtering by global alone should NOT find it
+      const results = await store4.vectorSearch(vec, 5, 0.0, ["global"]);
+      assert.equal(results.length, 0,
+        "project-only memory should not surface when filtering by global alone");
+    });
+
+    it("client tag filtering", async () => {
+      const vec = seedVec(40);
+      // Both have global + client-specific tag
+      await storeWithTags("claude-code preference",
+        ["global", "client:claude-code"], vec);
+      await storeWithTags("codex preference",
+        ["global", "client:codex"], vec);
+
+      // Because both have global, filtering by ["global", "client:claude-code"]
+      // will surface BOTH (global matches both). The client:claude-code memory
+      // matches by both tags; the codex one matches by global.
+      const ccResults = await store4.vectorSearch(vec, 10, 0.0,
+        ["global", "client:claude-code"]);
+      const ccTexts = ccResults.map(r => r.entry.text);
+      assert.equal(ccResults.length, 2,
+        "both memories should surface because both have global tag");
+    });
+
+    it("client-isolated memory (no global) only surfaces for its client", async () => {
+      const vec = seedVec(41);
+      // No global tag — truly client-specific
+      await storeWithTags("claude-code private", ["client:claude-code"], vec);
+      await storeWithTags("codex private", ["client:codex"], vec);
+
+      // Recall as claude-code
+      const ccResults = await store4.vectorSearch(vec, 10, 0.0, ["client:claude-code"]);
+      const ccTexts = ccResults.map(r => r.entry.text);
+      assert.ok(ccTexts.includes("claude-code private"));
+      assert.ok(!ccTexts.includes("codex private"),
+        "client:claude-code filter should not surface codex-only memory");
+
+      // Recall as codex
+      const codexResults = await store4.vectorSearch(vec, 10, 0.0, ["client:codex"]);
+      const codexTexts = codexResults.map(r => r.entry.text);
+      assert.ok(codexTexts.includes("codex private"));
+      assert.ok(!codexTexts.includes("claude-code private"),
+        "client:codex filter should not surface claude-code-only memory");
+    });
+
+    it("session tag filtering", async () => {
+      const vec = seedVec(50);
+      await storeWithTags("session-abc memory",
+        ["global", "session:aaaaaaaa:abc"], vec);
+      await storeWithTags("session-xyz memory",
+        ["global", "session:aaaaaaaa:xyz"], vec);
+
+      // Both have global, so both surface with either filter
+      const abcResults = await store4.vectorSearch(vec, 10, 0.0,
+        ["global", "session:aaaaaaaa:abc"]);
+      assert.equal(abcResults.length, 2,
+        "both session memories surface because both have global");
+    });
+
+    it("session-isolated memory only surfaces for its session", async () => {
+      const vec = seedVec(51);
+      await storeWithTags("session-abc only", ["session:aaaaaaaa:abc"], vec);
+      await storeWithTags("session-xyz only", ["session:aaaaaaaa:xyz"], vec);
+
+      const abcResults = await store4.vectorSearch(vec, 5, 0.0,
+        ["session:aaaaaaaa:abc"]);
+      const abcTexts = abcResults.map(r => r.entry.text);
+      assert.ok(abcTexts.includes("session-abc only"));
+      assert.ok(!abcTexts.includes("session-xyz only"));
+    });
+
+    it("agent tag filtering", async () => {
+      const vec = seedVec(60);
+      await storeWithTags("dev-assistant fact", ["global", "agent:dev-assistant"], vec);
+      await storeWithTags("qa-bot fact", ["global", "agent:qa-bot"], vec);
+
+      // Both have global, so both surface with either agent filter
+      const daResults = await store4.vectorSearch(vec, 10, 0.0,
+        ["global", "agent:dev-assistant"]);
+      assert.equal(daResults.length, 2,
+        "both memories surface because both have global");
+    });
+
+    it("agent-isolated memory only surfaces for its agent", async () => {
+      const vec = seedVec(61);
+      await storeWithTags("dev-assistant only", ["agent:dev-assistant"], vec);
+      await storeWithTags("qa-bot only", ["agent:qa-bot"], vec);
+
+      const daResults = await store4.vectorSearch(vec, 5, 0.0,
+        ["agent:dev-assistant"]);
+      const daTexts = daResults.map(r => r.entry.text);
+      assert.ok(daTexts.includes("dev-assistant only"));
+      assert.ok(!daTexts.includes("qa-bot only"));
+    });
+
+    it("sparse: global-tagged memory is client-agnostic", async () => {
+      const vec = seedVec(70);
+      // Memory with only global + project (no client tag)
+      await storeWithTags("no-client memory", ["global", "project:myproj"], vec);
+
+      // Should surface when filtering includes global (global always matches)
+      const results = await store4.vectorSearch(vec, 5, 0.0,
+        ["global", "client:any-client"]);
+      assert.ok(results.length >= 1,
+        "global-tagged memory should surface with any client filter (client-agnostic)");
+    });
+
+    it("sparse: global-tagged memory is session-agnostic", async () => {
+      const vec = seedVec(80);
+      await storeWithTags("no-session memory", ["global", "project:myproj"], vec);
+
+      const results = await store4.vectorSearch(vec, 5, 0.0,
+        ["global", "session:xxxxxxxx:s1"]);
+      assert.ok(results.length >= 1,
+        "global-tagged memory should surface with any session filter (session-agnostic)");
+    });
+
+    it("sparse: memory without client tag does not match client-only filter", async () => {
+      const vec = seedVec(71);
+      // Memory WITHOUT global and WITHOUT client tag
+      await storeWithTags("project-only memory", ["project:myproj"], vec);
+
+      // Filtering by client-only should NOT find it
+      const results = await store4.vectorSearch(vec, 5, 0.0, ["client:any-client"]);
+      assert.equal(results.length, 0,
+        "memory without client tag should not match client-only filter");
+    });
+
+    it("memory with multiple tags matches any of them", async () => {
+      const vec = seedVec(90);
+      await storeWithTags("multi-tag memory",
+        ["global", "project:myproj", "client:test-client"], vec);
+
+      // Match by global
+      let results = await store4.vectorSearch(vec, 5, 0.0, ["global"]);
+      assert.equal(results.length, 1, "should match by global tag");
+
+      // Match by project
+      results = await store4.vectorSearch(vec, 5, 0.0, ["project:myproj"]);
+      assert.equal(results.length, 1, "should match by project tag");
+
+      // Match by client
+      results = await store4.vectorSearch(vec, 5, 0.0, ["client:test-client"]);
+      assert.equal(results.length, 1, "should match by client tag");
+
+      // No match with unrelated scope (global is in the memory but NOT in filter)
+      results = await store4.vectorSearch(vec, 5, 0.0, ["project:other-proj"]);
+      assert.equal(results.length, 0, "should not match unrelated project");
+
+      // Match again when filter includes global
+      results = await store4.vectorSearch(vec, 5, 0.0,
+        ["global", "project:other-proj"]);
+      assert.equal(results.length, 1, "should match via global even with unrelated project in filter");
+    });
+
+    it("empty scopeFilter returns all results", async () => {
+      const vec = seedVec(100);
+      await storeWithTags("mem a", ["global", "project:A"], vec);
+      await storeWithTags("mem b", ["global", "project:B"], vec);
+
+      // No scope filter at all
+      const results = await store4.vectorSearch(vec, 10, 0.0);
+      assert.equal(results.length, 2, "empty scopeFilter should return all");
+    });
+
+    it("undefined scopeFilter returns all results", async () => {
+      const vec = seedVec(110);
+      await storeWithTags("undef mem", ["project:secret"], vec);
+
+      const results = await store4.vectorSearch(vec, 5, 0.0, undefined);
+      assert.equal(results.length, 1, "undefined scopeFilter should return all");
+    });
+  });
+
+  // ==========================================================================
+  // bm25Search with tag-intersection
+  // ==========================================================================
+
+  describe("bm25Search tag-intersection", () => {
+    it("finds memory by global tag", async () => {
+      await storeWithTags("aardvark is a nocturnal mammal", ["global"]);
+
+      const results = await store4.bm25Search("aardvark", 5, ["global"]);
+      assert.ok(results.length >= 1, "should find global-tagged memory via BM25");
+    });
+
+    it("no cross-project leak in BM25 for project-isolated memories", async () => {
+      // No global tag — project-isolated
+      await storeWithTags("flamingo project A bird", ["project:aaa111"]);
+      await storeWithTags("flamingo project B bird", ["project:bbb222"]);
+
+      const results = await store4.bm25Search("flamingo", 5, ["project:aaa111"]);
+      const texts = results.map(r => r.entry.text);
+      assert.ok(texts.includes("flamingo project A bird"));
+      assert.ok(!texts.includes("flamingo project B bird"),
+        "BM25 should not leak across isolated projects");
+    });
+
+    it("client-isolated filtering in BM25", async () => {
+      await storeWithTags("penguin claude-code fact", ["client:claude-code"]);
+      await storeWithTags("penguin codex fact", ["client:codex"]);
+
+      const results = await store4.bm25Search("penguin", 5, ["client:claude-code"]);
+      const texts = results.map(r => r.entry.text);
+      assert.ok(texts.includes("penguin claude-code fact"));
+      assert.ok(!texts.includes("penguin codex fact"));
+    });
+
+    it("global-tagged memory surfaces with any filter in BM25", async () => {
+      await storeWithTags("elephant general knowledge", ["global", "project:gen"]);
+
+      // Since it has global tag, it should surface with any client filter
+      const results = await store4.bm25Search("elephant", 5,
+        ["global", "client:any-client"]);
+      assert.ok(results.length >= 1,
+        "global-tagged memory should surface in BM25 regardless of client");
+    });
+
+    it("returns empty when no tags intersect", async () => {
+      await storeWithTags("giraffe-only-in-project-z", ["project:zzz999"]);
+
+      const results = await store4.bm25Search("giraffe", 5,
+        ["project:other-project"]);
+      assert.equal(results.length, 0,
+        "should not return memory whose tags do not intersect with filter");
+    });
+  });
+
+  // ==========================================================================
+  // list() with tag-intersection
+  // ==========================================================================
+
+  describe("list() tag-intersection", () => {
+    it("filters by intersection of tags", async () => {
+      await storeWithTags("list-item-a", ["global", "project:listA"]);
+      await storeWithTags("list-item-b", ["global", "project:listB"]);
+
+      // project:listA filter finds only the first
+      const results = await store4.list(["project:listA"]);
+      const texts = results.map(r => r.text);
+      assert.ok(texts.includes("list-item-a"));
+      assert.ok(!texts.includes("list-item-b"));
+    });
+
+    it("global filter surfaces all global-tagged memories", async () => {
+      await storeWithTags("list-global-a", ["global", "project:listA"]);
+      await storeWithTags("list-global-b", ["global", "project:listB"]);
+
+      const results = await store4.list(["global"]);
+      assert.equal(results.length, 2);
+    });
+
+    it("returns all when no scopeFilter", async () => {
+      await storeWithTags("list-all-1", ["project:one"]);
+      await storeWithTags("list-all-2", ["project:two"]);
+
+      const results = await store4.list();
+      assert.equal(results.length, 2, "no scopeFilter should list all");
+    });
+  });
+
+  // ==========================================================================
+  // stats() with tag-intersection
+  // ==========================================================================
+
+  describe("stats() tag-intersection", () => {
+    it("filters stats by tag intersection", async () => {
+      await storeWithTags("stats-a", ["global", "project:statsA"]);
+      await storeWithTags("stats-b", ["global", "project:statsB"]);
+
+      const stats = await store4.stats(["project:statsA"]);
+      assert.equal(stats.totalCount, 1);
+    });
+  });
+
+  // ==========================================================================
+  // update() scope permission check
+  // ==========================================================================
+
+  describe("update() scope permission", () => {
+    it("allows update when memory has matching tag", async () => {
+      const entry = await storeWithTags("updatable memory",
+        ["global", "project:upA"]);
+
+      const updated = await store4.update(entry.id,
+        { text: "updated text" },
+        ["project:upA"]);
+      assert.ok(updated, "update should succeed with matching tag");
+      assert.equal(updated!.text, "updated text");
+    });
+
+    it("rejects update when memory has no matching tag", async () => {
+      const entry = await storeWithTags("restricted memory",
+        ["project:secretProj"]);
+
+      await assert.rejects(
+        async () => {
+          await store4.update(entry.id,
+            { text: "should fail" },
+            ["project:otherProj"]);
+        },
+        /outside accessible scopes/,
+        "should reject update when tags do not intersect"
+      );
+    });
+  });
+
+  // ==========================================================================
+  // delete() scope permission check
+  // ==========================================================================
+
+  describe("delete() scope permission", () => {
+    it("allows delete when memory has matching tag", async () => {
+      const entry = await storeWithTags("deletable memory",
+        ["global", "project:delA"]);
+
+      const deleted = await store4.delete(entry.id, ["project:delA"]);
+      assert.equal(deleted, true);
+    });
+
+    it("rejects delete when memory has no matching tag", async () => {
+      const entry = await storeWithTags("protected memory",
+        ["project:privateDel"]);
+
+      await assert.rejects(
+        async () => {
+          await store4.delete(entry.id, ["project:otherDel"]);
+        },
+        /outside accessible scopes/,
+        "should reject delete when tags do not intersect"
+      );
+    });
+  });
+
+  // ==========================================================================
+  // bulkDelete() with tag-intersection
+  // ==========================================================================
+
+  describe("bulkDelete() tag-intersection", () => {
+    it("deletes only memories with matching tags", async () => {
+      await storeWithTags("bulk-a", ["global", "project:bulkA"]);
+      await storeWithTags("bulk-b", ["global", "project:bulkB"]);
+
+      const deleted = await store4.bulkDelete(["project:bulkA"]);
+      assert.equal(deleted, 1, "should delete only one memory");
+
+      // Verify the other still exists
+      const remaining = await store4.list(["project:bulkB"]);
+      assert.equal(remaining.length, 1);
+    });
+  });
+});
+
+// Import for the retriever tests
+import { MemoryRetriever, DEFAULT_RETRIEVAL_CONFIG } from "../src/retriever.js";
+import type { Embedder } from "../src/embedder.js";
+
+// ============================================================================
+// P4b — Retriever scopes override
+// ============================================================================
+
+describe("P4b: retriever scopes override", () => {
+  let storeR: MemoryStore;
+  let retriever: MemoryRetriever;
+  const embedder: Embedder = {
+    dimensions: DIM,
+    async embedQuery(text: string): Promise<number[]> {
+      return seedVecR(text.length);
+    },
+    async embedPassage(text: string): Promise<number[]> {
+      return seedVecR(text.length);
+    },
+  };
+
+  function seedVecR(seed: number, dim: number = DIM): number[] {
+    const v = Array.from({ length: dim }, (_, i) => Math.sin(seed * (i + 1)));
+    const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+    return v.map((x) => x / norm);
+  }
+
+  async function storeWithTagsR(
+    text: string,
+    tags: string[],
+    vector?: number[],
+  ): Promise<MemoryEntry> {
+    const entry = await storeR.store({
+      text,
+      vector: vector || seedVecR(text.length),
+      category: "fact",
+      scope: tags[0] || "global",
+      importance: 0.5,
+      scopes: tags,
+    });
+    assert.ok(entry, `store should succeed for "${text}"`);
+    return entry!;
+  }
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "mem-p4b-test-"));
+    storeR = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: DIM });
+    retriever = new MemoryRetriever(storeR, embedder, {
+      ...DEFAULT_RETRIEVAL_CONFIG,
+      mode: "vector",
+      rerank: "none",
+      minScore: 0.0,
+    });
+  });
+
+  afterEach(async () => {
+    await storeR.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("scopes override takes precedence over scopeFilter", async () => {
+    // Memory has project:overrideProj (plus global)
+    await storeWithTagsR("scope-override-mem",
+      ["global", "project:overrideProj"]);
+
+    // scopeFilter would match (via global or project)
+    const resultsWithScopeFilter = await retriever.retrieve({
+      query: "scope-override",
+      limit: 5,
+      scopeFilter: ["global", "project:overrideProj"],
+    });
+    assert.ok(resultsWithScopeFilter.length >= 1,
+      "should find with matching scopeFilter");
+
+    // scopes override replaces scopeFilter with unrelated project
+    const resultsWithOverride = await retriever.retrieve({
+      query: "scope-override",
+      limit: 5,
+      scopeFilter: ["global", "project:overrideProj"],
+      scopes: ["project:unrelated-proj"],
+    });
+    assert.equal(resultsWithOverride.length, 0,
+      "scopes override should replace scopeFilter — memory not in unrelated-proj");
+  });
+
+  it("scopes override works without scopeFilter", async () => {
+    await storeWithTagsR("some-memory", ["global", "project:targetProj"]);
+
+    const results = await retriever.retrieve({
+      query: "some-memory",
+      limit: 5,
+      scopes: ["project:targetProj"],
+    });
+    assert.ok(results.length >= 1,
+      "scopes alone should filter correctly");
+  });
+
+  it("without any scope filter, all memories surface", async () => {
+    await storeWithTagsR("mem-x", ["project:secretX"]);
+    await storeWithTagsR("mem-y", ["project:secretY"]);
+
+    const results = await retriever.retrieve({
+      query: "mem",
+      limit: 10,
+    });
+    assert.equal(results.length, 2,
+      "without scope filter, all memories should surface");
+  });
+
+  it("scopes via global tag surfaces all global-tagged memories", async () => {
+    await storeWithTagsR("glob-mem", ["global", "project:any"]);
+    await storeWithTagsR("proj-only-mem", ["project:any"]);
+
+    // scopes=[global] — should find glob-mem but not proj-only-mem
+    const results = await retriever.retrieve({
+      query: "mem",
+      limit: 10,
+      scopes: ["global"],
+    });
+    const texts = results.map(r => r.entry.text);
+    assert.ok(texts.includes("glob-mem"), "global filter should find global-tagged memory");
+    assert.ok(!texts.includes("proj-only-mem"),
+      "global filter should NOT find project-only memory without global tag");
+  });
+});

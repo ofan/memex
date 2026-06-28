@@ -172,6 +172,145 @@ describe("light sweep", () => {
 });
 
 // ============================================================================
+// Scope-aware dedup (light sweep)
+// ============================================================================
+
+describe("scope-aware dedup", () => {
+  let tmpDir: string;
+  let store: MemoryStore;
+  let logPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "dream-dedup-scope-"));
+    store = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: VECTOR_DIM });
+    logPath = join(tmpDir, "memex.log");
+  });
+
+  afterEach(async () => {
+    await store.close();
+    await rm(tmpDir, { recursive: true }).catch(() => {});
+  });
+
+  it("dedup: same text + same scope-set → removes older, keeps newest", async () => {
+    // Insert 3 memories with same text and same scope tags
+    const text = "Shared deployment fact about production infra";
+    const now = Date.now();
+
+    for (let i = 0; i < 3; i++) {
+      const id = crypto.randomUUID();
+      store.db.prepare(
+        "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.5, ?)"
+      ).run(id, text, now - (3 - i) * 3600_000);
+      // Write same scope tags for each
+      for (const tag of ["global", "project:abc123"]) {
+        store.db.prepare(
+          "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+        ).run(id, tag);
+      }
+    }
+
+    assert.equal(store.totalMemories, 3);
+
+    const result = await lightSweep(store, logPath);
+
+    assert.equal(result.deduped, 2, "should remove 2 duplicates (same text + same scope)");
+    assert.equal(store.totalMemories, 1, "1 entry remains");
+  });
+
+  it("dedup: same text + different scope-set → both survive", async () => {
+    const text = "Common fact applicable to multiple projects";
+
+    // Memory A: scoped to project:abc
+    const idA = crypto.randomUUID();
+    store.db.prepare(
+      "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.5, ?)"
+    ).run(idA, text, Date.now() - 3600_000);
+    for (const tag of ["global", "project:abc123"]) {
+      store.db.prepare(
+        "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+      ).run(idA, tag);
+    }
+
+    // Memory B: same text, scoped to project:def
+    const idB = crypto.randomUUID();
+    store.db.prepare(
+      "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.5, ?)"
+    ).run(idB, text, Date.now() - 1800_000);
+    for (const tag of ["global", "project:def456"]) {
+      store.db.prepare(
+        "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+      ).run(idB, tag);
+    }
+
+    assert.equal(store.totalMemories, 2);
+
+    const result = await lightSweep(store, logPath);
+
+    assert.equal(result.deduped, 0, "should not dedup — different scope-sets");
+    assert.equal(store.totalMemories, 2, "both entries survive");
+  });
+
+  it("dedup: memories without scope rows default to 'global' scope-set", async () => {
+    // Insert 2 memories with same text but NO memory_scopes rows
+    const text = "Fact without explicit scope rows";
+    const now = Date.now();
+
+    for (let i = 0; i < 2; i++) {
+      const id = crypto.randomUUID();
+      store.db.prepare(
+        "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.5, ?)"
+      ).run(id, text, now - (2 - i) * 3600_000);
+    }
+
+    assert.equal(store.totalMemories, 2);
+
+    await lightSweep(store, logPath);
+
+    // Both have scope_set = 'global' (default), so older should be deduped
+    assert.equal(store.totalMemories, 1, "dupes removed (both default to global scope-set)");
+  });
+
+  it("dedup: partial scope overlap dedups within each scope-set independently", async () => {
+    const text = "Multi-scope dedup test";
+    const now = Date.now();
+
+    // Two memories in scope-set A: {global, project:abc}
+    for (let i = 0; i < 2; i++) {
+      const id = crypto.randomUUID();
+      store.db.prepare(
+        "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.5, ?)"
+      ).run(id, text, now - (2 - i) * 3600_000);
+      for (const tag of ["global", "project:abc123"]) {
+        store.db.prepare(
+          "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+        ).run(id, tag);
+      }
+    }
+
+    // Two memories in scope-set B: {global, project:xyz}
+    for (let i = 0; i < 2; i++) {
+      const id = crypto.randomUUID();
+      store.db.prepare(
+        "INSERT INTO memories (id, text, category, scope, importance, timestamp) VALUES (?, ?, 'fact', 'global', 0.5, ?)"
+      ).run(id, text, now - (2 - i) * 3600_000);
+      for (const tag of ["global", "project:xyz789"]) {
+        store.db.prepare(
+          "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+        ).run(id, tag);
+      }
+    }
+
+    assert.equal(store.totalMemories, 4);
+
+    const result = await lightSweep(store, logPath);
+
+    // Each scope-set had 2 dupes → 1 survivor each = 2 total
+    assert.equal(result.deduped, 2, "should remove 2 duplicates (1 per scope-set)");
+    assert.equal(store.totalMemories, 2, "1 per scope-set survives");
+  });
+});
+
+// ============================================================================
 // Deep Sweep
 // ============================================================================
 
@@ -476,6 +615,160 @@ describe("reflection sweep", () => {
 
     assert.equal(r1.learnings, 1);
     assert.equal(r2.learnings, 0, "second run should not create duplicate learnings");
+  });
+
+  // --- Scope-aware reflection tests ---
+
+  it("inherits tags from single-context batch (all same project)", async () => {
+    // Seed 10 memories — all tagged with project:abc
+    for (let i = 0; i < 10; i++) {
+      const entry = await seedMemory(store, `Project ABC fact ${i} about deployment config`, {
+        importance: 0.7,
+        seed: i,
+        timestamp: daysAgo(i),
+      });
+      // Add project:abc tag to memory_scopes
+      if (entry) {
+        store.db.prepare(
+          "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+        ).run(entry.id, "project:abc123");
+      }
+    }
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "Project ABC uses consistent deployment patterns across services.",
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    const result = await reflectionSweep(store, {
+      endpoint: "http://fake-llm/v1/chat/completions",
+      model: "test",
+    }, logPath);
+
+    assert.equal(result.learnings, 1);
+
+    // Verify the learning has the inherited scope tags
+    const learning = store.db.prepare(
+      "SELECT id FROM memories WHERE category = 'learning'"
+    ).get() as { id: string };
+    assert.ok(learning, "learning should exist in DB");
+
+    const scopeRows = store.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(learning.id) as { scope: string }[];
+    const scopes = scopeRows.map(r => r.scope);
+    assert.ok(scopes.includes("global"), "learning should have global tag");
+    assert.ok(scopes.includes("project:abc123"), "learning should inherit project:abc123 tag");
+  });
+
+  it("uses only global tag for mixed-context batch", async () => {
+    // Seed 10 memories with mixed project tags
+    for (let i = 0; i < 5; i++) {
+      const entry = await seedMemory(store, `Project ABC fact ${i}`, {
+        importance: 0.7,
+        seed: i,
+        timestamp: daysAgo(i),
+      });
+      if (entry) {
+        store.db.prepare(
+          "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+        ).run(entry.id, "project:abc123");
+      }
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const entry = await seedMemory(store, `Project XYZ fact ${i}`, {
+        importance: 0.7,
+        seed: 100 + i,
+        timestamp: daysAgo(i + 5),
+      });
+      if (entry) {
+        store.db.prepare(
+          "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+        ).run(entry.id, "project:xyz789");
+      }
+    }
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "Multiple projects share common deployment concerns but differ in execution.",
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    const result = await reflectionSweep(store, {
+      endpoint: "http://fake-llm/v1/chat/completions",
+      model: "test",
+    }, logPath);
+
+    assert.equal(result.learnings, 1);
+
+    // Verify the learning has ONLY global tag
+    const learning = store.db.prepare(
+      "SELECT id FROM memories WHERE category = 'learning'"
+    ).get() as { id: string };
+    assert.ok(learning, "learning should exist in DB");
+
+    const scopeRows = store.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ?"
+    ).all(learning.id) as { scope: string }[];
+    assert.equal(scopeRows.length, 1, "mixed-context learning should have exactly 1 scope tag");
+    assert.equal(scopeRows[0].scope, "global", "mixed-context learning should only have global tag");
+  });
+
+  it("inherits tags when some memories are global-only and others share a context", async () => {
+    // 6 memories with project:abc, 4 with only global (no non-global tags)
+    for (let i = 0; i < 6; i++) {
+      const entry = await seedMemory(store, `Project ABC scoped fact ${i}`, {
+        importance: 0.7,
+        seed: i,
+        timestamp: daysAgo(i),
+      });
+      if (entry) {
+        store.db.prepare(
+          "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+        ).run(entry.id, "project:abc123");
+      }
+    }
+
+    for (let i = 0; i < 4; i++) {
+      await seedMemory(store, `Global-only fact ${i}`, {
+        importance: 0.7,
+        seed: 200 + i,
+        timestamp: daysAgo(i + 6),
+      });
+      // No extra scope tags — just the default 'global' from memory_scopes backfill
+    }
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "Project ABC context provides key insights across sessions.",
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    const result = await reflectionSweep(store, {
+      endpoint: "http://fake-llm/v1/chat/completions",
+      model: "test",
+    }, logPath);
+
+    assert.equal(result.learnings, 1);
+
+    // Verify learning inherits project:abc (global-only memories don't define a context)
+    const learning = store.db.prepare(
+      "SELECT id FROM memories WHERE category = 'learning'"
+    ).get() as { id: string };
+    const scopeRows = store.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(learning.id) as { scope: string }[];
+    const scopes = scopeRows.map(r => r.scope);
+    assert.ok(scopes.includes("global"), "learning should have global tag");
+    assert.ok(scopes.includes("project:abc123"), "learning should inherit project tag from scoped memories");
   });
 });
 

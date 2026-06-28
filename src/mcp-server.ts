@@ -18,6 +18,7 @@ import { isNoise } from "./noise-filter.js";
 import { runDreamCycle, type ReflectionLLMConfig } from "./dreaming.js";
 import { anchor, expandAnchor, AnchorAmbiguityError } from "./anchor.js";
 import { detectCategory } from "../index.js";
+import { deriveScopes } from "./scope-derive.js";
 
 // ============================================================================
 // Server Factory
@@ -68,12 +69,25 @@ export function createMemexMcpServer(options: McpServerOptions) {
         .describe("Memory category (auto-detected if omitted)"),
       importance: z.number().min(0).max(1).optional()
         .describe("Importance score 0-1 (default: 0.7)"),
+      scope: z.string().optional()
+        .describe("Scope tag for the memory (default: 'global')"),
+      agent_id: z.string().optional()
+        .describe("Agent identifier (optional, for agent-scoped memories)"),
+      session_id: z.string().optional()
+        .describe("Session identifier (optional, for session-scoped memories)"),
+      device_id: z.string().optional()
+        .describe("Device identifier (metadata-only, never a scope tag)"),
     },
   }, async (_params, _extra) => {
-    const { text, category, importance = 0.7 } = _params as {
+    const { text, category, importance = 0.7, scope = "global",
+            agent_id, session_id, device_id } = _params as {
       text: string;
       category?: string;
       importance?: number;
+      scope?: string;
+      agent_id?: string;
+      session_id?: string;
+      device_id?: string;
     };
 
     if (isNoise(text)) {
@@ -82,13 +96,48 @@ export function createMemexMcpServer(options: McpServerOptions) {
 
     const resolvedCategory = category || detectCategory(text);
     const vector = embedder ? await embedder.embedPassage(text) : new Array(dim).fill(0);
-    const entry = await store.store({
-      text,
-      vector,
-      category: resolvedCategory as any,
-      scope: "global",
-      importance,
+
+    // Derive scope tags from server environment (server-authoritative derivation).
+    // In stdio mode the server has access to client cwd/env.
+    const effectiveSessionId = session_id || _extra.sessionId;
+    const clientName = detectClientName();
+
+    const derivResult = deriveScopes({
+      cwd: process.cwd(),
+      env: process.env as Record<string, string | undefined>,
+      clientName,
+      sessionId: effectiveSessionId,
+      explicit: {
+        ...(agent_id ? { agent: agent_id } : {}),
+        ...(device_id ? { device: device_id } : {}),
+      },
     });
+
+    // Merge explicit scope param (if different from global) into derived tags
+    let tags = derivResult.tags;
+    if (scope && scope !== "global") {
+      if (!tags.includes(scope)) {
+        tags = [...tags, scope];
+      }
+    }
+
+    let entry;
+    try {
+      entry = await store.store({
+        text,
+        vector,
+        category: resolvedCategory as any,
+        scope,
+        importance,
+        scopes: tags,
+        metadata: JSON.stringify(derivResult.metadata),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("device:")) {
+        return { content: [{ type: "text", text: JSON.stringify({ rejected: true, reason: err.message }) }] };
+      }
+      throw err;
+    }
 
     if (!entry) {
       return { content: [{ type: "text", text: JSON.stringify({ rejected: true, reason: "duplicate" }) }] };
@@ -102,10 +151,28 @@ export function createMemexMcpServer(options: McpServerOptions) {
           text: entry.text,
           category: resolvedCategory,
           importance,
+          scopes: tags,
         }),
       }],
     };
   });
+
+  /** Detect the MCP client name from environment or transport clues. */
+  function detectClientName(): string | undefined {
+    // Prefer explicit env var
+    if (process.env.MEMEX_CLIENT_NAME) return process.env.MEMEX_CLIENT_NAME;
+    // Detect from well-known CLI tool env vars set by the MCP host process
+    if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
+    if (process.env.CODEX_HOME) return "codex";
+    if (process.env.OPEN_CODE_LOGS_DIR) return "opencode";
+    if (process.env.OPENCLAW_HOME) return "openclaw";
+    // Detect from MCP client name in transport metadata
+    try {
+      const meta = _extra._meta as Record<string, unknown> | undefined;
+      if (meta?.clientName) return meta.clientName as string;
+    } catch { /* ignore */ }
+    return undefined;
+  }
 
   // ── memory_recall ─────────────────────────────────────────────────────────
   server.registerTool("memory_recall", {
@@ -114,12 +181,19 @@ export function createMemexMcpServer(options: McpServerOptions) {
     inputSchema: {
       query: z.string().describe("Search query"),
       limit: z.number().min(1).max(20).optional().describe("Max results (default: 5)"),
+      scopes: z.array(z.string()).optional().describe(
+        "Explicit scope tags to filter by (replaces the default active-context set). A memory matches if it has ANY of these tags. Omit to recall all memories unfiltered."
+      ),
+      agent_id: z.string().optional()
+        .describe("Agent identifier (optional, scopes recall to agent-specific memories)"),
+      session_id: z.string().optional()
+        .describe("Session identifier (optional, scopes recall to session-specific memories)"),
     },
   }, async (_params) => {
-    const { query, limit = 5 } = _params as { query: string; limit?: number };
+    const { query, limit = 5, scopes } = _params as { query: string; limit?: number; scopes?: string[] };
 
     if (retriever) {
-      const results = await retriever.retrieve({ query, limit });
+      const results = await retriever.retrieve({ query, limit, scopes });
       return {
         content: [{
           type: "text",
@@ -139,7 +213,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
     }
 
     // BM25-only fallback when no embedder configured
-    const bm25Results = await store.bm25Search(query, limit);
+    const bm25Results = await store.bm25Search(query, limit, scopes);
     return {
       content: [{
         type: "text",
