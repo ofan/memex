@@ -282,6 +282,19 @@ export class MemoryStore {
       )
     `);
 
+    // Multi-valued scope tags (supersedes single memories.scope column)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_scopes (
+        memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+        scope TEXT NOT NULL,
+        PRIMARY KEY (memory_id, scope)
+      )
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_scopes_scope ON memory_scopes(scope)`);
+
+    // Migration: backfill one 'global' tag per existing memory
+    this.backfillMemoryScopes();
+
     // Create sqlite-vec virtual table
     if (this._sqliteVecAvailable) {
       this.ensureVecTable();
@@ -408,6 +421,10 @@ export class MemoryStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
+    const insertScope = this.db.prepare(
+      "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+    );
+
     const insertVec = this._sqliteVecAvailable
       ? this.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`)
       : null;
@@ -424,6 +441,8 @@ export class MemoryStore {
           entry.id, entry.text, entry.category, entry.scope,
           entry.importance, entry.timestamp, entry.metadata, hashes[i]
         );
+        // Write scope tag (default to 'global')
+        insertScope.run(entry.id, entry.scope || "global");
         if (insertVec) {
           insertVec.run(`mem_${entry.id}`, new Float32Array(entry.vector));
         }
@@ -1076,6 +1095,11 @@ export class MemoryStore {
       fullEntry.importance, fullEntry.timestamp, fullEntry.metadata
     );
 
+    // Write scope tag
+    this.db.prepare(
+      "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+    ).run(fullEntry.id, fullEntry.scope || "global");
+
     // Insert chunk vectors
     if (this._sqliteVecAvailable) {
       for (let i = 0; i < entry.chunkVectors.length; i++) {
@@ -1142,6 +1166,24 @@ export class MemoryStore {
     } catch { /* best effort */ }
   }
 
+  /** Backfill memory_scopes with 'global' tag for any memory that has no scope rows yet. */
+  private backfillMemoryScopes(): void {
+    try {
+      const missing = this.db.prepare(`
+        SELECT m.id FROM memories m
+        WHERE NOT EXISTS (SELECT 1 FROM memory_scopes ms WHERE ms.memory_id = m.id)
+      `).all() as { id: string }[];
+      if (missing.length === 0) return;
+
+      const insert = this.db.prepare(
+        "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, 'global')"
+      );
+      for (const row of missing) {
+        insert.run(row.id);
+      }
+    } catch { /* best effort */ }
+  }
+
   // ========================================================================
   // Private helpers
   // ========================================================================
@@ -1155,6 +1197,14 @@ export class MemoryStore {
       entry.id, entry.text, entry.category, entry.scope,
       entry.importance, entry.timestamp, entry.metadata, hash
     );
+
+    // Write scope tags to memory_scopes (source of truth for multi-valued tags).
+    // The old `memories.scope` column is kept for backward compatibility but
+    // memory_scopes is authoritative. Default to 'global' when scope is unset.
+    const scope = entry.scope || "global";
+    this.db.prepare(
+      "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
+    ).run(entry.id, scope);
 
     // Insert vector
     if (this._sqliteVecAvailable && entry.vector.length > 0) {
