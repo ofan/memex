@@ -397,14 +397,21 @@ export async function reflectionSweep(
       // Store learning as a new memory with inherited scope tags
       if (line.length >= 20) {
         const hash = createHash("sha256").update(line).digest("hex");
-        // Check if already exists (idempotent)
-        const existing = db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(hash) as any;
+        // Compute dedup_hash as sha256(text + '\x00' + sorted scope tags)
+        const sortedTags = [...inheritedTags].sort().join(",");
+        const dedupHash = createHash("sha256")
+          .update(line)
+          .update("\x00")
+          .update(sortedTags)
+          .digest("hex");
+        // Check if already exists (idempotent via dedup_hash UNIQUE index)
+        const existing = db.prepare("SELECT id FROM memories WHERE dedup_hash = ?").get(dedupHash) as any;
         if (!existing) {
           const id = crypto.randomUUID();
           db.prepare(`
-            INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash)
-            VALUES (?, ?, 'learning', 'global', 0.85, ?, ?)
-          `).run(id, line, Date.now(), hash);
+            INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash, dedup_hash)
+            VALUES (?, ?, 'learning', 'global', 0.85, ?, ?, ?)
+          `).run(id, line, Date.now(), hash, dedupHash);
 
           // Write inherited scope tags to memory_scopes
           const insertScope = db.prepare(

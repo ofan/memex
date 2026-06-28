@@ -636,6 +636,10 @@ export class MemoryStore {
 
     const sql = `SELECT m.id, m.text, m.category, m.scope, m.importance, m.timestamp, m.metadata FROM memories m WHERE ${conditions.join(" AND ")}`;
     const rows = this.db.prepare(sql).all(...params) as any[];
+
+    // Batch-fetch scope tags from memory_scopes for all returned entries
+    const scopesMap = this.fetchScopesForIds(rows.map((r: any) => r.id));
+
     const mapped: MemorySearchResult[] = [];
 
     for (const row of rows) {
@@ -651,6 +655,7 @@ export class MemoryStore {
           vector: [], // Don't return full vector for search results
           category: row.category,
           scope: row.scope,
+          scopes: scopesMap.get(row.id) || [row.scope || "global"],
           importance: row.importance,
           timestamp: row.timestamp,
           metadata: row.metadata || "{}",
@@ -692,6 +697,10 @@ export class MemoryStore {
       params.push(safeLimit);
 
       const rows = this.db.prepare(sql).all(...params) as any[];
+
+      // Batch-fetch scope tags from memory_scopes for all returned entries
+      const scopesMap = this.fetchScopesForIds(rows.map((r: any) => r.id));
+
       const mapped: MemorySearchResult[] = [];
 
       for (const row of rows) {
@@ -707,6 +716,7 @@ export class MemoryStore {
             vector: [],
             category: row.category,
             scope: row.scope,
+            scopes: scopesMap.get(row.id) || [row.scope || "global"],
             importance: row.importance,
             timestamp: row.timestamp,
             metadata: row.metadata || "{}",
@@ -816,12 +826,16 @@ export class MemoryStore {
       resultVector = updates.vector;
     }
 
+    // Fetch scope tags from memory_scopes for the updated entry
+    const scopeTags = this.fetchScopesForIds([row.id]).get(row.id) || [row.scope ?? "global"];
+
     const updated: MemoryEntry = {
       id: row.id,
       text: updatedText,
       vector: resultVector,
       category: updatedCategory as MemoryEntry["category"],
       scope: row.scope ?? "global",
+      scopes: scopeTags,
       importance: updatedImportance,
       timestamp: row.timestamp,
       metadata: updatedMetadata,
@@ -956,12 +970,16 @@ export class MemoryStore {
 
     const rows = this.db.prepare(sql).all(...params) as any[];
 
+    // Batch-fetch scope tags from memory_scopes for all returned entries
+    const scopesMap = this.fetchScopesForIds(rows.map((r: any) => r.id));
+
     return rows.map((row): MemoryEntry => ({
       id: row.id,
       text: row.text,
       vector: [], // Don't include vectors in list results for performance
       category: row.category,
       scope: row.scope ?? "global",
+      scopes: scopesMap.get(row.id) || [row.scope ?? "global"],
       importance: row.importance,
       timestamp: row.timestamp,
       metadata: row.metadata || "{}",
@@ -1393,6 +1411,31 @@ export class MemoryStore {
       `SELECT 1 FROM memory_scopes WHERE memory_id = ? AND scope IN (${placeholders})`,
     ).get(memoryId, ...scopeFilter);
     return row != null;
+  }
+
+  /**
+   * Batch-fetch scope tags for a set of memory IDs.
+   * Returns a Map of memoryId → sorted scope tag array.
+   * Returns an empty array for IDs with no scope rows (should not happen in practice).
+   */
+  private fetchScopesForIds(ids: string[]): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+    if (ids.length === 0) return map;
+    const placeholders = ids.map(() => "?").join(",");
+    const scopeRows = this.db.prepare(`
+      SELECT memory_id, scope FROM memory_scopes
+      WHERE memory_id IN (${placeholders})
+      ORDER BY memory_id, scope
+    `).all(...ids) as { memory_id: string; scope: string }[];
+    for (const row of scopeRows) {
+      let scopes = map.get(row.memory_id);
+      if (!scopes) {
+        scopes = [];
+        map.set(row.memory_id, scopes);
+      }
+      scopes.push(row.scope);
+    }
+    return map;
   }
 
   /** Validate and write scope tags for a memory. Rejects `device:` prefix. */

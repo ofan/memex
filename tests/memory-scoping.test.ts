@@ -487,8 +487,8 @@ describe("P2: deriveScopes", () => {
   it("metadata includes captured_at timestamp", () => {
     const before = Date.now();
     const result = deriveScopes({ cwd: tmpdir() });
-    assert.ok(result.metadata.captured_at >= before);
-    assert.ok(result.metadata.captured_at <= Date.now());
+    assert.ok((result.metadata.captured_at as number) >= before);
+    assert.ok((result.metadata.captured_at as number) <= Date.now());
   });
 
   it("metadata includes client name when provided", () => {
@@ -513,8 +513,8 @@ describe("P2: deriveScopes", () => {
       const result = deriveScopes({ cwd: dir });
       const metaStr = JSON.stringify(result.metadata);
       assert.ok(!metaStr.includes(dir), "raw path should not appear in metadata");
-      assert.ok(/^[0-9a-f]{16}$/.test(result.metadata.project_root || ""), "project_root should be hash");
-      assert.ok(/^[0-9a-f]{16}$/.test(result.metadata.cwd_hash || ""), "cwd_hash should be hash");
+      assert.ok(/^[0-9a-f]{16}$/.test((result.metadata.project_root as string) || ""), "project_root should be hash");
+      assert.ok(/^[0-9a-f]{16}$/.test((result.metadata.cwd_hash as string) || ""), "cwd_hash should be hash");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -588,7 +588,7 @@ describe("P2: deriveScopes", () => {
     });
     // Must be a 16-char hex hash, not the raw value
     assert.equal(typeof result.metadata.device_id, "string");
-    assert.equal(result.metadata.device_id.length, 16,
+    assert.equal((result.metadata.device_id as string).length, 16,
       "client-supplied device_id must be hashed to 16-char hex");
     assert.ok(/^[0-9a-f]{16}$/.test(result.metadata.device_id as string),
       "client-supplied device_id must be a hex hash");
@@ -608,7 +608,7 @@ describe("P2: deriveScopes", () => {
     // This test guards against double-hashing regressions.
     const result = deriveScopes({ cwd: tmpdir() });
     assert.equal(typeof result.metadata.device_id, "string");
-    assert.equal(result.metadata.device_id.length, 16,
+    assert.equal((result.metadata.device_id as string).length, 16,
       "derived device_id must be 16-char hex hash");
     assert.ok(/^[0-9a-f]{16}$/.test(result.metadata.device_id as string),
       "derived device_id must be a hex hash");
@@ -1572,6 +1572,149 @@ describe("P4+: recall scope integrity", () => {
     assert.ok(!results.some(r => r.entry.text === "unrelated memory"),
       "unrelated memory must not leak into project-scoped recall");
   });
+
+  // ==========================================================================
+  // Fix 1 verification: scopes array populated on recall/list results
+  // ==========================================================================
+
+  it("vectorSearch results have scopes array populated from memory_scopes", async () => {
+    await storeSI.store({
+      text: "scopes-populated-on-vectorSearch",
+      vector: seedVecSI("scopes-populated-on-vectorSearch".length),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:vs-scopes-test"],
+    });
+
+    const results = await storeSI.vectorSearch(
+      seedVecSI("scopes-populated-on-vectorSearch".length),
+      5, 0.0, ["global"],
+    );
+    assert.ok(results.length >= 1, "should find the memory");
+    const entry = results[0].entry;
+    assert.ok(entry.scopes, "entry.scopes must be defined");
+    assert.ok(Array.isArray(entry.scopes), "entry.scopes must be an array");
+    assert.ok(entry.scopes!.includes("global"), "scopes must include global");
+    assert.ok(entry.scopes!.includes("project:vs-scopes-test"), "scopes must include project tag");
+  });
+
+  it("bm25Search results have scopes array populated from memory_scopes", async () => {
+    await storeSI.store({
+      text: "aardvark scopes populated on bm25Search",
+      vector: seedVecSI("aardvark scopes populated on bm25Search".length),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:bm25-scopes-test"],
+    });
+
+    const results = await storeSI.bm25Search("aardvark", 5, ["global"]);
+    assert.ok(results.length >= 1, "should find the memory via BM25");
+    const entry = results[0].entry;
+    assert.ok(entry.scopes, "entry.scopes must be defined on bm25Search result");
+    assert.ok(entry.scopes!.includes("global"), "scopes must include global");
+    assert.ok(entry.scopes!.includes("project:bm25-scopes-test"), "scopes must include project tag");
+  });
+
+  it("list() results have scopes array populated from memory_scopes", async () => {
+    await storeSI.store({
+      text: "list scopes populated test",
+      vector: seedVecSI("list scopes populated test".length),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:list-scopes-test"],
+    });
+
+    const entries = await storeSI.list(["global"]);
+    assert.ok(entries.length >= 1, "should list the memory");
+    const entry = entries.find(e => e.text === "list scopes populated test");
+    assert.ok(entry, "should find the correct memory in list");
+    assert.ok(entry!.scopes, "entry.scopes must be defined on list result");
+    assert.ok(entry!.scopes!.includes("global"), "scopes must include global");
+    assert.ok(entry!.scopes!.includes("project:list-scopes-test"), "scopes must include project tag");
+  });
+
+  // ==========================================================================
+  // Fix 2 verification: update() returns scopes on MemoryEntry
+  // ==========================================================================
+
+  it("update() returns scopes array on updated MemoryEntry", async () => {
+    const entry = await storeSI.store({
+      text: "update scopes return test",
+      vector: seedVecSI("update scopes return test".length),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:update-return-test"],
+    });
+    assert.ok(entry, "store should succeed");
+
+    const updated = await storeSI.update(entry!.id, { text: "updated scopes return text" }, ["global"]);
+    assert.ok(updated, "update should succeed");
+    assert.ok(updated!.scopes, "updated entry must have scopes array");
+    assert.ok(updated!.scopes!.includes("global"), "scopes must include global");
+    assert.ok(updated!.scopes!.includes("project:update-return-test"), "scopes must include project tag");
+  });
+});
+
+// ============================================================================
+// Fix 4 verification: dreaming learnings carry dedup_hash
+// ============================================================================
+
+describe("P5+: dreaming learnings dedup_hash", () => {
+  let storeDD: MemoryStore;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "mem-dd-test-"));
+    storeDD = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: DIM });
+  });
+
+  afterEach(async () => {
+    await storeDD.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("learnings inserted manually get dedup_hash matching (text + sorted scopes)", () => {
+    // Simulate what reflectionSweep does: insert a learning with dedup_hash
+    const text = "The user prefers TypeScript over JavaScript for new projects";
+    const tags = ["global", "project:dedup-learning-test"];
+    const sortedTags = [...tags].sort().join(",");
+    const textHash = createHash("sha256").update(text).digest("hex");
+    const dedupHash = createHash("sha256")
+      .update(text)
+      .update("\x00")
+      .update(sortedTags)
+      .digest("hex");
+
+    const id = crypto.randomUUID();
+    storeDD.db.prepare(`
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash, dedup_hash)
+      VALUES (?, ?, 'learning', 'global', 0.85, ?, ?, ?)
+    `).run(id, text, Date.now(), textHash, dedupHash);
+
+    // Write scope tags
+    for (const tag of tags) {
+      storeDD.db.prepare("INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, tag);
+    }
+
+    // Verify dedup_hash is non-null and correct
+    const row = storeDD.db.prepare(
+      "SELECT dedup_hash, text_hash FROM memories WHERE id = ?"
+    ).get(id) as { dedup_hash: string; text_hash: string };
+    assert.ok(row.dedup_hash, "learning must have dedup_hash set");
+    assert.ok(row.dedup_hash.length === 64, "dedup_hash must be 64 hex chars (sha256)");
+    assert.equal(row.dedup_hash, dedupHash, "dedup_hash must match sha256(text + \\x00 + sorted tags)");
+
+    // Verify the UNIQUE index on dedup_hash catches a duplicate insert
+    assert.throws(() => {
+      storeDD.db.prepare(`
+        INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash, dedup_hash)
+        VALUES (?, ?, 'learning', 'global', 0.85, ?, ?, ?)
+      `).run(crypto.randomUUID(), text, Date.now(), textHash, dedupHash);
+    }, /UNIQUE/, "duplicate dedup_hash must be rejected by UNIQUE index");
+  });
 });
 
 // Import for the retriever tests
@@ -1585,7 +1728,7 @@ import type { Embedder } from "../src/embedder.js";
 describe("P4b: retriever scopes override", () => {
   let storeR: MemoryStore;
   let retriever: MemoryRetriever;
-  const embedder: Embedder = {
+  const embedder = {
     dimensions: DIM,
     async embedQuery(text: string): Promise<number[]> {
       return seedVecR(text.length);
@@ -1593,7 +1736,7 @@ describe("P4b: retriever scopes override", () => {
     async embedPassage(text: string): Promise<number[]> {
       return seedVecR(text.length);
     },
-  };
+  } as unknown as Embedder;
 
   function seedVecR(seed: number, dim: number = DIM): number[] {
     const v = Array.from({ length: dim }, (_, i) => Math.sin(seed * (i + 1)));

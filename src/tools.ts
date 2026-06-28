@@ -132,6 +132,22 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
                 details: { error: "scope_access_denied", requestedScope: scope },
               };
             }
+
+            // Merge agent_id / session_id tags into filter (Bug: only scopes array path did this)
+            if (agent_id) {
+              const agentTag = `agent:${agent_id}`;
+              if (!scopeFilter.includes(agentTag)) scopeFilter.push(agentTag);
+            }
+            if (session_id) {
+              const derivForSession = deriveScopes({
+                cwd: process.cwd(),
+                env: process.env as Record<string, string | undefined>,
+                clientName: detectPluginClientName(),
+                sessionId: session_id,
+              });
+              const sessionTag = derivForSession.tags.find(t => t.startsWith("session:"));
+              if (sessionTag && !scopeFilter.includes(sessionTag)) scopeFilter.push(sessionTag);
+            }
           } else if (scopes && scopes.length > 0) {
             // Explicit scopes override: use them directly (Bug 1 fix)
             scopeFilter = [...scopes];
