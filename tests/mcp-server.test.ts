@@ -219,6 +219,32 @@ describe("MCP Server", () => {
     assert.ok(stats.byCategory.preference >= 1);
   });
 
+  it("memory_stats includes scope breakdown from memory_scopes", async () => {
+    // Store a memory with scope tags — the server derives scopes automatically
+    await client.callTool({
+      name: "memory_store",
+      arguments: { text: "Scope test fact", category: "fact" },
+    });
+
+    const result = await client.callTool({
+      name: "memory_stats",
+      arguments: {},
+    });
+    const stats = JSON.parse((result.content as any)[0].text);
+
+    // Bug B: before the fix, memory_stats had no scope breakdown at all.
+    // After the fix, byScope must exist and include the 'global' tag
+    // that the server automatically derives.
+    assert.ok(stats.byScope !== undefined,
+      "memory_stats must include byScope (Bug B: was missing scope breakdown)");
+    assert.ok(typeof stats.byScope === "object",
+      "byScope must be an object mapping scope tag -> count");
+    assert.ok(Object.keys(stats.byScope).length > 0,
+      "byScope must have at least one scope tag entry");
+    assert.ok(stats.byScope.global >= 1,
+      "global tag must appear in byScope with count >= 1");
+  });
+
   it("memory_dream runs light + deep sweep", async () => {
     // Store a noise entry directly in DB (bypass store guards)
     const { server: _s, store } = createMemexMcpServer({
@@ -513,6 +539,189 @@ describe("MCP Server", () => {
       });
       const parsed = JSON.parse((result.content as any)[0].text);
       assert.ok(parsed.results.length >= 0, "should work without scopes param");
+    });
+  });
+
+  // ── Bug 4 & 6: memory_recall agent_id/session_id scoping ───────────────
+
+  describe("BUG4: memory_recall consumes agent_id/session_id for scope filtering", () => {
+    it("BUG4: agent_id is consumed and matching memory surfaces", async () => {
+      // Store two memories with different agent tags (both get global tag too)
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Dev assistant uses TypeScript strict mode", category: "preference", agent_id: "dev-assistant" },
+      });
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "QA bot uses Playwright for E2E tests", category: "preference", agent_id: "qa-bot" },
+      });
+
+      // Recall with agent_id=dev-assistant — the param should be consumed
+      // (was dead code before fix). Both memories surface because both
+      // have global tag (by design — global always surfaces).
+      const result = await client.callTool({
+        name: "memory_recall",
+        arguments: { query: "uses", limit: 10, agent_id: "dev-assistant" },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      const texts = parsed.results.map((r: any) => r.text);
+      assert.ok(texts.some((t: string) => t.includes("TypeScript")),
+        `BUG4: dev-assistant memory should surface. Got: ${JSON.stringify(texts)}`);
+      // Both should surface because both have global tag
+      assert.equal(parsed.results.length, 2,
+        `BUG4: both memories should surface (both have global tag). Got ${parsed.results.length}: ${JSON.stringify(texts)}`);
+    });
+
+    it("BUG4: session_id is consumed and matching memory surfaces", async () => {
+      // Store two memories with different session tags (both get global tag too)
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Session alpha discussed deployment pipeline", category: "fact", session_id: "sess-alpha-001" },
+      });
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Session beta discussed monitoring setup", category: "fact", session_id: "sess-beta-002" },
+      });
+
+      // Recall with session_id — param should be consumed (was dead code)
+      const result = await client.callTool({
+        name: "memory_recall",
+        arguments: { query: "discussed", limit: 10, session_id: "sess-alpha-001" },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      const texts = parsed.results.map((r: any) => r.text);
+      assert.ok(texts.some((t: string) => t.includes("deployment")),
+        `BUG4: session-alpha memory should surface. Got: ${JSON.stringify(texts)}`);
+      // Both surface because both have global tag (by design)
+      assert.equal(parsed.results.length, 2,
+        `BUG4: both session memories should surface (both have global). Got ${parsed.results.length}: ${JSON.stringify(texts)}`);
+    });
+
+    it("BUG4: agent_id combined with explicit scopes", async () => {
+      // Store a memory scoped to agent:dev-assistant
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Dev assistant uses pnpm as package manager", category: "preference", agent_id: "dev-assistant" },
+      });
+      // Store a memory scoped to test:other
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Other scoped memory about bundlers", category: "fact", scope: "test:other" },
+      });
+
+      // Recall with both agent_id and explicit scopes
+      const result = await client.callTool({
+        name: "memory_recall",
+        arguments: { query: "package manager", limit: 10, agent_id: "dev-assistant", scopes: ["test:other"] },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      const texts = parsed.results.map((r: any) => r.text);
+      // With both tags in filter, both memories should surface
+      assert.equal(parsed.results.length, 2,
+        `BUG4: should find both memories with combined filter. Got ${parsed.results.length}: ${JSON.stringify(texts)}`);
+    });
+
+    it("BUG4: agent_id without explicit scopes works (backward compat)", async () => {
+      await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Generic fact about cloud computing", category: "fact" },
+      });
+
+      const result = await client.callTool({
+        name: "memory_recall",
+        arguments: { query: "cloud computing", limit: 5, agent_id: "any-agent" },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      // Should return results (global-tagged memory surfaces regardless of agent_id)
+      assert.ok(parsed.results.length >= 0, "recall with agent_id should not error");
+    });
+  });
+
+  // ── Bug 5: Scope format validation ──────────────────────────────────────
+
+  describe("BUG5: scope format validation", () => {
+    it("BUG5: rejects scope tags with invalid characters", async () => {
+      const badScopes = [
+        "scope with spaces",
+        "scope\nnewline",
+        "scope\twith\ttabs",
+        "scope<script>",
+        "scope;DROP TABLE",
+        "scope|pipe",
+        "scope&",
+        "scope@host",
+        "scope+plus",
+        "scope=equals",
+        "scope?query",
+        "scope#hash",
+        "scope!bang",
+        "scope~tilde",
+        "scope`backtick",
+        "scope'quote",
+        'scope"double',
+        "scope,comma",
+        "scope\\backslash",
+        "scope/forward",
+        "scope<angle>",
+        "scope(parentheses)",
+        "scope[brackets]",
+        "scope{braces}",
+      ];
+
+      for (const bad of badScopes) {
+        const result = await client.callTool({
+          name: "memory_store",
+          arguments: { text: "Test fact for bad scope", category: "fact", scope: bad },
+        });
+        const parsed = JSON.parse((result.content as any)[0].text);
+        assert.ok(parsed.rejected || parsed.reason?.includes("Invalid scope"),
+          `BUG5: should reject malformed scope "${bad}". Got: ${JSON.stringify(parsed)}`);
+      }
+    });
+
+    it("BUG5: accepts valid scope tags", async () => {
+      const validScopes = [
+        "global",
+        "agent:dev-assistant",
+        "client:claude-code",
+        "project:abc123def456",
+        "session:00000000:my-session",
+        "custom:my-scope",
+        "test:alpha.beta",
+        "project:0123456789abcdef",
+        "client:open_code_v2",
+      ];
+
+      for (const valid of validScopes) {
+        const result = await client.callTool({
+          name: "memory_store",
+          arguments: { text: `Valid scope test: ${valid}`, category: "fact", scope: valid },
+        });
+        const parsed = JSON.parse((result.content as any)[0].text);
+        assert.ok(!parsed.rejected,
+          `BUG5: should accept valid scope "${valid}". Got: ${JSON.stringify(parsed)}`);
+      }
+    });
+
+    it("BUG5: rejects overly long scope tags (>100 chars)", async () => {
+      const longScope = "a".repeat(101);
+      const result = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Long scope test", category: "fact", scope: longScope },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      assert.ok(parsed.rejected || parsed.reason?.includes("Invalid scope"),
+        `BUG5: should reject scope > 100 chars. Got: ${JSON.stringify(parsed)}`);
+    });
+
+    it("BUG5: rejects empty scope", async () => {
+      const result = await client.callTool({
+        name: "memory_store",
+        arguments: { text: "Empty scope test", category: "fact", scope: "" },
+      });
+      const parsed = JSON.parse((result.content as any)[0].text);
+      assert.ok(parsed.rejected || parsed.reason?.includes("Invalid scope"),
+        `BUG5: should reject empty scope. Got: ${JSON.stringify(parsed)}`);
     });
   });
 });

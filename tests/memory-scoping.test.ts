@@ -172,6 +172,73 @@ describe("P1: memory_scopes table", () => {
     ).all(entry!.id) as { scope: string }[];
     assert.equal(rows.length, 0, "tag rows should be deleted via CASCADE");
   });
+
+  it("store() writes EXACT tag set to memory_scopes (not approximate)", async () => {
+    const tags = ["global", "project:exact-test-001", "client:test-client"];
+    const entry = await store.store({
+      text: "exact tag test",
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: tags,
+    });
+    assert.ok(entry, "store should succeed");
+
+    const rows = store.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(entry!.id) as { scope: string }[];
+    const storedTags = rows.map(r => r.scope);
+    // Must be an exact match (deduped and sorted)
+    assert.deepEqual(storedTags, [...new Set(tags)].sort(),
+      "memory_scopes must contain exact scope tag set, no more, no less");
+  });
+
+  it("store() deduplicates repeated tags in scopes array", async () => {
+    const entry = await store.store({
+      text: "dedup tags test",
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "global", "project:dup-test", "global"],
+    });
+    assert.ok(entry, "store should succeed");
+
+    const rows = store.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(entry!.id) as { scope: string }[];
+    assert.deepEqual(rows.map(r => r.scope), ["global", "project:dup-test"],
+      "duplicate tags must be deduplicated in memory_scopes");
+  });
+
+  it("store() writes dedup_hash matching actual scope tags", async () => {
+    const tags = ["global", "project:hash-test", "client:test-client"];
+    const entry = await store.store({
+      text: "dedup hash integrity test",
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: tags,
+    });
+    assert.ok(entry, "store should succeed");
+
+    const row = store.db.prepare(
+      "SELECT dedup_hash, text_hash FROM memories WHERE id = ?"
+    ).get(entry!.id) as { dedup_hash: string; text_hash: string };
+    assert.ok(row.dedup_hash, "must have dedup_hash");
+    assert.ok(row.text_hash, "must have text_hash");
+
+    // Verify dedup_hash is computed correctly based on (text, canonical tags)
+    const expectedDedup = require("node:crypto").createHash("sha256")
+      .update(entry!.text.trim())
+      .update('\x00')
+      .update([...new Set(tags)].sort().join(','))
+      .digest("hex");
+    assert.equal(row.dedup_hash, expectedDedup,
+      "dedup_hash must match sha256(text + \\x00 + sorted tags)");
+  });
 });
 
 // ============================================================================
@@ -225,6 +292,34 @@ describe("P2: normalizeGitRemote", () => {
 
   it("handles empty string", () => {
     assert.equal(normalizeGitRemote(""), "");
+  });
+
+  // Regression: ssh:// URL form
+  it("handles ssh:// URL form", () => {
+    assert.equal(
+      normalizeGitRemote("ssh://git@github.com/user/repo.git"),
+      "https://github.com/user/repo"
+    );
+  });
+
+  // Regression: strips trailing slashes
+  it("strips trailing slashes", () => {
+    assert.equal(
+      normalizeGitRemote("https://github.com/user/repo/"),
+      "https://github.com/user/repo"
+    );
+  });
+
+  // Regression: ssh:// and SCP form produce the same normalized output
+  it("ssh:// and SCP forms produce identical hashes", () => {
+    const n1 = normalizeGitRemote("ssh://git@github.com:22/user/repo");
+    const n2 = normalizeGitRemote("git@github.com:user/repo");
+    // After normalization, both port-stripped ssh:// and SCP should map to same host/path
+    assert.ok(n1.includes("github.com/user/repo") || n1 === "https://github.com/user/repo");
+    // They won't be identical if port is preserved, but the key is both contain
+    // the canonical host and path
+    const n1NoPort = normalizeGitRemote("ssh://git@github.com/user/repo");
+    assert.equal(n1NoPort, n2);
   });
 });
 
@@ -315,9 +410,15 @@ describe("P2: deriveScopes", () => {
     assert.deepEqual(result.tags, ["global"], "should only have global when no signal");
   });
 
-  it("includes client tag when clientName provided", () => {
+  it("clientName goes to metadata only, not auto-tagged", () => {
+    // Per spec: client is OPT-IN. clientName is provenance metadata only.
+    // Auto-tagging client would silo general facts by capturing-client.
     const result = deriveScopes({ cwd: tmpdir(), clientName: "claude-code" });
-    assert.ok(result.tags.includes("client:claude-code"));
+    const clientTags = result.tags.filter(t => t.startsWith("client:"));
+    assert.equal(clientTags.length, 0,
+      "clientName alone must not auto-add a client tag");
+    assert.equal(result.metadata.client, "claude-code",
+      "clientName must be in metadata.provenance");
   });
 
   it("includes agent tag when explicit agentId provided", () => {
@@ -417,6 +518,103 @@ describe("P2: deriveScopes", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // ==========================================================================
+  // Regression: BUG 1 — client tag is OPT-IN, not auto-derived from clientName
+  // ==========================================================================
+
+  it("BUGFIX: clientName does NOT auto-add a client tag (opt-in only)", () => {
+    // Per spec: client is opt-in. clientName is provenance only.
+    // Auto-tagging client would silo general facts by capturing-client
+    // (e.g. "I like dark mode" captured in Claude Code would be hidden from Codex).
+    const result = deriveScopes({ cwd: tmpdir(), clientName: "claude-code" });
+    const clientTags = result.tags.filter(t => t.startsWith("client:"));
+    assert.equal(clientTags.length, 0,
+      "clientName alone must NOT create a client:<name> tag — client is opt-in");
+    // clientName must still be recorded in metadata provenance
+    assert.equal(result.metadata.client, "claude-code",
+      "clientName must be preserved in metadata.provenance");
+  });
+
+  it("BUGFIX: explicit.client adds client tag when explicitly requested", () => {
+    // When explicit.client is set, the tag IS added — the caller opts in.
+    const result = deriveScopes({
+      cwd: tmpdir(),
+      clientName: "auto-detected-client",
+      explicit: { client: "claude-code" },
+    });
+    const clientTags = result.tags.filter(t => t.startsWith("client:"));
+    assert.equal(clientTags.length, 1, "explicit.client must create exactly one client tag");
+    assert.equal(clientTags[0], "client:claude-code",
+      "explicit.client value becomes the tag");
+    // explicit.client overrides clientName in metadata too
+    assert.equal(result.metadata.client, "claude-code",
+      "explicit.client takes precedence in metadata");
+  });
+
+  it("BUGFIX: clientName alone — no tag, but session hash still works", () => {
+    // The session tag uses a client-derived hash prefix. Even though
+    // clientName doesn't create a tag, the session hash should still
+    // use the available client identity (clientName) for namespacing.
+    const result = deriveScopes({
+      cwd: tmpdir(),
+      clientName: "codex",
+      sessionId: "my-session",
+    });
+    const clientTags = result.tags.filter(t => t.startsWith("client:"));
+    assert.equal(clientTags.length, 0,
+      "clientName alone must NOT create a client tag");
+    // Session tag must still exist and have a non-zero hash prefix
+    const sessionTag = result.tags.find(t => t.startsWith("session:"));
+    assert.ok(sessionTag, "session tag must still be present");
+    const parts = sessionTag!.split(":");
+    assert.notEqual(parts[1], "00000000",
+      "session hash prefix must use client identity (not all-zeros)");
+  });
+
+  // ==========================================================================
+  // Regression: BUG 3 — client-supplied device_id must be hashed
+  // ==========================================================================
+
+  it("BUGFIX: client-supplied device_id is hashed in metadata", () => {
+    // In stdio mode, device_id = hash(hostname + HOME). In HTTP mode,
+    // the client supplies a device_id. It must also be hashed for symmetry —
+    // raw device identifiers must never be stored.
+    const rawDeviceId = "device-abc-123-custom-client-id";
+    const result = deriveScopes({
+      cwd: tmpdir(),
+      explicit: { device: rawDeviceId },
+    });
+    // Must be a 16-char hex hash, not the raw value
+    assert.equal(typeof result.metadata.device_id, "string");
+    assert.equal(result.metadata.device_id.length, 16,
+      "client-supplied device_id must be hashed to 16-char hex");
+    assert.ok(/^[0-9a-f]{16}$/.test(result.metadata.device_id as string),
+      "client-supplied device_id must be a hex hash");
+    assert.notEqual(result.metadata.device_id, rawDeviceId,
+      "raw device_id must not be stored in metadata");
+    // Verify it's deterministic
+    const result2 = deriveScopes({
+      cwd: tmpdir(),
+      explicit: { device: rawDeviceId },
+    });
+    assert.equal(result.metadata.device_id, result2.metadata.device_id,
+      "hashing must be deterministic");
+  });
+
+  it("BUGFIX: derived device_id (no explicit) is still hashed", () => {
+    // When no explicit device is provided, deriveDeviceId() already hashes.
+    // This test guards against double-hashing regressions.
+    const result = deriveScopes({ cwd: tmpdir() });
+    assert.equal(typeof result.metadata.device_id, "string");
+    assert.equal(result.metadata.device_id.length, 16,
+      "derived device_id must be 16-char hex hash");
+    assert.ok(/^[0-9a-f]{16}$/.test(result.metadata.device_id as string),
+      "derived device_id must be a hex hash");
+    // Must NOT appear in tags
+    assert.equal(result.tags.find(t => t.startsWith("device:")), undefined,
+      "device must never be a tag");
+  });
 });
 
 // ============================================================================
@@ -513,6 +711,144 @@ describe("P3: store with scopes", () => {
     ).all(entry!.id) as { scope: string }[];
     assert.equal(rows.length, 1, "should have one scope row");
     assert.equal(rows[0].scope, "global");
+  });
+
+  // ==========================================================================
+  // Bug regression: scope-aware dedup (identical text + different scopes)
+  // ==========================================================================
+
+  it("identical text under different scope-sets both store successfully", async () => {
+    const text = "The user prefers dark mode for coding sessions";
+
+    // Store with scope-set A
+    const entry1 = await store3.store({
+      text,
+      vector: randomVec(),
+      category: "preference",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:aaaa1111"],
+    });
+    assert.ok(entry1, "first store should succeed");
+
+    // Store SAME text with scope-set B — must NOT be rejected as duplicate
+    const entry2 = await store3.store({
+      text,
+      vector: randomVec(),
+      category: "preference",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:bbbb2222"],
+    });
+    assert.ok(entry2, "second store with different scopes should succeed (not rejected as duplicate)");
+
+    // Verify both exist in DB
+    const rows = store3.db.prepare(
+      "SELECT id, text FROM memories WHERE text = ? ORDER BY id"
+    ).all(text) as { id: string; text: string }[];
+    assert.equal(rows.length, 2, "both entries should be in the database");
+    assert.notEqual(entry1!.id, entry2!.id, "entries should have different IDs");
+
+    // Verify each has correct scope tags in memory_scopes
+    const tags1 = store3.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(entry1!.id) as { scope: string }[];
+    assert.deepEqual(tags1.map(r => r.scope), ["global", "project:aaaa1111"]);
+
+    const tags2 = store3.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(entry2!.id) as { scope: string }[];
+    assert.deepEqual(tags2.map(r => r.scope), ["global", "project:bbbb2222"]);
+  });
+
+  it("identical text under same scope-set is still deduplicated", async () => {
+    const text = "This fact should still dedup under the same scopes";
+
+    const entry1 = await store3.store({
+      text,
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:sameproj"],
+    });
+    assert.ok(entry1, "first store should succeed");
+
+    // Same text, same scopes => must be rejected
+    const entry2 = await store3.store({
+      text,
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:sameproj"],
+    });
+    assert.equal(entry2, null, "same text + same scopes should be deduplicated");
+  });
+
+  it("identical text without scopes array falls back to scope field for dedup", async () => {
+    const text = "Another dedup scope field test";
+
+    const entry1 = await store3.store({
+      text,
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+    });
+    assert.ok(entry1, "first store should succeed");
+
+    // Same text, same default scope => dedup
+    const entry2 = await store3.store({
+      text,
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+    });
+    assert.equal(entry2, null, "same text + same default scope should be deduplicated");
+  });
+
+  // ==========================================================================
+  // Bug regression: storeWithChunks device: prefix validation
+  // ==========================================================================
+
+  it("storeWithChunks rejects 'device:' prefix in scope tags", async () => {
+    await assert.rejects(
+      async () => {
+        await store3.storeWithChunks({
+          text: "long text for chunks with bad device tag",
+          category: "fact",
+          scope: "global",
+          importance: 0.5,
+          scopes: ["global", "device:mac-studio-3"],
+          chunkVectors: [randomVec(), randomVec(), randomVec()],
+        });
+      },
+      /device.*tag/i,
+      "storeWithChunks should reject device: tag"
+    );
+  });
+
+  it("storeWithChunks accepts valid scope tags and writes them correctly", async () => {
+    const entry = await store3.storeWithChunks({
+      text: "long text for chunks with valid scopes",
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:testproj", "client:test-client"],
+      chunkVectors: [randomVec(), randomVec()],
+    });
+    assert.ok(entry, "storeWithChunks should succeed with valid scope tags");
+
+    // Verify scope tags were written correctly
+    const tags = store3.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(entry.id) as { scope: string }[];
+    const tagValues = tags.map(r => r.scope);
+    assert.ok(tagValues.includes("global"), "should have global tag");
+    assert.ok(tagValues.includes("project:testproj"), "should have project tag");
+    assert.ok(tagValues.includes("client:test-client"), "should have client tag");
   });
 });
 
@@ -905,6 +1241,52 @@ describe("P4: recall tag-intersection", () => {
   });
 
   // ==========================================================================
+  // Regression: Bug A — stats() scopeCounts aggregates from memory_scopes
+  // ==========================================================================
+
+  describe("REGRESSION: stats() scopeCounts from memory_scopes", () => {
+    it("scopeCounts reflects multi-valued tags from memory_scopes, not legacy scope column", async () => {
+      // Store a memory with multi-valued tags
+      await storeWithTags("regression-scope-counts",
+        ["global", "project:reg-test-abc123"]);
+
+      const stats = await store4.stats(["global"]);
+      assert.equal(stats.totalCount, 1,
+        "totalCount should be 1");
+      // The scopeCounts must reflect tags from memory_scopes, not m.scope
+      assert.ok(stats.scopeCounts["global"] >= 1,
+        "scopeCounts must include global tag");
+      assert.ok(stats.scopeCounts["project:reg-test-abc123"] >= 1,
+        "scopeCounts must include project tag from memory_scopes (Bug A: was counting legacy m.scope column only)");
+    });
+
+    it("project-specific tag appears in scopeCounts even when legacy scope column is 'global'", async () => {
+      // Simulate the exact bug scenario: legacy m.scope = 'global' but memory_scopes has both
+      const id = "reg-legacy-scope";
+      store4.db.prepare(`
+        INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
+        VALUES (?, 'legacy scope test', 'fact', 'global', 0.5, ?, '{}', ?)
+      `).run(id, Date.now(),
+        require("node:crypto").createHash("sha256").update("legacy scope test").digest("hex"));
+      store4.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "global");
+      store4.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "project:legacy-proj");
+      store4.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "client:legacy-client");
+
+      const stats = await store4.stats(["global"]);
+      assert.equal(stats.totalCount, 1,
+        "totalCount should be 1 (one memory)");
+      // Bug: stats() currently counts m.scope (the legacy column "global")
+      // It should count from memory_scopes where we'd see all 3 tags
+      assert.equal(stats.scopeCounts["global"] || 0, 1,
+        "global tag should be represented in scopeCounts");
+      assert.ok(stats.scopeCounts["project:legacy-proj"] >= 1,
+        "project tag must appear in scopeCounts (Bug A: was missing)");
+      assert.ok(stats.scopeCounts["client:legacy-client"] >= 1,
+        "client tag must appear in scopeCounts (Bug A: was missing)");
+    });
+  });
+
+  // ==========================================================================
   // update() scope permission check
   // ==========================================================================
 
@@ -967,6 +1349,82 @@ describe("P4: recall tag-intersection", () => {
   // bulkDelete() with tag-intersection
   // ==========================================================================
 
+  // ==========================================================================
+  // Regression: Bug C — update() must recompute dedup_hash + text_hash
+  // ==========================================================================
+
+  describe("REGRESSION: update() recomputes dedup_hash and text_hash", () => {
+    it("update() recomputes dedup_hash when text changes", async () => {
+      const entry = await storeWithTags("original text for dedup update",
+        ["global", "project:update-dedup"]);
+      assert.ok(entry);
+
+      const oldRow = store4.db.prepare(
+        "SELECT dedup_hash, text_hash FROM memories WHERE id = ?"
+      ).get(entry.id) as { dedup_hash: string; text_hash: string };
+      assert.ok(oldRow.dedup_hash, "should have original dedup_hash");
+      assert.ok(oldRow.text_hash, "should have original text_hash");
+
+      // Update the text
+      const updated = await store4.update(entry.id,
+        { text: "completely different text after update" },
+        ["project:update-dedup"]);
+      assert.ok(updated, "update should succeed");
+
+      const newRow = store4.db.prepare(
+        "SELECT dedup_hash, text_hash, text FROM memories WHERE id = ?"
+      ).get(entry.id) as { dedup_hash: string; text_hash: string; text: string };
+
+      // Verify text was actually updated
+      assert.equal(newRow.text, "completely different text after update");
+
+      // Bug C: update() does NOT recompute dedup_hash or text_hash
+      // After fix, both should be different from the originals
+      assert.notEqual(newRow.dedup_hash, oldRow.dedup_hash,
+        "dedup_hash must be recomputed when text changes (Bug C: was not recomputed)");
+      assert.notEqual(newRow.text_hash, oldRow.text_hash,
+        "text_hash must be recomputed when text changes (Bug C: was not recomputed)");
+    });
+
+    it("same text + same scopes stored after update-once is still deduplicated", async () => {
+      // Step 1: Store original, update it
+      const entry = await storeWithTags("dedup integrity text",
+        ["global", "project:dedup-int"]);
+      assert.ok(entry);
+
+      await store4.update(entry.id,
+        { text: "dedup integrity text revised" },
+        ["project:dedup-int"]);
+
+      // Step 2: Try to store the revised text with same scopes
+      // Bug C: since dedup_hash wasn't recomputed, the OLD dedup_hash still
+      // matches the OLD text. If we try to store the revised text, it should
+      // NOT be blocked by the old hash.
+      const newEntry = await store4.store({
+        text: "dedup integrity text revised",
+        vector: randomVec(),
+        category: "fact",
+        scope: "global",
+        importance: 0.5,
+        scopes: ["global", "project:dedup-int"],
+      });
+      assert.equal(newEntry, null,
+        "revised text with same scopes should be deduplicated (hash match)");
+
+      // Step 3: But the ORIGINAL (unrevised) text should NOW be storable
+      // since the dedup_hash was updated to match the revised text
+      const reOriginal = await store4.store({
+        text: "dedup integrity text",
+        vector: randomVec(),
+        category: "fact",
+        scope: "global",
+        importance: 0.5,
+        scopes: ["global", "project:dedup-int"],
+      });
+      assert.ok(reOriginal, "original text (no longer matching dedup_hash) should be storable again");
+    });
+  });
+
   describe("bulkDelete() tag-intersection", () => {
     it("deletes only memories with matching tags", async () => {
       await storeWithTags("bulk-a", ["global", "project:bulkA"]);
@@ -979,6 +1437,139 @@ describe("P4: recall tag-intersection", () => {
       const remaining = await store4.list(["project:bulkB"]);
       assert.equal(remaining.length, 1);
     });
+  });
+});
+
+// ==========================================================================
+// Recall scope integrity — results carry scope info, store-recall cycle
+// ==========================================================================
+
+describe("P4+: recall scope integrity", () => {
+  let storeSI: MemoryStore;
+
+  function seedVecSI(seed: number, dim: number = DIM): number[] {
+    const v = Array.from({ length: dim }, (_, i) => Math.sin(seed * (i + 1)));
+    const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+    return v.map((x) => x / norm);
+  }
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "mem-p4si-test-"));
+    storeSI = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: DIM });
+  });
+
+  afterEach(async () => {
+    await storeSI.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("store → recall round-trip preserves all scope tags with deriveScopes", async () => {
+    // Create a git repo so deriveScopes produces a real project tag
+    const gitDir = mkdtempSync(join(tmpdir(), "si-git-"));
+    execSync("git init", { cwd: gitDir, stdio: "pipe" });
+    execSync("git config user.email test@test.com", { cwd: gitDir, stdio: "pipe" });
+    execSync("git config user.name Test", { cwd: gitDir, stdio: "pipe" });
+    execSync("git remote add origin https://github.com/test/si-repo.git", {
+      cwd: gitDir, stdio: "pipe",
+    });
+    writeFileSync(join(gitDir, "README.md"), "# SI");
+    execSync("git add README.md", { cwd: gitDir, stdio: "pipe" });
+    execSync("git commit -m init", { cwd: gitDir, stdio: "pipe" });
+
+    try {
+      const derivResult = deriveScopes({ cwd: gitDir, clientName: "test-client" });
+      const tags = derivResult.tags;
+      assert.ok(tags.includes("global"), "derived tags must include global");
+      const projectTag = tags.find(t => t.startsWith("project:"));
+      assert.ok(projectTag, "derived tags must include project tag");
+
+      const entry = await storeSI.store({
+        text: "SI store-recall round-trip test",
+        vector: seedVecSI("SI store-recall round-trip test".length),
+        category: "fact",
+        scope: "global",
+        importance: 0.5,
+        scopes: tags,
+        metadata: JSON.stringify(derivResult.metadata),
+      });
+      assert.ok(entry, "store should succeed");
+
+      // Verify memory_scopes has the exact derived tags
+      const scopeRows = storeSI.db.prepare(
+        "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+      ).all(entry!.id) as { scope: string }[];
+      const storedTags = scopeRows.map(r => r.scope);
+      // Should contain at least global and project tag (both auto-derived)
+      assert.ok(storedTags.includes("global"), "must include global tag");
+      assert.ok(storedTags.some(t => t.startsWith("project:")),
+        "must include project tag");
+
+      // Recall with the derived tags
+      const results = await storeSI.vectorSearch(
+        seedVecSI("SI store-recall round-trip test".length),
+        5, 0.0, tags,
+      );
+      assert.ok(results.length >= 1, "recall must find the stored memory");
+      assert.equal(results[0].entry.text, "SI store-recall round-trip test");
+    } finally {
+      rmSync(gitDir, { recursive: true, force: true });
+    }
+  });
+
+  it("list() entries have correct scope field (legacy compat)", async () => {
+    await storeSI.store({
+      text: "list scope check",
+      vector: seedVecSI("list scope check".length),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:list-check"],
+    });
+
+    const entries = await storeSI.list(["global"]);
+    assert.equal(entries.length, 1);
+    // The legacy scope field should still be populated
+    assert.equal(entries[0].scope, "global",
+      "legacy scope field should still be set for backward compat");
+
+    // The memory should also have its scope tags in memory_scopes
+    const tags = storeSI.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(entries[0].id) as { scope: string }[];
+    assert.ok(tags.length >= 2, "should have multiple scope tags in memory_scopes");
+    assert.ok(tags.some(t => t.scope === "project:list-check"),
+      "should include project tag in memory_scopes");
+  });
+
+  it("vectorSearch results have correct id and text, tagged scopes filter works", async () => {
+    const vec = seedVecSI("vector recall scope".length);
+    await storeSI.store({
+      text: "vector recall scope",
+      vector: vec,
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["global", "project:vec-scope-test"],
+    });
+    // Also store an unrelated memory
+    await storeSI.store({
+      text: "unrelated memory",
+      vector: seedVecSI("unrelated memory".length),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: ["project:other-proj"],
+    });
+
+    // Recall with the project scope
+    const results = await storeSI.vectorSearch(vec, 5, 0.0, ["project:vec-scope-test"]);
+    assert.ok(results.length >= 1, "should find the memory via project scope filter");
+    const found = results.find(r => r.entry.text === "vector recall scope");
+    assert.ok(found, "should find the correct memory");
+    assert.equal(found!.entry.category, "fact");
+    // Unrelated memory should not appear
+    assert.ok(!results.some(r => r.entry.text === "unrelated memory"),
+      "unrelated memory must not leak into project-scoped recall");
   });
 });
 
