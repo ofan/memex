@@ -418,3 +418,100 @@ describe("P2: deriveScopes", () => {
     }
   });
 });
+
+// ============================================================================
+// P3 — Store path integration
+// ============================================================================
+
+describe("P3: store with scopes", () => {
+  let store3: MemoryStore;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "mem-p3-test-"));
+    store3 = new MemoryStore({ dbPath: join(tmpDir, "test.sqlite"), vectorDim: DIM });
+  });
+
+  afterEach(async () => {
+    await store3.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("store() accepts scopes array and writes multiple memory_scopes rows", async () => {
+    const derivResult = deriveScopes({ cwd: tmpdir() });
+    const tags = [...derivResult.tags, "client:test-client"];
+
+    const entry = await store3.store({
+      text: "multi-scope memory",
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: tags,
+    });
+
+    assert.ok(entry, "store should succeed");
+    const rows = store3.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+    ).all(entry!.id) as { scope: string }[];
+
+    const storedScopes = rows.map(r => r.scope);
+    assert.ok(storedScopes.includes("global"), "should include global");
+    assert.ok(storedScopes.includes("client:test-client"), "should include client tag");
+    const projectTag = storedScopes.find(s => s.startsWith("project:"));
+    assert.ok(projectTag, "should include project tag");
+  });
+
+  it("store() captures provenance metadata from deriveScopes", async () => {
+    const derivResult = deriveScopes({ cwd: tmpdir(), clientName: "test-client" });
+
+    const entry = await store3.store({
+      text: "provenance memory",
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      scopes: derivResult.tags,
+      metadata: JSON.stringify(derivResult.metadata),
+    });
+
+    assert.ok(entry, "store should succeed");
+    const meta = JSON.parse(entry!.metadata || "{}");
+    assert.ok(meta.cwd_hash, "cwd_hash should be in metadata");
+    assert.ok(meta.device_id, "device_id should be in metadata");
+    assert.ok(meta.captured_at, "captured_at should be in metadata");
+  });
+
+  it("rejects 'device:' prefix as a tag", async () => {
+    await assert.rejects(
+      async () => {
+        await store3.store({
+          text: "should not store",
+          vector: randomVec(),
+          category: "fact",
+          scope: "global",
+          importance: 0.5,
+          scopes: ["global", "device:abc123"],
+        });
+      },
+      /device.*tag/i,
+      "should reject device: tag"
+    );
+  });
+
+  it("stores without scopes array defaults to single scope entry", async () => {
+    const entry = await store3.store({
+      text: "default scope",
+      vector: randomVec(),
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+    });
+
+    assert.ok(entry, "store should succeed");
+    const rows = store3.db.prepare(
+      "SELECT scope FROM memory_scopes WHERE memory_id = ?"
+    ).all(entry!.id) as { scope: string }[];
+    assert.equal(rows.length, 1, "should have one scope row");
+    assert.equal(rows[0].scope, "global");
+  });
+});
