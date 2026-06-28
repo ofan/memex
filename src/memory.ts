@@ -231,8 +231,41 @@ export class MemoryStore {
         update.run(hash, row.id);
       }
     }
+    // Drop the old UNIQUE index on text_hash — dedup is now scope-aware via dedup_hash.
+    // text_hash (sha256(text) only) is kept for dreaming but is no longer UNIQUE.
     try {
-      this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
+      this.db.exec(`DROP INDEX IF EXISTS idx_memories_text_hash`);
+    } catch { /* index may not exist */ }
+    // Create non-unique index for text_hash lookups (dreaming, etc.)
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
+
+    // Scope-aware dedup hash: sha256(text + '\x00' + sorted scope tags)
+    this.migrateAddColumn("memories", "dedup_hash", "TEXT");
+    // Backfill dedup_hash for existing entries (idempotent — only touches NULLs)
+    const nullDedup = this.db.prepare("SELECT COUNT(*) as c FROM memories WHERE dedup_hash IS NULL").get() as { c: number };
+    if (nullDedup.c > 0) {
+      const rows = this.db.prepare(`
+        SELECT m.id, m.text, GROUP_CONCAT(ms.scope, ',') as scope_tags
+        FROM memories m
+        LEFT JOIN memory_scopes ms ON ms.memory_id = m.id
+        WHERE m.dedup_hash IS NULL
+        GROUP BY m.id
+      `).all() as { id: string; text: string; scope_tags: string | null }[];
+      const update = this.db.prepare("UPDATE memories SET dedup_hash = ? WHERE id = ?");
+      for (const row of rows) {
+        const tags = row.scope_tags
+          ? [...new Set(row.scope_tags.split(','))].sort().join(',')
+          : "global";
+        const dedup = createHash("sha256")
+          .update(row.text.trim())
+          .update('\x00')
+          .update(tags)
+          .digest("hex");
+        update.run(dedup, row.id);
+      }
+    }
+    try {
+      this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_dedup_hash ON memories(dedup_hash)`);
     } catch { /* index may already exist or duplicates prevent creation */ }
 
     // Entity backfill for entries missing entities in metadata
@@ -360,17 +393,23 @@ export class MemoryStore {
       && (text.match(/^\[/gm) || []).length <= 2; // single-turn: at most 2 role tags
     if (isConversationFragment) return null;
 
-    // Guard: reject exact text duplicates
+    // Guard: reject exact text duplicates (scope-aware: text + canonical scope set)
     const textHash = createHash("sha256").update(text).digest("hex");
-    const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+    const canonicalTags = entry.scopes && entry.scopes.length > 0
+      ? [...new Set(entry.scopes)].sort()
+      : [entry.scope || "global"];
+    const dedupHash = createHash("sha256")
+      .update(text)
+      .update('\x00')
+      .update(canonicalTags.join(','))
+      .digest("hex");
+    const existing = this.db.prepare("SELECT id FROM memories WHERE dedup_hash = ?").get(dedupHash);
     if (existing) return null;
 
     // Guard: reject `device:` prefix in scope tags (device is metadata-only)
-    if (entry.scopes) {
-      for (const tag of entry.scopes) {
-        if (tag.startsWith("device:")) {
-          throw new Error(`"device:" is not a valid scope tag (device is metadata-only)`);
-        }
+    for (const tag of canonicalTags) {
+      if (tag.startsWith("device:")) {
+        throw new Error(`"device:" is not a valid scope tag (device is metadata-only)`);
       }
     }
 
@@ -386,9 +425,10 @@ export class MemoryStore {
       id: randomUUID(),
       timestamp: entry.timestamp ?? Date.now(),
       metadata: JSON.stringify(meta),
+      scopes: canonicalTags,
     };
 
-    this.insertMemory(fullEntry, textHash);
+    this.insertMemory(fullEntry, textHash, dedupHash);
 
     // Create entity graph links
     if (entities.length >= 2) {
@@ -399,9 +439,14 @@ export class MemoryStore {
   }
 
   async bulkStore(entries: Omit<MemoryEntry, "id" | "timestamp">[]): Promise<MemoryEntry[]> {
-    // Filter: reject conversation fragments and dedup by text hash
+    // Filter: reject conversation fragments and dedup by scope-aware hash
     const seenHashes = new Set<string>();
-    const filtered: Array<{ entry: Omit<MemoryEntry, "id" | "timestamp">; textHash: string }> = [];
+    const filtered: Array<{
+      entry: Omit<MemoryEntry, "id" | "timestamp">;
+      textHash: string;
+      dedupHash: string;
+      canonicalTags: string[];
+    }> = [];
 
     for (const entry of entries) {
       const text = entry.text?.trim();
@@ -409,13 +454,23 @@ export class MemoryStore {
       const isFragment = /^\[(user|assistant)\]/i.test(text)
         && (text.match(/^\[/gm) || []).length <= 2;
       if (isFragment) continue;
+
       const textHash = createHash("sha256").update(text).digest("hex");
-      if (seenHashes.has(textHash)) continue;
-      // Check DB for existing hash
-      const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+      const canonicalTags = entry.scopes && entry.scopes.length > 0
+        ? [...new Set(entry.scopes)].sort()
+        : [entry.scope || "global"];
+      const dedupHash = createHash("sha256")
+        .update(text)
+        .update('\x00')
+        .update(canonicalTags.join(','))
+        .digest("hex");
+
+      if (seenHashes.has(dedupHash)) continue;
+      // Check DB for existing scope-aware hash
+      const existing = this.db.prepare("SELECT id FROM memories WHERE dedup_hash = ?").get(dedupHash);
       if (existing) continue;
-      seenHashes.add(textHash);
-      filtered.push({ entry: { ...entry, text }, textHash });
+      seenHashes.add(dedupHash);
+      filtered.push({ entry: { ...entry, text, scopes: canonicalTags }, textHash, dedupHash, canonicalTags });
     }
 
     if (filtered.length === 0) return [];
@@ -426,11 +481,12 @@ export class MemoryStore {
       timestamp: Date.now(),
       metadata: entry.metadata || "{}",
     }));
-    const hashes = filtered.map(f => f.textHash);
+    const textHashes = filtered.map(f => f.textHash);
+    const dedupHashes = filtered.map(f => f.dedupHash);
 
     const insertMem = this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash, dedup_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertScopeTag = this.db.prepare(
@@ -451,9 +507,9 @@ export class MemoryStore {
         const entry = fullEntries[i];
         insertMem.run(
           entry.id, entry.text, entry.category, entry.scope,
-          entry.importance, entry.timestamp, entry.metadata, hashes[i]
+          entry.importance, entry.timestamp, entry.metadata, textHashes[i], dedupHashes[i]
         );
-        // Write scope tags (default to [scope] if no scopes array)
+        // Write scope tags via writeScopeTags (validates device: prefix)
         const tags = entry.scopes && entry.scopes.length > 0
           ? entry.scopes
           : [entry.scope || "global"];
@@ -695,6 +751,27 @@ export class MemoryStore {
       WHERE id = ?
     `).run(updatedText, updatedCategory, updatedImportance, updatedMetadata, row.id);
 
+    // Recompute dedup_hash and text_hash when text changes.
+    // Bug C fix: Before this fix, update() did not recompute these hashes,
+    // so the dedup_hash stayed stale and the UNIQUE index on dedup_hash
+    // became inconsistent with the actual (text, scopes) pair.
+    if (updates.text) {
+      const newTextHash = createHash("sha256").update(updatedText.trim()).digest("hex");
+      // Load scope tags from memory_scopes for the scope-aware dedup hash
+      const scopeTagRows = this.db.prepare(
+        "SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope"
+      ).all(row.id) as { scope: string }[];
+      const canonicalTags = scopeTagRows.map(r => r.scope);
+      const newDedupHash = createHash("sha256")
+        .update(updatedText.trim())
+        .update('\x00')
+        .update(canonicalTags.join(','))
+        .digest("hex");
+      this.db.prepare(
+        "UPDATE memories SET dedup_hash = ?, text_hash = ? WHERE id = ?"
+      ).run(newDedupHash, newTextHash, row.id);
+    }
+
     // Re-insert vector if changed — also clean up any chunk vectors
     if (updates.vector && this._sqliteVecAvailable) {
       this.db.prepare(`DELETE FROM vectors_vec WHERE hash_seq = ?`).run(`mem_${row.id}`);
@@ -874,25 +951,49 @@ export class MemoryStore {
 
     this.addScopeFilter(conditions, params, scopeFilter, "m");
 
-    let sql = `SELECT m.scope, m.category, m.metadata FROM memories m`;
+    // Total count from filtered memories
+    let countSql = `SELECT COUNT(*) as c FROM memories m`;
     if (conditions.length > 0) {
-      sql += ` WHERE ${conditions.join(" AND ")}`;
+      countSql += ` WHERE ${conditions.join(" AND ")}`;
+    }
+    const totalCount = (this.db.prepare(countSql).get(...params) as { c: number }).c;
+
+    // Scope counts aggregated from memory_scopes (authoritative), not m.scope (legacy).
+    let scopeCountsSql: string;
+    let scopeCountsParams: any[];
+    if (conditions.length > 0) {
+      scopeCountsSql = `
+        SELECT ms.scope, COUNT(*) as cnt
+        FROM memory_scopes ms
+        JOIN memories m ON m.id = ms.memory_id
+        WHERE ${conditions.join(" AND ")}
+        GROUP BY ms.scope
+      `;
+      scopeCountsParams = params;
+    } else {
+      scopeCountsSql = `SELECT scope, COUNT(*) as cnt FROM memory_scopes GROUP BY scope`;
+      scopeCountsParams = [];
+    }
+    const scopeRows = this.db.prepare(scopeCountsSql).all(...scopeCountsParams) as { scope: string; cnt: number }[];
+    const scopeCounts: Record<string, number> = {};
+    for (const row of scopeRows) {
+      scopeCounts[row.scope] = row.cnt;
     }
 
-    const rows = this.db.prepare(sql).all(...params) as any[];
+    // Category and source breakdown from memories
+    let metaSql = `SELECT m.category, m.metadata FROM memories m`;
+    if (conditions.length > 0) {
+      metaSql += ` WHERE ${conditions.join(" AND ")}`;
+    }
+    const metaRows = this.db.prepare(metaSql).all(...params) as any[];
 
-    const scopeCounts: Record<string, number> = {};
     const categoryCounts: Record<string, number> = {};
     const sourceCounts: Record<string, number> = {};
 
-    for (const row of rows) {
-      const scope = row.scope ?? "global";
+    for (const row of metaRows) {
       const category = row.category;
-
-      scopeCounts[scope] = (scopeCounts[scope] || 0) + 1;
       categoryCounts[category] = (categoryCounts[category] || 0) + 1;
 
-      // Source breakdown from metadata
       try {
         const meta = JSON.parse(row.metadata || "{}");
         const source = meta.source || "unknown";
@@ -903,7 +1004,7 @@ export class MemoryStore {
     }
 
     return {
-      totalCount: rows.length,
+      totalCount,
       scopeCounts,
       categoryCounts,
       sourceCounts,
@@ -1074,33 +1175,39 @@ export class MemoryStore {
   async storeWithChunks(entry: Omit<MemoryEntry, "id" | "timestamp" | "vector"> & {
     chunkVectors: number[][];
   }): Promise<MemoryEntry> {
+    // Canonicalize scope tags
+    const canonicalTags = entry.scopes && entry.scopes.length > 0
+      ? [...new Set(entry.scopes)].sort()
+      : [entry.scope || "global"];
+    const text = (entry.text || "").trim();
+    const textHash = createHash("sha256").update(text).digest("hex");
+    const dedupHash = createHash("sha256")
+      .update(text)
+      .update('\x00')
+      .update(canonicalTags.join(','))
+      .digest("hex");
+
     const fullEntry: MemoryEntry = {
       ...entry,
+      text,
       id: randomUUID(),
       timestamp: Date.now(),
       vector: entry.chunkVectors[0] || [],
       metadata: entry.metadata || "{}",
+      scopes: canonicalTags,
     };
 
-    // Insert memory row
+    // Insert memory row with scope-aware dedup hash
     this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash, dedup_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       fullEntry.id, fullEntry.text, fullEntry.category, fullEntry.scope,
-      fullEntry.importance, fullEntry.timestamp, fullEntry.metadata
+      fullEntry.importance, fullEntry.timestamp, fullEntry.metadata, textHash, dedupHash
     );
 
-    // Write scope tags
-    const tags = fullEntry.scopes && fullEntry.scopes.length > 0
-      ? fullEntry.scopes
-      : [fullEntry.scope || "global"];
-    const insertTag = this.db.prepare(
-      "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
-    );
-    for (const tag of tags) {
-      insertTag.run(fullEntry.id, tag);
-    }
+    // Write scope tags via writeScopeTags (validates device: prefix)
+    this.writeScopeTags(fullEntry.id, canonicalTags);
 
     // Insert chunk vectors
     if (this._sqliteVecAvailable) {
@@ -1190,14 +1297,21 @@ export class MemoryStore {
   // Private helpers
   // ========================================================================
 
-  private insertMemory(entry: MemoryEntry, textHash?: string): void {
+  private insertMemory(entry: MemoryEntry, textHash?: string, dedupHash?: string): void {
     const hash = textHash || createHash("sha256").update(entry.text.trim()).digest("hex");
+    const dedup = dedupHash || createHash("sha256")
+      .update(entry.text.trim())
+      .update('\x00')
+      .update((entry.scopes && entry.scopes.length > 0
+        ? [...new Set(entry.scopes)].sort()
+        : [entry.scope || "global"]).join(','))
+      .digest("hex");
     this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash, dedup_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id, entry.text, entry.category, entry.scope,
-      entry.importance, entry.timestamp, entry.metadata, hash
+      entry.importance, entry.timestamp, entry.metadata, hash, dedup
     );
 
     // Write scope tags to memory_scopes (source of truth for multi-valued tags).
