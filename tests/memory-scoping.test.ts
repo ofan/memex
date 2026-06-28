@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:
 import { join } from "node:path";
 import { tmpdir, homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { MemoryStore, validateStoragePath } from "../src/memory.js";
 import { deriveScopes, normalizeGitRemote, hashValue } from "../src/scope-derive.js";
 import type { MemoryEntry } from "../src/memory.js";
@@ -121,7 +122,7 @@ describe("P1: memory_scopes table", () => {
       INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, "multi-tag test", "fact", "global", 0.5, Date.now(), "{}",
-      require("node:crypto").createHash("sha256").update("multi-tag test").digest("hex"));
+      createHash("sha256").update("multi-tag test").digest("hex"));
 
     store.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "global");
     store.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "project:abc123");
@@ -138,7 +139,7 @@ describe("P1: memory_scopes table", () => {
       INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, "unique test", "fact", "global", 0.5, Date.now(), "{}",
-      require("node:crypto").createHash("sha256").update("unique test").digest("hex"));
+      createHash("sha256").update("unique test").digest("hex"));
 
     store.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "global");
 
@@ -231,7 +232,7 @@ describe("P1: memory_scopes table", () => {
     assert.ok(row.text_hash, "must have text_hash");
 
     // Verify dedup_hash is computed correctly based on (text, canonical tags)
-    const expectedDedup = require("node:crypto").createHash("sha256")
+    const expectedDedup = createHash("sha256")
       .update(entry!.text.trim())
       .update('\x00')
       .update([...new Set(tags)].sort().join(','))
@@ -1267,7 +1268,7 @@ describe("P4: recall tag-intersection", () => {
         INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
         VALUES (?, 'legacy scope test', 'fact', 'global', 0.5, ?, '{}', ?)
       `).run(id, Date.now(),
-        require("node:crypto").createHash("sha256").update("legacy scope test").digest("hex"));
+        createHash("sha256").update("legacy scope test").digest("hex"));
       store4.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "global");
       store4.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "project:legacy-proj");
       store4.db.prepare("INSERT INTO memory_scopes (memory_id, scope) VALUES (?, ?)").run(id, "client:legacy-client");
