@@ -174,12 +174,14 @@ export class MemoryRetriever {
     /** Timing breakdown from the most recent retrieve() call. */
     get lastTimings() { return this._lastTimings; }
     async retrieve(context) {
-        const { query, limit, scopeFilter, category, recentlyRecalled } = context;
+        const { query, limit, scopeFilter, scopes, category, recentlyRecalled } = context;
         const safeLimit = clampInt(limit, 1, 20);
+        // Explicit `scopes` override takes precedence over the derived scopeFilter
+        const effectiveScopeFilter = scopes ?? scopeFilter;
         if (this.config.mode === "vector" || !this.store.hasFtsSupport) {
-            return this.vectorOnlyRetrieval(query, safeLimit, scopeFilter, category, recentlyRecalled);
+            return this.vectorOnlyRetrieval(query, safeLimit, effectiveScopeFilter, category, recentlyRecalled);
         }
-        return this.hybridRetrieval(query, safeLimit, scopeFilter, category, recentlyRecalled);
+        return this.hybridRetrieval(query, safeLimit, effectiveScopeFilter, category, recentlyRecalled);
     }
     async vectorOnlyRetrieval(query, limit, scopeFilter, category, recentlyRecalled) {
         const sw = new Stopwatch();
