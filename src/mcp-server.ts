@@ -21,6 +21,18 @@ import { detectCategory } from "../index.js";
 import { deriveScopes } from "./scope-derive.js";
 
 // ============================================================================
+// Scope tag validation (Bug 5 fix)
+// ============================================================================
+
+/** Validate a scope tag against the format regex. */
+function isValidScopeTag(tag: string): boolean {
+  if (!tag || typeof tag !== "string" || tag.trim().length === 0) return false;
+  const trimmed = tag.trim();
+  if (trimmed.length > 100) return false;
+  return /^[a-zA-Z0-9._:-]+$/.test(trimmed);
+}
+
+// ============================================================================
 // Server Factory
 // ============================================================================
 
@@ -113,11 +125,22 @@ export function createMemexMcpServer(options: McpServerOptions) {
       },
     });
 
+    // Validate client-supplied scope format (Bug 5 fix)
+    // Only `device:` prefix was rejected before; now validate every tag.
+    let validatedScope: string | null = null;
+    if (scope !== undefined && scope !== null && scope !== "global") {
+      const trimmed = String(scope).trim();
+      if (!trimmed || !isValidScopeTag(trimmed)) {
+        return { content: [{ type: "text", text: JSON.stringify({ rejected: true, reason: `Invalid scope format: "${scope}"` }) }] };
+      }
+      validatedScope = trimmed;
+    }
+
     // Merge explicit scope param (if different from global) into derived tags
     let tags = derivResult.tags;
-    if (scope && scope !== "global") {
-      if (!tags.includes(scope)) {
-        tags = [...tags, scope];
+    if (validatedScope) {
+      if (!tags.includes(validatedScope)) {
+        tags = [...tags, validatedScope];
       }
     }
 
@@ -190,10 +213,39 @@ export function createMemexMcpServer(options: McpServerOptions) {
         .describe("Session identifier (optional, scopes recall to session-specific memories)"),
     },
   }, async (_params) => {
-    const { query, limit = 5, scopes } = _params as { query: string; limit?: number; scopes?: string[] };
+    const { query, limit = 5, scopes, agent_id, session_id } = _params as {
+      query: string; limit?: number; scopes?: string[];
+      agent_id?: string; session_id?: string;
+    };
+
+    // Build effective scope filter (Bug 4 & 6 fix: consume agent_id/session_id)
+    let effectiveScopes = scopes ? [...scopes] : undefined;
+    if (agent_id || session_id) {
+      const derivResult = deriveScopes({
+        cwd: process.cwd(),
+        env: process.env as Record<string, string | undefined>,
+        clientName: detectClientName(),
+        sessionId: session_id,
+        explicit: agent_id ? { agent: agent_id } : undefined,
+      });
+      if (effectiveScopes) {
+        // Merge derived agent/session tags into explicit scopes
+        if (agent_id) {
+          const agentTag = `agent:${agent_id}`;
+          if (!effectiveScopes.includes(agentTag)) effectiveScopes.push(agentTag);
+        }
+        if (session_id) {
+          const sessionTag = derivResult.tags.find(t => t.startsWith("session:"));
+          if (sessionTag && !effectiveScopes.includes(sessionTag)) effectiveScopes.push(sessionTag);
+        }
+      } else {
+        // No explicit scopes — use full derivation
+        effectiveScopes = derivResult.tags;
+      }
+    }
 
     if (retriever) {
-      const results = await retriever.retrieve({ query, limit, scopes });
+      const results = await retriever.retrieve({ query, limit, scopes: effectiveScopes });
       return {
         content: [{
           type: "text",
@@ -213,7 +265,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
     }
 
     // BM25-only fallback when no embedder configured
-    const bm25Results = await store.bm25Search(query, limit, scopes);
+    const bm25Results = await store.bm25Search(query, limit, effectiveScopes);
     return {
       content: [{
         type: "text",
@@ -322,12 +374,20 @@ export function createMemexMcpServer(options: McpServerOptions) {
       "SELECT COUNT(*) as c FROM memories WHERE recall_count IS NULL OR recall_count = 0"
     ).get() as any).c;
 
+    // Scope breakdown from memory_scopes (authoritative), not the legacy m.scope column.
+    const scopeRows = db.prepare(
+      "SELECT scope, COUNT(*) as cnt FROM memory_scopes GROUP BY scope ORDER BY cnt DESC"
+    ).all() as Array<{ scope: string; cnt: number }>;
+    const byScope: Record<string, number> = {};
+    for (const row of scopeRows) byScope[row.scope] = row.cnt;
+
     return {
       content: [{
         type: "text",
         text: JSON.stringify({
           total,
           byCategory,
+          byScope,
           neverRecalled,
           neverRecalledRatio: total > 0 ? Math.round((neverRecalled / total) * 100) / 100 : 0,
         }),
