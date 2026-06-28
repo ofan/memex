@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased] — feat/memory-scoping
+
+**Theme: context-aware memory isolation.** Multi-valued scope tags replace the single `scope` column with a `memory_scopes` join table. Server-authoritative derivation ensures consistency; recall uses additive tag intersection so cross-project leakage is impossible. Tests: 830 → 851 (+21 E2E).
+
+### Added
+- **`memory_scopes(memory_id, scope)` table** — multi-valued scope tags per memory. Supersedes the single `memories.scope` column. Migration converts existing `global` memories to one `global` tag each.
+- **`src/scope-derive.ts`** — server-authoritative scope derivation (`deriveScopes()`). Auto-tags `global` + `project:<git_remote-hash>`; opt-in `client:`, `session:`, `agent:`; device is metadata-only. Works from stdio (has client cwd); HTTP clients must supply project context.
+- **Tag-intersection recall** — `vectorSearch`, `bm25Search`, `list`, `stats`, `bulkDelete`, `update`, `delete` all filter via `EXISTS`/join on `memory_scopes` against the active-context tag set. `retriever.retrieve()` accepts `scopes` override.
+- **Scope-aware dreaming** (`src/dreaming.ts`) — dedup key is `(text, scope-set)`; identical text under different tags is not a duplicate. Reflection learnings inherit tags: single-context batch → those tags; mixed-context batch → `global`.
+- **MCP tool surface** — `memory_store` accepts `agent_id`, `session_id`, `scopes` params and calls `deriveScopes()` for server-authoritative derivation. `memory_recall` accepts `agent_id`, `session_id` params.
+
+### Known gap
+- **Plugin auto-recall hook** (`index.ts`) still uses the legacy `scopeManager.getAccessibleScopes(agentId)` for the active-context scope set. It does not yet derive `project:` tags because the plugin runs inside the OpenClaw gateway process where `process.cwd()` is the gateway directory, not the agent's project directory. The standalone MCP server correctly derives project tags. Deferred to T2.1/T2.2.
+
+### Plans
+- See `docs/plans/018-memory-scoping-impl.md` for the implementation plan.
+- See `docs/design/memory-scoping.md` for the design.
+
+---
+
 ## [0.7.2] — 2026-05-11
 
 **Theme: configuration ergonomics + debug visibility.** Three user-visible improvements on top of v0.7.1, all backward-compatible. Test count 725 → 740 (+15). `npm audit` still 0.

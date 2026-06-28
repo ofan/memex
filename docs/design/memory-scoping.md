@@ -137,4 +137,8 @@ Always captured server-side, orthogonal to tags: `project_root` (hash), `device_
 
 - `docs/plans/two-problems-architecture.md` — Problem 2 framing
 - `docs/design/v0.8-architecture-decisions.md` — T2.1–T2.4
-- `src/scopes.ts`, `src/memory.ts`, `src/mcp-server.ts`, `src/dreaming.ts`, `src/retriever.ts` — current code
+- `src/scopes.ts`, `src/scope-derive.ts`, `src/memory.ts`, `src/mcp-server.ts`, `src/dreaming.ts`, `src/retriever.ts` — current code
+
+## Known gap
+
+The plugin-side auto-recall hook (`index.ts`) still uses the legacy `scopeManager.getAccessibleScopes(agentId)` for the active-context scope set. It does not yet derive `project:` tags for the auto-recall filter because the plugin hook runs inside the OpenClaw gateway process where `process.cwd()` is the gateway's directory, not the agent's project directory. The standalone MCP server (stdio) correctly derives project tags because it has access to the client process's cwd. The plugin (effectively HTTP backend) needs the OpenClaw client to supply project context — deferred to T2.1/T2.2. See PROGRESS.md line ~34 for the same note.

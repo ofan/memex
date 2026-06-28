@@ -1,6 +1,6 @@
 ---
 name: memex
-description: "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. 90% E2E accuracy on LongMemEval (ICLR 2025) with GPT-4o. 3 tools: recall, store, forget. Works with any OpenAI-compatible embedding API."
+description: "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. 94% E2E accuracy on LongMemEval (ICLR 2025) with GPT-4o. 5+ MCP tools: recall, store, forget, dream, stats. Works with any OpenAI-compatible embedding API."
 metadata:
   openclaw:
     kind: memory
@@ -98,7 +98,7 @@ openclaw config set plugins.entries.memex.config.documents.reindexIntervalMinute
 Cross-encoder reranker. Off by default. Recommended when `autoRecallLimit=1`.
 
 ```bash
-openclaw config set plugins.entries.memex.config.reranker '{"enabled":true,"endpoint":"http://localhost:8090/v1/rerank","model":"bge-reranker-v2-m3-Q8_0"}'
+openclaw config set plugins.entries.memex.config.reranker '{"enabled":true,"endpoint":"http://localhost:8090/v1/rerank","model":"Qwen3-Reranker-0.6B-Q8_0"}'
 ```
 
 ## All Settings
