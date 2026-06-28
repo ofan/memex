@@ -264,9 +264,43 @@ export class MemoryStore {
         update.run(dedup, row.id);
       }
     }
+    // Deduplicate before creating the UNIQUE index on dedup_hash.
+    // If pre-existing (text, scope_set) duplicates exist (e.g. from a prior
+    // version that allowed them), keep only the newest entry per group.
     try {
-      this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_dedup_hash ON memories(dedup_hash)`);
-    } catch { /* index may already exist or duplicates prevent creation */ }
+      const dupes = this.db.prepare(`
+        SELECT dedup_hash, COUNT(*) as cnt
+        FROM memories
+        WHERE dedup_hash IS NOT NULL
+        GROUP BY dedup_hash
+        HAVING COUNT(*) > 1
+      `).all() as { dedup_hash: string; cnt: number }[];
+
+      if (dupes.length > 0) {
+        const getRows = this.db.prepare(
+          "SELECT id, timestamp FROM memories WHERE dedup_hash = ? ORDER BY timestamp DESC"
+        );
+        const deleteRow = this.db.prepare("DELETE FROM memories WHERE id = ?");
+        for (const dupe of dupes) {
+          const rows = getRows.all(dupe.dedup_hash) as { id: string; timestamp: number }[];
+          // Keep the newest (first row), delete the rest
+          for (let i = 1; i < rows.length; i++) {
+            deleteRow.run(rows[i].id);
+          }
+        }
+      }
+
+      this.db.exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_dedup_hash ON memories(dedup_hash)`
+      );
+    } catch (err) {
+      // Don't swallow silently — a persistent failure here means the constraint
+      // is missing and scope-aware dedup won't be enforced at the DB level.
+      console.warn(
+        "Failed to create UNIQUE index idx_memories_dedup_hash:",
+        (err as Error)?.message ?? err
+      );
+    }
 
     // Entity backfill for entries missing entities in metadata
     this.backfillEntities();
@@ -489,10 +523,6 @@ export class MemoryStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const insertScopeTag = this.db.prepare(
-      "INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)"
-    );
-
     const insertVec = this._sqliteVecAvailable
       ? this.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`)
       : null;
@@ -513,9 +543,7 @@ export class MemoryStore {
         const tags = entry.scopes && entry.scopes.length > 0
           ? entry.scopes
           : [entry.scope || "global"];
-        for (const tag of tags) {
-          insertScopeTag.run(entry.id, tag);
-        }
+        this.writeScopeTags(entry.id, tags);
         if (insertVec) {
           insertVec.run(`mem_${entry.id}`, new Float32Array(entry.vector));
         }

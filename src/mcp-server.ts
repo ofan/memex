@@ -29,6 +29,7 @@ function isValidScopeTag(tag: string): boolean {
   if (!tag || typeof tag !== "string" || tag.trim().length === 0) return false;
   const trimmed = tag.trim();
   if (trimmed.length > 100) return false;
+  if (trimmed.startsWith("device:")) return false;
   return /^[a-zA-Z0-9._:-]+$/.test(trimmed);
 }
 
@@ -112,7 +113,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
     // Derive scope tags from server environment (server-authoritative derivation).
     // In stdio mode the server has access to client cwd/env.
     const effectiveSessionId = session_id || _extra.sessionId;
-    const clientName = detectClientName();
+    const clientName = detectClientName((_extra as any)?._meta);
 
     const derivResult = deriveScopes({
       cwd: process.cwd(),
@@ -181,7 +182,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
   });
 
   /** Detect the MCP client name from environment or transport clues. */
-  function detectClientName(): string | undefined {
+  function detectClientName(meta?: Record<string, unknown>): string | undefined {
     // Prefer explicit env var
     if (process.env.MEMEX_CLIENT_NAME) return process.env.MEMEX_CLIENT_NAME;
     // Detect from well-known CLI tool env vars set by the MCP host process
@@ -190,10 +191,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
     if (process.env.OPEN_CODE_LOGS_DIR) return "opencode";
     if (process.env.OPENCLAW_HOME) return "openclaw";
     // Detect from MCP client name in transport metadata
-    try {
-      const meta = _extra._meta as Record<string, unknown> | undefined;
-      if (meta?.clientName) return meta.clientName as string;
-    } catch { /* ignore */ }
+    if (meta?.clientName) return meta.clientName as string;
     return undefined;
   }
 
@@ -212,7 +210,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
       session_id: z.string().optional()
         .describe("Session identifier (optional, scopes recall to session-specific memories)"),
     },
-  }, async (_params) => {
+  }, async (_params, _extra) => {
     const { query, limit = 5, scopes, agent_id, session_id } = _params as {
       query: string; limit?: number; scopes?: string[];
       agent_id?: string; session_id?: string;
@@ -224,7 +222,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
       const derivResult = deriveScopes({
         cwd: process.cwd(),
         env: process.env as Record<string, string | undefined>,
-        clientName: detectClientName(),
+        clientName: detectClientName((_extra as any)?._meta),
         sessionId: session_id,
         explicit: agent_id ? { agent: agent_id } : undefined,
       });

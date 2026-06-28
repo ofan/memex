@@ -378,8 +378,20 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
 
           // Build multi-valued scope tags (merge explicit scope with derived)
           let tags = derivResult.tags;
+          // When agent_id is explicitly provided, deriveScopes already produced
+          // the correct agent tag. Skip merging the legacy targetScope if it is
+          // an 'agent:' scope from getDefaultScope(context.agentId) — otherwise
+          // both agent:<context.agentId> AND agent:<explicit> end up in tags,
+          // causing cross-agent leakage.
+          const hasExplicitAgentId = agent_id !== undefined && agent_id !== null;
+          const isLegacyAgentScope = !scope && targetScope.startsWith("agent:");
           if (targetScope && targetScope !== "global" && !tags.includes(targetScope)) {
-            tags = [...tags, targetScope];
+            if (hasExplicitAgentId && isLegacyAgentScope) {
+              // Skip: deriveScopes already set the correct explicit agent tag.
+              // Do not merge the legacy agent scope from context.agentId.
+            } else {
+              tags = [...tags, targetScope];
+            }
           }
 
           // Build combined metadata (provenance + agent source)
