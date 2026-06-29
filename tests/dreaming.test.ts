@@ -770,6 +770,127 @@ describe("reflection sweep", () => {
     assert.ok(scopes.includes("global"), "learning should have global tag");
     assert.ok(scopes.includes("project:abc123"), "learning should inherit project tag from scoped memories");
   });
+
+  // --- Semantic dedup tests ---
+
+  it("skips learning that is a semantic near-duplicate of an existing memory", async () => {
+    // Seed a memory with a known vector (seed=99)
+    await seedMemory(store, "Infrastructure reliability is the engineering priority.", {
+      importance: 0.7,
+      seed: 99,
+      timestamp: daysAgo(5),
+    });
+
+    // Pad to meet minimum
+    for (let i = 0; i < 9; i++) {
+      await seedMemory(store, `Filler fact ${i}`, { importance: 0.5, seed: 100 + i });
+    }
+
+    // Mock LLM returns a paraphrase of the seeded memory
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "Engineering's top priority is infrastructure dependability and uptime.",
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    // Mock embedder returns a vector identical to the existing memory
+    const mockEmbedder = {
+      embedPassage: async (_text: string) => makeVector(99),
+    };
+
+    const result = await reflectionSweep(
+      store,
+      { endpoint: "http://fake-llm/v1/chat/completions", model: "test" },
+      logPath,
+      mockEmbedder,
+    );
+
+    assert.equal(result.learnings, 0, "paraphrase should be skipped as semantic dupe");
+
+    // Verify no learning was stored
+    const storedLearnings = store.db.prepare(
+      "SELECT COUNT(*) as c FROM memories WHERE category = 'learning'"
+    ).get() as { c: number };
+    assert.equal(storedLearnings.c, 0, "no learning should be stored in DB");
+  });
+
+  it("stores genuinely new learning even with embedder", async () => {
+    // Seed a memory about deployments (seed=1 — orthogonal to the learning vector)
+    await seedMemory(store, "Deployment infrastructure is a recurring concern.", {
+      importance: 0.7,
+      seed: 1,
+      timestamp: daysAgo(5),
+    });
+
+    // Pad to meet minimum
+    for (let i = 0; i < 9; i++) {
+      await seedMemory(store, `Filler fact ${i}`, { importance: 0.5, seed: 100 + i });
+    }
+
+    // Mock LLM returns a genuinely new learning
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "Documentation of design decisions prevents repeated architectural mistakes.",
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    // Mock embedder returns a completely different vector (seed=777)
+    const mockEmbedder = {
+      embedPassage: async (_text: string) => makeVector(777),
+    };
+
+    const result = await reflectionSweep(
+      store,
+      { endpoint: "http://fake-llm/v1/chat/completions", model: "test" },
+      logPath,
+      mockEmbedder,
+    );
+
+    assert.equal(result.learnings, 1, "genuinely new learning should be stored");
+
+    // Verify learning is in DB
+    const storedLearnings = store.db.prepare(
+      "SELECT text, category FROM memories WHERE category = 'learning'"
+    ).all() as Array<{ text: string; category: string }>;
+    assert.equal(storedLearnings.length, 1);
+  });
+
+  it("without embedder, stores learning regardless (graceful degradation)", async () => {
+    // Seed a memory — would be a semantic match if we had an embedder
+    await seedMemory(store, "Deployment infrastructure is a recurring concern.", {
+      importance: 0.7,
+      seed: 1,
+      timestamp: daysAgo(5),
+    });
+
+    // Pad to meet minimum
+    for (let i = 0; i < 9; i++) {
+      await seedMemory(store, `Filler fact ${i}`, { importance: 0.5, seed: 100 + i });
+    }
+
+    // Mock LLM returns a paraphrase of the seeded memory
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "Infrastructure deployment concerns recur across projects.",
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    // No embedder passed — should fall back to today's behavior (stores regardless)
+    const result = await reflectionSweep(
+      store,
+      { endpoint: "http://fake-llm/v1/chat/completions", model: "test" },
+      logPath,
+      // no embedder
+    );
+
+    assert.equal(result.learnings, 1, "without embedder, learning should be stored (graceful degradation)");
+  });
 });
 
 // ============================================================================

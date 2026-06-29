@@ -338,6 +338,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
         reflection: (phase === "all" || phase === "reflect") && !!reflectionLLM,
       },
       reflectionLLM,
+      embedder,
     });
 
     return {
@@ -479,6 +480,7 @@ async function main() {
       enabled: true,
       phases: { light: true, deep: true, reflection: !!reflectionLLM },
       reflectionLLM,
+      embedder,
     };
 
     const runDream = async (reason: string) => {
