@@ -37,14 +37,14 @@
   "dependencies": {
     "@ofan/telemetry-relay-sdk": "^0.2.1",
     "better-sqlite3": "^11.10.0",
-    "compromise": "^14.15.0",
+    "compromise": "^14.15.1",
     "fast-glob": "^3.3.0",
-    "openai": "^6.37.0",
-    "openclaw": "^2026.5.7",
+    "openai": "^6.45.0",
+    "openclaw": "^2026.6.10",
     "picomatch": "^4.0.4",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "typebox": "^1.1.37",
-    "yaml": "^2.8.2"
+    "typebox": "^1.3.2",
+    "yaml": "^2.9.0"
   },
   "openclaw": {
     "extensions": [
