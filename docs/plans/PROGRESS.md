@@ -2,6 +2,15 @@
 
 ## Last Updated: 2026-06-28
 
+## Roadmap — next priorities
+
+1. **Containerize memex daemon** (`019`) — package the HTTP MCP daemon as a container image for standardized deployment. Replaces manual dist copy (OpenClaw) + systemd/launchd (daemon) + memex.env management. One image → deploy anywhere (docker run, k8s, compose). **Supersedes the standalone T2.2 Mac mini migration** — deploy the container on the always-on host (or k8s) instead of a launchd unit + secret transfer. Co-location still has the llm-proxy round-trip, but the deployment simplicity + reproducibility is the win.
+2. **Feedback loop** — implicit recall-frequency boost (bounded) for recalled memories. Compounds the scoping/provenance work. Design-first.
+3. **Ship `memex-v0.7` → `main`** — scoping + audit + data-quality work via squash PR.
+4. **Quick wins** — stabilize flaky `mcp-server-shutdown` SIGTERM test; noise purge (6 entries).
+
+Deferred: T4.2 MemoryAgentBench (benchmark), scope promotion UX, sensitive/private memories, T5 features (FadeMem, RL, multimodal).
+
 ## Memory Scoping — Implementation (018)
 
 Implemented multi-valued scope tags on `feat/memory-scoping` (off `memex-v0.7`). See `docs/design/memory-scoping.md` (design) and `docs/plans/018-memory-scoping-impl.md` (plan).
