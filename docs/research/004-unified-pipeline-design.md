@@ -275,7 +275,7 @@ Cost:   ~75ms uncached, <0.03ms cached (LRU, >97% hit rate)
         1 API call, ~20 tokens
 ```
 
-**Model:** Qwen3-Embedding-4B-Q8_0 on llama-swap (Host B)
+**Model:** Qwen3-Embedding-4B-Q8_0 on llama-swap (the inference host)
 
 ### Stage 3: Parallel Retrieval
 

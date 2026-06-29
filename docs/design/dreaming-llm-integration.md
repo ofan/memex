@@ -36,7 +36,7 @@ fetch(llmConfig.endpoint + "/v1/chat/completions")
 ### Env vars
 
 ```
-MEMEX_LLM_ENDPOINT   — base URL (e.g. http://host:8090), /v1/chat/completions appended
+MEMEX_LLM_ENDPOINT   — base URL (e.g. http://<host>:<port>), /v1/chat/completions appended
 MEMEX_LLM_MODEL      — model name for chat completions
 MEMEX_LLM_API_KEY    — optional, falls back to MEMEX_EMBED_API_KEY, then op://
 ```

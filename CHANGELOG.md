@@ -1,5 +1,45 @@
 # Changelog
 
+## [Unreleased] — feat/memory-scoping
+
+**Theme: context-aware memory isolation.** Multi-valued scope tags replace the single `scope` column with a `memory_scopes` join table. Server-authoritative derivation ensures consistency; recall uses additive tag intersection so cross-project leakage is impossible. Tests: 830 → 851 (+21 E2E).
+
+### Added
+- **`memory_scopes(memory_id, scope)` table** — multi-valued scope tags per memory. Supersedes the single `memories.scope` column. Migration converts existing `global` memories to one `global` tag each.
+- **`src/scope-derive.ts`** — server-authoritative scope derivation (`deriveScopes()`). Auto-tags `global` + `project:<git_remote-hash>`; opt-in `client:`, `session:`, `agent:`; device is metadata-only. Works from stdio (has client cwd); HTTP clients must supply project context.
+- **Tag-intersection recall** — `vectorSearch`, `bm25Search`, `list`, `stats`, `bulkDelete`, `update`, `delete` all filter via `EXISTS`/join on `memory_scopes` against the active-context tag set. `retriever.retrieve()` accepts `scopes` override.
+- **Scope-aware dreaming** (`src/dreaming.ts`) — dedup key is `(text, scope-set)`; identical text under different tags is not a duplicate. Reflection learnings inherit tags: single-context batch → those tags; mixed-context batch → `global`.
+- **MCP tool surface** — `memory_store` accepts `agent_id`, `session_id`, `scopes` params and calls `deriveScopes()` for server-authoritative derivation. `memory_recall` accepts `agent_id`, `session_id` params.
+
+### Known gap
+- **Plugin auto-recall hook** (`index.ts`) still uses the legacy `scopeManager.getAccessibleScopes(agentId)` for the active-context scope set. It does not yet derive `project:` tags because the plugin runs inside the OpenClaw gateway process where `process.cwd()` is the gateway directory, not the agent's project directory. The standalone MCP server correctly derives project tags. Deferred to T2.1/T2.2.
+
+### Plans
+- See `docs/plans/018-memory-scoping-impl.md` for the implementation plan.
+- See `docs/design/memory-scoping.md` for the design.
+
+---
+
+## [0.7.2] — 2026-05-11
+
+**Theme: configuration ergonomics + debug visibility.** Three user-visible improvements on top of v0.7.1, all backward-compatible. Test count 725 → 740 (+15). `npm audit` still 0.
+
+### Added
+- **`memoryAgents` unified config key** (issue #30, `src/agent-merge.ts`) — single agent whitelist that controls both recall and capture. Replaces the separate `autoRecallAgents` + `autoCaptureAgents` pair. Backward compat via union semantics: legacy keys never restrict, only extend.
+- **`MEMEX_DEBUG_RECALL` env flag** (issue #23, `src/debug-recall.ts`) — when set, every auto-recall turn writes a JSON snapshot of the formatted text prepended to the prompt plus per-item metadata. Lets you answer "what low-quality items actually made it into the context this turn?" — otherwise impossible from logs alone. Off by default; zero overhead. Truthy values (`1`/`true`/`on`) → `${tmpdir}/memex-debug-recall/`; other strings → literal path.
+- **Two design notes** committed for future-session work: `docs/design/production-benchmark.md` (BEIR 3-subset for externally-comparable IR quality, issue #19) and `docs/design/memory-browser.md` (HTML playground served via existing `api.registerHttpRoute`, issue #27).
+
+### Changed
+- **`typescript` dev-dep bumped 5.9 → 6.0.3** (closes PR #43). Zero-friction bump; no code changes needed. Real `tsc` build still clean.
+- **`@sinclair/typebox` replaced by unscoped `typebox`** in direct deps. Eliminates a dual-package situation surfaced by v0.7.1's `npm audit fix` — memex's `Type` and openclaw's `stringEnum` now come from the same package. Removes 4 type-bridge casts from `src/tools.ts`.
+- **`memex-v0.7` merged into `main`** via PR #73 (squash) — main was stuck at v0.6.2; the 2 dependabot UI alerts on default branch should auto-close on next scan.
+
+### Plans
+- See `docs/plans/017-resolve-everything-loop.md` for the loop that produced this release.
+- 016 housekeeping loop summary recorded in `docs/plans/PROGRESS.md` (branch count 27 → 3).
+
+---
+
 ## [0.7.1] — 2026-05-10
 
 **Theme: security bump.** Closes 18 transitive vulnerabilities (2 critical, 6 high, 10 moderate) surfaced by `npm audit` after v0.7.0 ship. No new features, no behavior change.

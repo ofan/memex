@@ -67,7 +67,7 @@ Embedding done in 119.0 min
 
 Computing chunk scores...
 
-Chunk scores written to /home/ubuntu/projects/memclaw/tests/fixtures/longmemeval-cache/chunk-scores-50.json (1.0 MB)
+Chunk scores written to tests/fixtures/longmemeval-cache/chunk-scores-50.json (1.0 MB)
 Checkpoint cleaned up.
 
 === Improvement Preview ===

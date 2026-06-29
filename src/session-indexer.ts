@@ -11,6 +11,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import type { MemoryStore, MemoryEntry } from "./memory.js";
 import type { Embedder } from "./embedder.js";
@@ -254,7 +255,7 @@ export interface IndexResult {
 }
 
 const DEFAULT_CONFIG: SessionIndexerConfig = {
-  sessionsDir: join(process.env.HOME || "/home/ubuntu", ".openclaw", "agents", "main", "sessions"),
+  sessionsDir: join(homedir(), ".openclaw", "agents", "main", "sessions"),
   targetScope: "global",
   minImportance: 0.1,
   maxTextLength: 2000,

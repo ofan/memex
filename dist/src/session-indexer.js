@@ -10,6 +10,7 @@
  * - Bulk-stores for performance (~340x faster than individual inserts)
  */
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { isNoise, isStructuralNoise, extractHumanText } from "./noise-filter.js";
 import { scoreImportance, heuristicImportance } from "./importance.js";
@@ -130,7 +131,7 @@ export function applyBackendCapabilities(config, caps) {
     };
 }
 const DEFAULT_CONFIG = {
-    sessionsDir: join(process.env.HOME || "/home/ubuntu", ".openclaw", "agents", "main", "sessions"),
+    sessionsDir: join(homedir(), ".openclaw", "agents", "main", "sessions"),
     targetScope: "global",
     minImportance: 0.1,
     maxTextLength: 2000,

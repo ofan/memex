@@ -121,6 +121,12 @@ export interface RetrievalContext {
   query: string;
   limit: number;
   scopeFilter?: string[];
+  /**
+   * Explicit scope-tag override — replaces the default active-context set
+   * when provided (e.g. from memory_recall's `scopes` parameter).
+   * Uses tag-intersection against memory_scopes.
+   */
+  scopes?: string[];
   category?: string;
   /** IDs recalled in recent turns — these get a diversity penalty */
   recentlyRecalled?: Set<string>;
@@ -337,14 +343,16 @@ export class MemoryRetriever {
   get lastTimings(): Record<string, number> { return this._lastTimings; }
 
   async retrieve(context: RetrievalContext): Promise<RetrievalResult[]> {
-    const { query, limit, scopeFilter, category, recentlyRecalled } = context;
+    const { query, limit, scopeFilter, scopes, category, recentlyRecalled } = context;
     const safeLimit = clampInt(limit, 1, 20);
+    // Explicit `scopes` override takes precedence over the derived scopeFilter
+    const effectiveScopeFilter = scopes ?? scopeFilter;
 
     if (this.config.mode === "vector" || !this.store.hasFtsSupport) {
-      return this.vectorOnlyRetrieval(query, safeLimit, scopeFilter, category, recentlyRecalled);
+      return this.vectorOnlyRetrieval(query, safeLimit, effectiveScopeFilter, category, recentlyRecalled);
     }
 
-    return this.hybridRetrieval(query, safeLimit, scopeFilter, category, recentlyRecalled);
+    return this.hybridRetrieval(query, safeLimit, effectiveScopeFilter, category, recentlyRecalled);
   }
 
   private async vectorOnlyRetrieval(

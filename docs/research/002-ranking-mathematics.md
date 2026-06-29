@@ -352,7 +352,7 @@ reranking cost.
 - n = 30-50: Marginal quality gains, linear cost increase
 - n > 50: Negligible quality improvement, significant latency
 
-For memex's deployment (bge-reranker-v2-m3 on Host B via llama.cpp):
+For memex's deployment (bge-reranker-v2-m3 on the inference host via llama.cpp):
 - Current: reranks up to `limit * 2` candidates (typically 10-20)
 - Cost: ~53ms for 5 docs, scales linearly => ~200ms for 20 docs
 - This is within the acceptable latency budget (~300-400ms total pipeline)
