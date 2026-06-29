@@ -15,6 +15,7 @@ import type { UnifiedRecall, UnifiedResult, ResultSource } from "./unified-recal
 import type { UnifiedRetriever, UnifiedResult as UnifiedRetrieverResult } from "./unified-retriever.js";
 import { Stopwatch, type TrackFn } from "./telemetry.js";
 import { anchor, expandAnchor, AnchorAmbiguityError, ANCHOR_LEN } from "./anchor.js";
+import { deriveScopes } from "./scope-derive.js";
 
 // ============================================================================
 // Types
@@ -50,6 +51,16 @@ function clamp01(value: number, fallback = 0.7): number {
   return Math.min(1, Math.max(0, value));
 }
 
+/** Detect the MCP client name from environment for the plugin path. */
+function detectPluginClientName(): string | undefined {
+  if (process.env.MEMEX_CLIENT_NAME) return process.env.MEMEX_CLIENT_NAME;
+  if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
+  if (process.env.CODEX_HOME) return "codex";
+  if (process.env.OPEN_CODE_LOGS_DIR) return "opencode";
+  if (process.env.OPENCLAW_HOME) return "openclaw";
+  return undefined;
+}
+
 function sanitizeMemoryForSerialization(results: RetrievalResult[]) {
   return results.map(r => ({
     id: r.entry.id,
@@ -80,7 +91,10 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
         query: Type.String({ description: "Search query for finding relevant memories" }),
         limit: Type.Optional(Type.Number({ description: "Max results to return (default: 5, max: 20)" })),
         scope: Type.Optional(Type.String({ description: "Specific memory scope to search in (optional)" })),
+        scopes: Type.Optional(Type.Array(Type.String(), { description: "Explicit scope tags to filter by (tag-intersection)" })),
         category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+        agent_id: Type.Optional(Type.String({ description: "Agent identifier (optional, for agent-specific recall)" })),
+        session_id: Type.Optional(Type.String({ description: "Session identifier (optional, for session-specific recall)" })),
         ...(hasUnified ? {
           source: Type.Optional(Type.String({
             description: "Which sources to search: 'all' (default), 'conversation' (memories only), 'document' (workspace docs only)"
@@ -88,21 +102,28 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
         } : {}),
       }),
       async execute(_toolCallId, params) {
-        const { query, limit = 5, scope, category, source = "all" } = params as {
+        const { query, limit = 5, scope, scopes, category, source = "all",
+                agent_id, session_id } = params as {
           query: string;
           limit?: number;
           scope?: string;
+          scopes?: string[];
           category?: string;
           source?: string;
+          agent_id?: string;
+          session_id?: string;
         };
 
         try {
           const sw = new Stopwatch();
           const safeLimit = clampInt(limit, 1, 20);
 
-          // Determine accessible scopes
-          let scopeFilter = context.scopeManager.getAccessibleScopes(context.agentId);
+          // Determine scope filter via server-authoritative derivation.
+          // Uses deriveScopes() for recall/store symmetry (Bug 2 fix).
+          let scopeFilter: string[];
+
           if (scope) {
+            // Singular scope param: backward compat, validated by scopeManager
             if (context.scopeManager.isAccessible(scope, context.agentId)) {
               scopeFilter = [scope];
             } else {
@@ -111,6 +132,53 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
                 details: { error: "scope_access_denied", requestedScope: scope },
               };
             }
+
+            // Merge agent_id / session_id tags into filter (Bug: only scopes array path did this)
+            if (agent_id) {
+              const agentTag = `agent:${agent_id}`;
+              if (!scopeFilter.includes(agentTag)) scopeFilter.push(agentTag);
+            }
+            if (session_id) {
+              const derivForSession = deriveScopes({
+                cwd: process.cwd(),
+                env: process.env as Record<string, string | undefined>,
+                clientName: detectPluginClientName(),
+                sessionId: session_id,
+              });
+              const sessionTag = derivForSession.tags.find(t => t.startsWith("session:"));
+              if (sessionTag && !scopeFilter.includes(sessionTag)) scopeFilter.push(sessionTag);
+            }
+          } else if (scopes && scopes.length > 0) {
+            // Explicit scopes override: use them directly (Bug 1 fix)
+            scopeFilter = [...scopes];
+
+            // Merge agent_id / session_id into filter (Bug 1 fix)
+            if (agent_id) {
+              const agentTag = `agent:${agent_id}`;
+              if (!scopeFilter.includes(agentTag)) scopeFilter.push(agentTag);
+            }
+            if (session_id) {
+              const derivForSession = deriveScopes({
+                cwd: process.cwd(),
+                env: process.env as Record<string, string | undefined>,
+                clientName: detectPluginClientName(),
+                sessionId: session_id,
+              });
+              const sessionTag = derivForSession.tags.find(t => t.startsWith("session:"));
+              if (sessionTag && !scopeFilter.includes(sessionTag)) scopeFilter.push(sessionTag);
+            }
+          } else {
+            // Derive from environment (server-authoritative, Bug 2 fix).
+            // Mirrors the derivation used by memory_store for recall/store symmetry.
+            const effectiveAgentId = agent_id || context.agentId;
+            const derivResult = deriveScopes({
+              cwd: process.cwd(),
+              env: process.env as Record<string, string | undefined>,
+              clientName: detectPluginClientName(),
+              sessionId: session_id,
+              explicit: effectiveAgentId ? { agent: effectiveAgentId } : undefined,
+            });
+            scopeFilter = derivResult.tags;
           }
 
           // Use unified retriever (single-pass pipeline) when available
@@ -270,6 +338,8 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
         importance: Type.Optional(Type.Number({ description: "Importance score 0-1 (default: 0.7)" })),
         category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         scope: Type.Optional(Type.String({ description: "Memory scope (optional, defaults to agent scope)" })),
+        agent_id: Type.Optional(Type.String({ description: "Agent identifier (optional, for agent-scoped memories)" })),
+        session_id: Type.Optional(Type.String({ description: "Session identifier (optional, for session-scoped memories)" })),
       }),
       async execute(_toolCallId, params) {
         const {
@@ -277,16 +347,20 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
           importance = 0.7,
           category = "other",
           scope,
+          agent_id,
+          session_id,
         } = params as {
           text: string;
           importance?: number;
           category?: string;
           scope?: string;
+          agent_id?: string;
+          session_id?: string;
         };
 
         try {
           const sw = new Stopwatch();
-          // Determine target scope
+          // Determine target scope (backward compat with legacy scopeManager)
           let targetScope = scope || context.scopeManager.getDefaultScope(context.agentId);
 
           // Validate scope access
@@ -307,6 +381,41 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
 
           const safeImportance = clamp01(importance, 0.7);
 
+          // Derive scope tags from server environment (server-authoritative derivation).
+          // Uses CLAUDE_PROJECT_DIR or process.cwd() for project signal.
+          const effectiveAgentId = agent_id || context.agentId;
+          const derivResult = deriveScopes({
+            cwd: process.cwd(),
+            env: process.env as Record<string, string | undefined>,
+            clientName: detectPluginClientName(),
+            sessionId: session_id,
+            explicit: effectiveAgentId ? { agent: effectiveAgentId } : undefined,
+          });
+
+          // Build multi-valued scope tags (merge explicit scope with derived)
+          let tags = derivResult.tags;
+          // When agent_id is explicitly provided, deriveScopes already produced
+          // the correct agent tag. Skip merging the legacy targetScope if it is
+          // an 'agent:' scope from getDefaultScope(context.agentId) — otherwise
+          // both agent:<context.agentId> AND agent:<explicit> end up in tags,
+          // causing cross-agent leakage.
+          const hasExplicitAgentId = agent_id !== undefined && agent_id !== null;
+          const isLegacyAgentScope = !scope && targetScope.startsWith("agent:");
+          if (targetScope && targetScope !== "global" && !tags.includes(targetScope)) {
+            if (hasExplicitAgentId && isLegacyAgentScope) {
+              // Skip: deriveScopes already set the correct explicit agent tag.
+              // Do not merge the legacy agent scope from context.agentId.
+            } else {
+              tags = [...tags, targetScope];
+            }
+          }
+
+          // Build combined metadata (provenance + agent source)
+          const metaObj: Record<string, unknown> = {
+            source: "agent",
+            ...derivResult.metadata,
+          };
+
           // Chunk long text for multi-vector embedding
           const chunks = context.store.chunkForEmbedding(text);
           let entry;
@@ -326,7 +435,8 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             entry = await context.store.store({
               text, vector, importance: safeImportance,
               category: category as any, scope: targetScope,
-              metadata: JSON.stringify({ source: "agent" }),
+              scopes: tags,
+              metadata: JSON.stringify(metaObj),
             });
           } else {
             const chunkVectors = await context.embedder.embedBatchPassage(chunks);
@@ -342,7 +452,8 @@ export function registerMemoryStoreTool(api: OpenClawPluginApi, context: ToolCon
             entry = await context.store.storeWithChunks({
               text, chunkVectors, importance: safeImportance,
               category: category as any, scope: targetScope,
-              metadata: JSON.stringify({ source: "agent" }),
+              scopes: tags,
+              metadata: JSON.stringify(metaObj),
             });
           }
 
@@ -594,13 +705,22 @@ export function registerMemoryUpdateTool(api: OpenClawPluginApi, context: ToolCo
             newVector = await context.embedder.embedPassage(text);
           }
 
+          // Read current metadata to preserve provenance (Bug 3 fix)
+          const currentRow = context.store.db.prepare(
+            "SELECT metadata FROM memories WHERE id = ?"
+          ).get(resolvedId) as { metadata: string } | undefined;
+          let currentMeta: Record<string, unknown> = {};
+          if (currentRow?.metadata) {
+            try { currentMeta = JSON.parse(currentRow.metadata); } catch { /* keep empty */ }
+          }
+
           const updates: Record<string, any> = {};
           if (text) updates.text = text;
           if (newVector) updates.vector = newVector;
           if (importance !== undefined) updates.importance = clamp01(importance, 0.7);
           if (category) updates.category = category;
-          // Ensure agent-curated provenance is set (preserves or upgrades source tag)
-          updates.metadata = JSON.stringify({ source: "agent" });
+          // Merge: set source to 'agent', preserve all provenance fields
+          updates.metadata = JSON.stringify({ ...currentMeta, source: "agent" });
 
           const updated = await context.store.update(resolvedId, updates, scopeFilter);
 

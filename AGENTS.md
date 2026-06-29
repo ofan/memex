@@ -1,16 +1,20 @@
 # memex
 
-Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. **488 tests, 19 files.**
+Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. **~892 tests, 51 files.**
 
 ## Architecture
 
 ```
 memex (kind: "memory")
 ├── SQLite (FTS5 + sqlite-vec)
-│   ├── memories table — recall, store, forget (3 tools)
+│   ├── memories table — recall, store, forget (5 MCP tools + 2 plugin tools)
+│   ├── memory_scopes table — multi-valued scope tags per memory
 │   ├── documents + content — markdown chunking, dual-granularity FTS
 │   └── vectors_vec — shared vector store (memories + documents)
-├── Unified Retriever — z-score fusion, max-sim chunked embedding, reranking
+├── Scope Derivation — server-authoritative tag derivation (src/scope-derive.ts)
+├── Unified Retriever — z-score fusion, max-sim chunked embedding, tag-intersection scoping, reranking
+├── Dreaming — scope-aware dedup, reflection, noise removal (src/dreaming.ts)
+├── MCP Server — stdio/HTTP daemon, cross-device access (src/mcp-server.ts)
 └── Embedding — OpenAI-compatible HTTP client, LRU cache
 ```
 
@@ -22,7 +26,11 @@ memex (kind: "memory")
 | `src/memory.ts` | Memory CRUD, vectorSearch (max-sim), chunked embedding |
 | `src/search.ts` | Document search (FTS5, sqlite-vec, chunking) |
 | `src/unified-retriever.ts` | Single-pass retrieval pipeline |
+| `src/scopes.ts` | Scope manager, tag-intersection filter |
+| `src/scope-derive.ts` | Server-authoritative scope derivation |
 | `src/tools.ts` | Agent tools (recall, store, forget) |
+| `src/dreaming.ts` | Background consolidation, scope-aware dedup, reflection |
+| `src/mcp-server.ts` | Standalone MCP server (stdio + HTTP), cross-device access |
 | `src/embedder.ts` | Embedding client + LRU cache |
 | `src/noise-filter.ts` | Noise detection + filterAssistantText |
 | `src/capture-windows.ts` | Sliding window builder |
@@ -43,7 +51,7 @@ memex (kind: "memory")
 
 1. Plugin kind: `"kind": "memory"` in openclaw.plugin.json
 2. Single SQLite database for both memories and documents
-3. TypeScript, no build step (OpenClaw loads .ts directly via jiti)
+3. TypeScript — tests run via jiti (no build); production build step exists since v0.6.0 (`tsc -p tsconfig.build.json`)
 4. All logging uses `console.warn` (stderr) — `console.log` corrupts the stdio protocol
 5. Embedding model changes are detected and user is warned (see docs/RESILIENCY.md)
 6. Lazy DB init — database opens on first use, not at plugin registration
@@ -66,3 +74,7 @@ memex (kind: "memory")
 | Embed (cached) | <0.03ms |
 | Vector search (1.9K) | ~4ms |
 | BM25 search | <0.3ms |
+
+Spec directories live under `specs` unless a nested AGENTS.md documents a more specific convention.
+Spec directory names use `YYYY-MM-DD-kebab-feature`, for example `2026-05-01-spec-lifecycle-audit`.
+Spec directories include a free-form `MILESTONES.md` implementation log for milestones, setbacks, fixes, validation notes, and decisions.

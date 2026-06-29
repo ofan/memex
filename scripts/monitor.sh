@@ -1,11 +1,11 @@
 #!/bin/bash
 export PATH="/home/linuxbrew/.linuxbrew/bin:/usr/bin:/usr/local/bin:$PATH"
 # Memex dreaming monitor — runs via cron, appends to report file
-# Usage: */30 * * * * /home/ubuntu/projects/memex/scripts/monitor.sh
+# Usage: */30 * * * * ${HOME}/projects/memex/scripts/monitor.sh
 
-REPORT="/home/ubuntu/.openclaw/memory/memex/monitor-report.log"
-DB="/home/ubuntu/.openclaw/memory/memex/memex.sqlite"
-DREAM_LOG="/home/ubuntu/.openclaw/memory/memex/memex.log"
+REPORT="${HOME}/.openclaw/memory/memex/monitor-report.log"
+DB="${HOME}/.openclaw/memory/memex/memex.sqlite"
+DREAM_LOG="${HOME}/.openclaw/memory/memex/memex.log"
 TS=$(date +%Y-%m-%dT%H:%M:%S%z)
 
 echo "=== $TS ===" >> "$REPORT"

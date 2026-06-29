@@ -16,7 +16,7 @@ Two architectural problems block this vision. They are independent and need to b
 
 ### What it is
 
-Memex needs to serve memory requests from multiple devices (laptop, build host, Mac mini) and multiple platforms (OpenClaw, Claude Code, future MCP clients). The data lives in `memex.sqlite`. The question is **where the process that owns the DB runs**, and **how clients connect**.
+Memex needs to serve memory requests from multiple devices (laptop, dev host, always-on host) and multiple platforms (OpenClaw, Claude Code, future MCP clients). The data lives in `memex.sqlite`. The question is **where the process that owns the DB runs**, and **how clients connect**.
 
 ### Current state
 
@@ -38,12 +38,12 @@ Memex needs to serve memory requests from multiple devices (laptop, build host, 
 
 | Dimension | Question | Known constraints |
 |---|---|---|
-| **Where does the daemon run?** | Host B, Host C, build host, or wherever's always on? | Embedding server already on Host B; co-locating reduces network hops |
+| **Where does the daemon run?** | always-on host, dev host, or wherever's always on? | Embedding server already on the always-on host; co-locating reduces network hops |
 | **Transport between client and daemon?** | stdio subprocess vs HTTP/SSE | stdio = same machine only; HTTP = cross-machine but needs auth |
 | **Who manages the daemon's lifecycle?** | systemd/launchd unit, or auto-spawn by first client? | Tradeoff: install friction vs zombie processes |
 | **What's the offline behavior?** | Fail closed (no memory when host unreachable) or local read-only cache? | Pure single source = simple, no offline; cache = complex sync |
 | **Coordination if multiple processes** | DB lock table, advisory locks, or single-process-only? | SQLite WAL handles correctness; the issue is duplicate work (esp. dreaming) |
-| **Authentication** | Bearer token, mTLS, Tailscale ACL? | Tailscale ACL gives network-layer auth for free |
+| **Authentication** | Bearer token, mTLS, tailnet ACL? | tailnet ACL gives network-layer auth for free |
 
 ### What's been ruled out (so far)
 
@@ -54,7 +54,7 @@ Memex needs to serve memory requests from multiple devices (laptop, build host, 
 
 - **Pattern A**: subprocess per platform + DB lock table for dreaming — works for single-machine
 - **Pattern A'**: subprocess per platform on each machine, each machine has its own DB — defeats cross-device pool
-- **Pattern B**: single daemon on Host B, all platforms connect via Tailscale HTTP — matches user's vision
+- **Pattern B**: single daemon on the always-on host, all platforms connect via tailnet HTTP — matches user's vision
 - **Pattern C-lite**: Pattern B + small read-only local cache for offline — additive, can defer
 
 ### Sub-problem 1.1: Plugin vs MCP vs REST (protocol/integration layer)
@@ -89,7 +89,7 @@ User's reframe: *"OpenClaw should just have a very thin plug-in and that calls M
 ### Open questions for user
 
 1. Is **fail-closed when host unreachable** acceptable, or do you need offline reads?
-2. Where should the daemon live by default? Host B?
+2. Where should the daemon live by default? The always-on host?
 3. Auto-start on boot via launchd, or manual?
 4. Should the local OpenClaw plugin **embed an MCP client** that connects to remote daemon, or run its own subprocess that proxies?
 5. **(1.1)** Backend exposes MCP-over-HTTP only, REST only, or both?
@@ -215,7 +215,7 @@ But this is still under discussion — not a conclusion.
 - `src/retriever.ts` & `src/unified-retriever.ts` — recall pipeline, scope filter consumption
 - `src/dreaming.ts` — dream cycle (light/deep/reflection)
 - `node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.d.ts` — HTTP transport (unused)
-- `.mcp.json` — current Claude Code MCP config (uses MagicDNS hostnames)
+- `.mcp.json` — current Claude Code MCP config (uses tailnet hostnames)
 
 ## Verification approach (for whichever change ships first)
 
