@@ -1,15 +1,28 @@
 # Progress
 
-## Last Updated: 2026-06-28
+## Last Updated: 2026-06-29
+
+## Session 2026-06-29 — v0.7 delivery push
+
+Drove the four roadmap priorities on `memex-v0.7`:
+
+- **Quick wins ✅**
+  - **Flaky `mcp-server-shutdown` SIGTERM test stabilized.** Root cause: signal handlers were registered late in `main()` (after the readiness log), and `spawnServer` leaked its child on rejection (cleanup lived in a `try` after the `await`). Fix (`src/mcp-server.ts`): register SIGTERM/SIGINT as the *first* thing in `main()`; emit `memex-mcp: ready (stdio|http)` *after* transport connect as the canonical readiness signal. Fix (`tests/mcp-server-shutdown.test.ts`): key readiness on `ready`, kill the child on rejection, bump `STARTUP_TIMEOUT` to 15s. Verified: 24/24 under the parallel load that previously failed 8/8 + leaked 8 servers; full suite 900/900.
+  - **Noise purge.** Purged **13** entries of leaked LLM-internal meta-commentary (`[Final Check]`, `Self-Correction during generation`, etc.) captured as "learnings" — more than the estimated 6. `learning` category 25 → 12. Root cause: the dreaming reflection phase stores the reflection LLM's formatting self-talk without filtering — follow-up to add a CoT/meta-commentary noise rule.
+- **Containerize daemon (019) ✅** — `Dockerfile` (multi-stage, `node:25-slim`, pre-built `dist/`, native-binding rebuild safety net, non-root, `/health` HEALTHCHECK), `.dockerignore`, `docker-compose.yml` (host networking for Tailscale), `memex.env.example`, `docs/deploy/container.md`. Build-verified: image builds, daemon starts (`ready (http …)`), `/health` returns 200, runs as `uid=999(memex)`. Node pinned to 25 (Node 26 breaks better-sqlite3). Also rebuilt stale `dist/` (caught up `dreaming.ts` semantic-dedup from `6134cb2`).
+- **Feedback loop ✅ (design-only)** — `docs/design/feedback-loop.md`. Investigation finding: a bounded recall-frequency boost **already exists** (`retriever.ts:807`, +10% cap) but is *ephemeral* (in-memory map, resets on restart) and the **MCP `memory_recall` tool never bumps `recall_count`**, so the pool is 99.26% zero and the boost is a near-no-op today. Design recommends promoting the existing boost to the persistent column + fixing MCP capture (highest leverage), with a provably-bounded log-additive formula and a 7-test TDD plan. Implementation (TDD) deferred.
+- **Ship `memex-v0.7` → `main`** — squash PR (this session).
+
+Minor follow-ups surfaced (non-blocking): `/health` reports a stale `version:"0.6.0"` vs package `0.7.2`; `npm ci` flags 13 transitive vulns in prod deps (pre-existing, orthogonal to this work).
 
 ## Roadmap — next priorities
 
-1. **Containerize memex daemon** (`019`) — package the HTTP MCP daemon as a container image for standardized deployment. Replaces manual dist copy (OpenClaw) + systemd/launchd (daemon) + memex.env management. One image → deploy anywhere (docker run, k8s, compose). **Supersedes the standalone T2.2 Mac mini migration** — deploy the container on the always-on host (or k8s) instead of a launchd unit + secret transfer. Co-location still has the llm-proxy round-trip, but the deployment simplicity + reproducibility is the win.
-2. **Feedback loop** — implicit recall-frequency boost (bounded) for recalled memories. Compounds the scoping/provenance work. Design-first.
-3. **Ship `memex-v0.7` → `main`** — scoping + audit + data-quality work via squash PR.
-4. **Quick wins** — stabilize flaky `mcp-server-shutdown` SIGTERM test; noise purge (6 entries).
+1. ~~**Containerize memex daemon** (`019`)~~ ✅ done 2026-06-29.
+2. ~~**Feedback loop** — design~~ ✅ done; **TDD implementation next** (see `docs/design/feedback-loop.md` — start with the MCP `recall_count` capture fix, the highest-leverage prerequisite).
+3. **Ship `memex-v0.7` → `main`** — in progress (squash PR).
+4. ~~**Quick wins** — shutdown test; noise purge~~ ✅ done.
 
-Deferred: T4.2 MemoryAgentBench (benchmark), scope promotion UX, sensitive/private memories, T5 features (FadeMem, RL, multimodal).
+Deferred: T4.2 MemoryAgentBench (benchmark), scope promotion UX, sensitive/private memories, T5 features (FadeMem, RL, multimodal), **reflection CoT/meta-commentary noise filter** (data-quality), **scope-visibility: readable project name + client dimension** (user feedback 2026-06-29), feedback-loop TDD implementation, `/health` version string, prod-deps audit pass.
 
 ## Memory Scoping — Implementation (018)
 
