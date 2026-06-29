@@ -36,19 +36,45 @@ export async function lightSweep(store, logPath) {
     let deduped = 0;
     let noiseRemoved = 0;
     let fragmentsRemoved = 0;
-    // 1. Exact text dedup: group by text, keep newest (highest timestamp)
-    const dupes = db.prepare(`
-    SELECT text, COUNT(*) as cnt, MAX(timestamp) as max_ts
-    FROM memories
-    GROUP BY text
-    HAVING cnt > 1
+    // 1. Scope-aware exact text dedup: group by (text, scope-set), keep newest
+    // within each (text, scope-set) group. Identical text under different
+    // tag-sets is NOT a duplicate.
+    //
+    // Build a map: (text, scope_set) → { maxTs, entries }
+    const allMemories = db.prepare(`
+    SELECT m.id, m.text, m.timestamp,
+           COALESCE(GROUP_CONCAT(ms.scope ORDER BY ms.scope), 'global') as scope_set
+    FROM memories m
+    LEFT JOIN memory_scopes ms ON ms.memory_id = m.id
+    GROUP BY m.id
   `).all();
-    for (const dupe of dupes) {
-        // Delete all but the newest
-        const deleted = db.prepare(`
-      DELETE FROM memories WHERE text = ? AND timestamp < ?
-    `).run(dupe.text, dupe.max_ts);
-        deduped += deleted.changes || 0;
+    // Group by (text, scope_set)
+    const groups = new Map();
+    for (const row of allMemories) {
+        const key = `${row.text}::${row.scope_set}`;
+        const group = groups.get(key);
+        if (group) {
+            group.entries.push({ id: row.id, ts: row.timestamp });
+            if (row.timestamp > group.maxTs)
+                group.maxTs = row.timestamp;
+        }
+        else {
+            groups.set(key, {
+                maxTs: row.timestamp,
+                entries: [{ id: row.id, ts: row.timestamp }],
+            });
+        }
+    }
+    // Delete non-survivors in each group
+    for (const [, group] of groups) {
+        if (group.entries.length > 1) {
+            for (const entry of group.entries) {
+                if (entry.ts < group.maxTs) {
+                    db.prepare("DELETE FROM memories WHERE id = ?").run(entry.id);
+                    deduped++;
+                }
+            }
+        }
     }
     // 2. Conversation fragment purge: single-turn [user]/[assistant] entries
     const fragments = db.prepare(`
@@ -163,12 +189,62 @@ SUPERSEDED:<older_memory_id>|<newer_memory_id>|<reason>
 
 If no useful learnings can be synthesized, output: NONE`;
 /**
+ * Derive inherited scope tags for reflection learnings.
+ *
+ * Single-context batch (all memories share the same non-global tag set)
+ * inherits those tags. Mixed-context batch (memories from different projects
+ * or contexts) defaults to global only.
+ *
+ * Memories that are global-only (no non-global tags) do not define a context
+ * and are ignored for the purpose of determining mixed vs single context.
+ * Having some global-only memories alongside project-scoped ones counts as
+ * single context — the project-scoped memories provide the context.
+ */
+function deriveReflectionTags(db, memoryIds) {
+    if (memoryIds.length === 0)
+        return ["global"];
+    // Fetch all scope tags for the batch memories (excluding 'global')
+    const placeholders = memoryIds.map(() => "?").join(",");
+    const scopeRows = db.prepare(`
+    SELECT memory_id, scope FROM memory_scopes
+    WHERE memory_id IN (${placeholders}) AND scope != 'global'
+  `).all(...memoryIds);
+    // Build map: memory_id → Set of non-global tags
+    const memTags = new Map();
+    for (const row of scopeRows) {
+        let tags = memTags.get(row.memory_id);
+        if (!tags) {
+            tags = new Set();
+            memTags.set(row.memory_id, tags);
+        }
+        tags.add(row.scope);
+    }
+    // Collect unique non-empty tag sets across the batch
+    const uniqueTagSets = new Set();
+    for (const id of memoryIds) {
+        const tags = memTags.get(id);
+        if (tags && tags.size > 0) {
+            // Create a canonical representation of the tag set
+            uniqueTagSets.add([...tags].sort().join("\x00"));
+        }
+        // Memories without non-global tags are context-agnostic; they don't
+        // contribute a tag set and don't cause a "mixed context" determination.
+    }
+    if (uniqueTagSets.size === 1) {
+        // Single context: all scoped memories share the same tag set
+        const tags = [...uniqueTagSets][0].split("\x00").filter(Boolean);
+        return ["global", ...tags];
+    }
+    // Mixed context (or all global-only): use global only
+    return ["global"];
+}
+/**
  * Reflection phase: LLM-driven synthesis of learnings from recent memories.
  * Stanford Generative Agents pattern: send memories → generate questions → synthesize.
  *
  * Requires an LLM endpoint. Skips gracefully if not configured.
  */
-export async function reflectionSweep(store, llmConfig, logPath) {
+export async function reflectionSweep(store, llmConfig, logPath, embedder) {
     const db = store.db;
     const errors = [];
     let learnings = 0;
@@ -185,6 +261,10 @@ export async function reflectionSweep(store, llmConfig, logPath) {
         log(logPath, "dream:reflect", { skipped: true, reason: "too_few_memories", count: memories.length });
         return { learnings: 0, contradictions: 0, errors: [] };
     }
+    // Determine inherited scope tags for learnings (scope-aware reflection).
+    // Single-context batch → inherit those tags; mixed-context → global only.
+    const memoryIds = memories.map(m => m.id);
+    const inheritedTags = deriveReflectionTags(db, memoryIds);
     // Build the memory block for the LLM
     const memoryBlock = memories
         .map(m => `[${m.id}] [${m.category}] ${m.text}`)
@@ -238,17 +318,57 @@ export async function reflectionSweep(store, llmConfig, logPath) {
                 }
                 continue;
             }
-            // Store learning as a new memory
+            // Store learning as a new memory with inherited scope tags
             if (line.length >= 20) {
+                // Semantic dedup: if embedder is available, check for near-duplicate
+                // learnings before storing. Paraphrases of existing knowledge are
+                // caught by cosine similarity > 0.85. Exact-text dupes are already
+                // handled by the dedup_hash UNIQUE index below.
+                let isSemanticDupe = false;
+                if (embedder) {
+                    try {
+                        const vector = await embedder.embedPassage(line);
+                        const results = await store.vectorSearch(vector, 1, 0.85);
+                        if (results.length > 0 && results[0].score > 0.85) {
+                            isSemanticDupe = true;
+                            log(logPath, "dream:reflect", {
+                                skipped_semantic_dupe: line.slice(0, 80),
+                                similar_id: results[0].entry.id,
+                                score: results[0].score.toFixed(3),
+                            });
+                        }
+                    }
+                    catch (err) {
+                        // Embedding or vector search failed — log and continue (fail-open).
+                        // The dedup_hash UNIQUE index still guards against exact duplicates.
+                        log(logPath, "dream:reflect", {
+                            semantic_dedup_error: err?.message ?? String(err),
+                        });
+                    }
+                }
+                if (isSemanticDupe)
+                    continue;
                 const hash = createHash("sha256").update(line).digest("hex");
-                // Check if already exists (idempotent)
-                const existing = db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(hash);
+                // Compute dedup_hash as sha256(text + '\x00' + sorted scope tags)
+                const sortedTags = [...inheritedTags].sort().join(",");
+                const dedupHash = createHash("sha256")
+                    .update(line)
+                    .update("\x00")
+                    .update(sortedTags)
+                    .digest("hex");
+                // Check if already exists (idempotent via dedup_hash UNIQUE index)
+                const existing = db.prepare("SELECT id FROM memories WHERE dedup_hash = ?").get(dedupHash);
                 if (!existing) {
                     const id = crypto.randomUUID();
                     db.prepare(`
-            INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash)
-            VALUES (?, ?, 'learning', 'global', 0.85, ?, ?)
-          `).run(id, line, Date.now(), hash);
+            INSERT INTO memories (id, text, category, scope, importance, timestamp, text_hash, dedup_hash)
+            VALUES (?, ?, 'learning', 'global', 0.85, ?, ?, ?)
+          `).run(id, line, Date.now(), hash, dedupHash);
+                    // Write inherited scope tags to memory_scopes
+                    const insertScope = db.prepare("INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)");
+                    for (const tag of inheritedTags) {
+                        insertScope.run(id, tag);
+                    }
                     learnings++;
                 }
             }
@@ -313,7 +433,7 @@ export async function runDreamCycle(store, config, track) {
     // Phase 3: Reflection (LLM-driven knowledge synthesis)
     if (config.phases.reflection && config.reflectionLLM) {
         try {
-            result.reflection = await reflectionSweep(store, config.reflectionLLM, logPath);
+            result.reflection = await reflectionSweep(store, config.reflectionLLM, logPath, config.embedder);
             sw.lap("reflect");
             track?.("dream", { phase: "reflection", ...result.reflection, ...sw.timings });
         }

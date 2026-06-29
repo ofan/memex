@@ -4,6 +4,7 @@
 
 import type { Command } from "commander";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { MemoryStore } from "./memory.js";
 import type { MemoryRetriever } from "./retriever.js";
@@ -475,8 +476,7 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
 
         const { indexSessions } = await import("./session-indexer.js");
         const { join } = await import("node:path");
-        const home = process.env.HOME || "/home/ubuntu";
-        const sessionsDir = join(home, ".openclaw", "agents", options.agent, "sessions");
+        const sessionsDir = join(homedir(), ".openclaw", "agents", options.agent, "sessions");
 
         // Handle --fresh: wipe session-imported memories first
         if (options.fresh) {
@@ -518,7 +518,7 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
         // Determine which session directories to import
         const agentsDirs: Array<{ agent: string; dir: string }> = [];
         if (options.allAgents) {
-          const agentsRoot = join(home, ".openclaw", "agents");
+          const agentsRoot = join(homedir(), ".openclaw", "agents");
           const { readdirSync, existsSync } = await import("node:fs");
           if (existsSync(agentsRoot)) {
             for (const entry of readdirSync(agentsRoot, { withFileTypes: true })) {

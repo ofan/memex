@@ -1,6 +1,6 @@
 {
   "name": "@ofan/memex",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,8 +22,7 @@
     "README.md",
     "SKILL.md",
     "AGENTS.md",
-    "CLAUDE.md",
-    "LICENSE"
+    "CLAUDE.md"
   ],
   "keywords": [
     "openclaw",
@@ -74,14 +73,6 @@
   "bin": {
     "memex-mcp": "./dist/src/mcp-server.js"
   },
-  "files": [
-    "dist/**",
-    "openclaw.plugin.json",
-    "README.md",
-    "SKILL.md",
-    "AGENTS.md",
-    "CLAUDE.md"
-  ],
   "scripts": {
     "test": "node --import jiti/register --test tests/*.test.ts",
     "mcp": "npx tsx src/mcp-server.ts",
@@ -93,6 +84,6 @@
     "@types/better-sqlite3": "^7.6.0",
     "commander": "^14.0.0",
     "jiti": "^2.7.0",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }

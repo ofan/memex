@@ -41,15 +41,15 @@ These four questions block v0.7 from converging. Each requires a real decision, 
 
 ### T2.1 Doc corpus location across devices
 **Question:** Where do indexed documents live when memex serves multiple devices?
-- Option A: Daemon co-located with docs (single source of truth on dev VM; other devices query)
+- Option A: Daemon co-located with docs (single source of truth on the dev host; other devices query)
 - Option B: Per-device docs + cross-device shared memory (clients run their own retriever for local docs, query daemon for memory only — breaks unified abstraction)
 - Option C: Docs uploaded to daemon (privacy/sync overhead but preserves unified retrieval)
 - **Entangled with:** T2.2 (daemon location)
 
 ### T2.2 Daemon location
-**Question:** Host B vs dev VM permanent home?
-- Currently runs on dev VM as systemd user unit
-- Host B has the embedding server already (Qwen3-Embedding-4B-Q8_0 + Qwen3-Reranker-0.6B-Q8_0)
+**Question:** always-on host vs dev host permanent home?
+- Currently runs on the dev host as systemd user unit
+- The always-on host has the embedding server already (Qwen3-Embedding-4B-Q8_0 + Qwen3-Reranker-0.6B-Q8_0)
 - Migration cost: launchd unit + secret transfer
 - **Done when:** decision made + (if migrating) launchd unit set up and verified
 
@@ -160,10 +160,10 @@ Defer indefinitely:
 | MCP/HTTP/CLI process model | Tentative: single daemon, HTTP transport, CLI as thin client | Earlier in conversation |
 | Shared DB | Tentative: daemon-owned single SQLite | Earlier in conversation |
 | Memory categories | Partially settled: episodic/semantic/procedural × device/project/agent + source-of-truth | `two-problems-architecture.md` |
-| Doc corpus location | **Open** | T2.1 |
-| Daemon location | **Open** | T2.2 |
-| Offline behavior | **Open** | T2.3 |
-| Correction semantics | **Open (Camp C-ish currently)** | T2.4 |
+| Doc corpus location | **Decided** — per-device docs, shared memory only (Option B) | [`v0.8-architecture-decisions.md`](../design/v0.8-architecture-decisions.md) §T2.1 |
+| Daemon location | **Decided** — the always-on host (co-located w/ embed+rerank); migrate off the dev host | §T2.2 |
+| Offline behavior | **Decided** — fail-closed (no local cache) | §T2.3 |
+| Correction semantics | **Decided** — Camp C (append-only learnings via dreaming) | §T2.4 |
 | Protocol choice | Settled: MCP for v0.6, REST for v0.7+ | Earlier in conversation |
 | Citation feature | Complete on v0.6.2; partial on v0.7 (T1.2 closes this) | `docs/research/003-memory-retrieval-sota.md` |
 

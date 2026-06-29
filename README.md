@@ -82,7 +82,7 @@ This is why memex is a `memory` plugin instead of a plain search plugin: the goa
 
 ## Features
 
-- **3 tools**: `memory_recall`, `memory_store`, `memory_forget`
+- **7 tools**: `memory_recall`, `memory_store`, `memory_forget`, `memory_dream`, `memory_stats` (MCP server) + `memory_update`, `memory_list` (plugin) + `document_search` — 5 MCP tools, 7 total via plugin
 - **Hybrid retrieval**: z-score fusion (vector + BM25), max-sim chunked embedding
 - **Cross-encoder reranking**: configurable (Jina / SiliconFlow / Voyage / Pinecone shapes). Default off; enable via config when running against an instruction-capable reranker like Qwen3-Reranker-0.6B.
 - **Transient-failure retry**: embedder and reranker clients both retry on 502/503/504/timeouts with exponential backoff (`src/transient-retry.ts`), so inference-server crashes never propagate to callers as failed recalls.
@@ -157,10 +157,24 @@ Add to your OpenClaw config:
 }
 ```
 
+## Debugging
+
+When recall quality looks off and you need to see *what actually got injected* into the prompt this turn — not just what the retriever returned — set `MEMEX_DEBUG_RECALL`:
+
+```bash
+# Default location: $TMPDIR/memex-debug-recall/
+MEMEX_DEBUG_RECALL=1 openclaw gateway
+
+# Custom path:
+MEMEX_DEBUG_RECALL=/var/log/memex-debug openclaw gateway
+```
+
+Each auto-recall turn writes a JSON snapshot containing the formatted text that was prepended to the prompt plus per-item metadata (id, score, source, category, scope). Disabled by default — zero overhead when off.
+
 ## Development
 
 ```bash
-# Run tests (~680)
+# Run tests (~892)
 node --import jiti/register --test tests/*.test.ts
 
 # Run benchmarks
@@ -183,17 +197,26 @@ systemctl --user restart openclaw-gateway
 ```
 memex (kind: "memory")
 ├── SQLite (FTS5 + sqlite-vec)
-│   ├── memories — recall, store, forget
+│   ├── memories — recall, store, forget, dream
+│   ├── memory_scopes — multi-valued scope tags per memory
 │   ├── documents — markdown chunking, dual-granularity FTS
 │   └── vectors_vec — shared vector store
+├── Scope Derivation
+│   ├── Server-authoritative tag derivation (src/scope-derive.ts)
+│   └── Tag-intersection recall filter (src/scopes.ts)
 ├── Unified Retriever
 │   ├── Z-score fusion (0.8 vec + 0.2 BM25)
 │   ├── Max-sim chunked embedding
 │   ├── Cross-encoder reranking (optional)
+│   ├── Tag-intersection scoping
 │   ├── In-turn recall cache (per-agent-turn dedup)
 │   ├── Rerank-failure fallback → hybrid fusion ranking unchanged (not cosine)
 │   ├── Time decay + importance weighting
 │   └── Source diversity guarantee
+├── Dreaming (src/dreaming.ts)
+│   ├── Light sweep (dedup + noise removal)
+│   ├── Deep sweep (re-scoring)
+│   └── Reflection (LLM synthesis, contradiction detection)
 ├── Embedding + Rerank Clients
 │   ├── OpenAI-compatible HTTP client
 │   ├── LRU cache (256 entries, 30min TTL)

@@ -19,6 +19,8 @@ import { identifyNoiseEntries } from "./src/noise-filter.js";
 import { UnifiedRecall } from "./src/unified-recall.js";
 import { UnifiedRetriever } from "./src/unified-retriever.js";
 import { createMemoryCLI } from "./src/cli.js";
+import { mergeAgentLists } from "./src/agent-merge.js";
+import { writeDebugRecall, buildPayloadFromUnifiedRecall, buildPayloadFromMemoryOnly, resolveDebugDir, } from "./src/debug-recall.js";
 // Import search components
 import { initializeLLM, disposeDefaultLlamaCpp } from "./src/llm.js";
 import { createStore as createSearchStore, getStatus as getDocumentIndexStatus, hybridQuery as searchHybridQuery, searchFTS, } from "./src/search.js";
@@ -844,6 +846,7 @@ const memoryUnifiedPlugin = {
                     }
                 }
             };
+            validateAgentList(config.memoryAgents, "memoryAgents");
             validateAgentList(config.autoRecallAgents, "autoRecallAgents");
             validateAgentList(config.autoCaptureAgents, "autoCaptureAgents");
         }
@@ -1024,6 +1027,16 @@ const memoryUnifiedPlugin = {
                                 }
                             })
                                 .join("\n");
+                            // Debug capture (issue #23) — fire-and-forget when MEMEX_DEBUG_RECALL is set
+                            if (resolveDebugDir()) {
+                                writeDebugRecall(buildPayloadFromUnifiedRecall({
+                                    agentId,
+                                    sessionId: sessionKeyForCache ?? null,
+                                    query: recallQuery,
+                                    injectedContext: memoryContext,
+                                    results: results,
+                                })).catch(() => { });
+                            }
                         }
                         else {
                             const results = await retriever.retrieve({
@@ -1041,6 +1054,16 @@ const memoryUnifiedPlugin = {
                             memoryContext = results
                                 .map((r) => `- [mem:${String(r.entry.id).slice(0, 8)} · ${r.entry.category} · ${r.entry.scope}] ${sanitizeForContext(r.entry.text)} (${(r.score * 100).toFixed(0)}%${r.sources?.bm25 ? ', vector+BM25' : ''}${r.sources?.reranked ? '+reranked' : ''})`)
                                 .join("\n");
+                            // Debug capture (issue #23) — memory-only fallback path
+                            if (resolveDebugDir()) {
+                                writeDebugRecall(buildPayloadFromMemoryOnly({
+                                    agentId,
+                                    sessionId: sessionKeyForCache ?? null,
+                                    query: recallQuery,
+                                    injectedContext: memoryContext,
+                                    results,
+                                })).catch(() => { });
+                            }
                         }
                         // Record recalled IDs for cross-turn diversity
                         if (recalledIds.length > 0) {
@@ -1521,12 +1544,14 @@ function parsePluginConfig(value) {
         },
         dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : undefined,
         autoRecall: cfg.autoRecall !== false,
-        autoRecallAgents: Array.isArray(cfg.autoRecallAgents) ? cfg.autoRecallAgents : undefined,
+        // memoryAgents unifies both lists. If old autoRecallAgents / autoCaptureAgents
+        // are also present, union them (legacy keys never restrict access).
+        autoRecallAgents: mergeAgentLists(cfg.memoryAgents, cfg.autoRecallAgents),
         autoRecallLimit: parsePositiveInt(cfg.autoRecallLimit),
         autoRecallMinLength: parsePositiveInt(cfg.autoRecallMinLength),
         autoRecallDocFilter: cfg.autoRecallDocFilter !== false,
         autoCapture: cfg.autoCapture !== false,
-        autoCaptureAgents: Array.isArray(cfg.autoCaptureAgents) ? cfg.autoCaptureAgents : undefined,
+        autoCaptureAgents: mergeAgentLists(cfg.memoryAgents, cfg.autoCaptureAgents),
         autoFixNoise: cfg.autoFixNoise === true,
         retrieval: typeof cfg.retrieval === "object" && cfg.retrieval !== null ? cfg.retrieval : undefined,
         scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes : undefined,
