@@ -89,14 +89,14 @@ Query expansion (HyDE) uses LLM generation via the chat endpoint:
 ```json
 {
   "embedding": {
-    "baseURL": "http://localhost:8090/v1",
+    "baseURL": "http://localhost:<port>/v1",
     "apiKey": "unused",
     "model": "Qwen3-Embedding-4B-Q8_0",
     "dimensions": 2560
   },
   "reranker": {
     "enabled": true,
-    "endpoint": "http://localhost:8090/v1/rerank",
+    "endpoint": "http://localhost:<port>/v1/rerank",
     "apiKey": "unused",
     "model": "bge-reranker-v2-m3-Q8_0",
     "provider": "jina"
@@ -151,12 +151,12 @@ Embedding and reranker models are hot-swappable via config. Switching is a `base
 
 ## Local Inference
 
-**Running:** llama-swap v197 on port 8090, launchd `com.openclaw.llama-swap`
+**Running:** <model-server> on <port>, managed by a service unit
 - Qwen3-Embedding-4B-Q8_0 — embedding, 2560 dims (configurable)
 - bge-reranker-v2-m3-Q8_0 (606MB) — reranking
 - Qwen3-0.6B-Instruct-Q8_0 (767MB) — chat/query expansion
 
-**Config:** `~/etc/llama-swap.yaml`
+**Config:** `<config-path>`
 - `groups.inference.swap: false` — keeps all 3 models loaded simultaneously
 - `--batch-size 8192 --ubatch-size 8192` on embedding + reranker (avoids "too large to process")
 - Dynamic ports via `${PORT}` macro (5800, 5801, 5802)

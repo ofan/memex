@@ -1,0 +1,25 @@
+# Keep the build context small and keep secrets/DBs out of the image.
+**/node_modules
+**/dist
+.git
+.github
+.claude
+.mcp.json
+tests
+docs
+.worktrees
+.githooks
+
+# Local secrets + state — never bake into the image.
+memex.env
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-journal
+**/*.lance
+
+# Logs + caches.
+**/*.log
+**/monitor-report.log
+tests/.cache
+**/.DS_Store

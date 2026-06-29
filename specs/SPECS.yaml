@@ -1,0 +1,14 @@
+version: 1
+focused: null
+status_vocabulary:
+  - draft
+  - implementing
+  - audit_running
+  - completed
+commands:
+  focus: /spec-focus <spec-id-or-path>
+  unfocus: /spec-unfocus
+  status: /spec-status [spec-id-or-path]
+  finish: /spec-finish [spec-id-or-path]
+  settings: /specs-settings
+specs:

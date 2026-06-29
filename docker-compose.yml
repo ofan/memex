@@ -1,0 +1,43 @@
+# Memex MCP daemon — reference deployment.
+#
+# Tailscale strategy: host networking. The container shares the host's tailnet
+# interface, so it can reach the embed server + llm-proxy over Tailscale and
+# serve HTTP on the tailnet at <host>:${MEMEX_HTTP_PORT} with no sidecar.
+# (Linux only. On macOS or locked-down hosts, use the Tailscale sidecar pattern
+# documented in docs/deploy/container.md instead.)
+#
+# Up:    docker compose up -d
+# Logs:  docker compose logs -f memex
+# Down:  docker compose down   (add -v to wipe the DB volume)
+
+services:
+  memex:
+    build: .
+    image: memex-daemon:0.7
+    container_name: memex-daemon
+    restart: unless-stopped
+
+    # Host networking: the daemon binds ${MEMEX_HTTP_PORT} directly on the host.
+    # (With host networking, `ports:` is intentionally omitted.)
+    network_mode: host
+
+    # Runtime config lives in ./memex.env (gitignored). Copy memex.env.example.
+    # If the file is absent, compose skips it and the daemon runs BM25-only.
+    env_file:
+      - path: ./memex.env
+        required: false
+
+    environment:
+      MEMEX_HTTP_HOST: "0.0.0.0"   # bind all interfaces so it's reachable via the host
+      MEMEX_HTTP_PORT: "8000"
+      MEMEX_DB_PATH: /data/memex.sqlite
+
+    volumes:
+      - memex-data:/data
+
+    # Hardening: the daemon needs no Linux capabilities.
+    cap_drop:
+      - ALL
+
+volumes:
+  memex-data:

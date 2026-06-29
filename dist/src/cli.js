@@ -2,6 +2,7 @@
  * CLI Commands for Memory Management
  */
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { identifyNoiseEntries } from "./noise-filter.js";
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./doc-indexer.js";
@@ -421,8 +422,7 @@ export function registerMemoryCLI(program, context) {
             }
             const { indexSessions } = await import("./session-indexer.js");
             const { join } = await import("node:path");
-            const home = process.env.HOME || "/home/ubuntu";
-            const sessionsDir = join(home, ".openclaw", "agents", options.agent, "sessions");
+            const sessionsDir = join(homedir(), ".openclaw", "agents", options.agent, "sessions");
             // Handle --fresh: wipe session-imported memories first
             if (options.fresh) {
                 const allMemories = await context.store.list(undefined, undefined, 10000, 0);
@@ -465,7 +465,7 @@ export function registerMemoryCLI(program, context) {
             // Determine which session directories to import
             const agentsDirs = [];
             if (options.allAgents) {
-                const agentsRoot = join(home, ".openclaw", "agents");
+                const agentsRoot = join(homedir(), ".openclaw", "agents");
                 const { readdirSync, existsSync } = await import("node:fs");
                 if (existsSync(agentsRoot)) {
                     for (const entry of readdirSync(agentsRoot, { withFileTypes: true })) {

@@ -42,7 +42,7 @@ import type { RetrievalConfig } from "../src/retriever.js";
 import { chunkDocument } from "../src/chunker.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
@@ -52,7 +52,7 @@ import { fileURLToPath } from "node:url";
 
 const DATA_FILE =
   process.env.LONGMEMEVAL_DATA ||
-  "/home/ubuntu/projects/LongMemEval/data/longmemeval_s_cleaned.json";
+  join(homedir(), "projects", "LongMemEval", "data", "longmemeval_s_cleaned.json");
 const SAMPLE_SIZE = parseInt(process.env.LONGMEMEVAL_SAMPLE || "50");  // tuning knob
 const K = 10;
 const USE_VECTORS = process.env.LONGMEMEVAL_VECTORS !== "false"; // default: true

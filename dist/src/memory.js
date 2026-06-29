@@ -186,10 +186,68 @@ export class MemoryStore {
                 update.run(hash, row.id);
             }
         }
+        // Drop the old UNIQUE index on text_hash — dedup is now scope-aware via dedup_hash.
+        // text_hash (sha256(text) only) is kept for dreaming but is no longer UNIQUE.
         try {
-            this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
+            this.db.exec(`DROP INDEX IF EXISTS idx_memories_text_hash`);
         }
-        catch { /* index may already exist or duplicates prevent creation */ }
+        catch { /* index may not exist */ }
+        // Create non-unique index for text_hash lookups (dreaming, etc.)
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_text_hash ON memories(text_hash)`);
+        // Scope-aware dedup hash: sha256(text + '\x00' + sorted scope tags)
+        this.migrateAddColumn("memories", "dedup_hash", "TEXT");
+        // Backfill dedup_hash for existing entries (idempotent — only touches NULLs)
+        const nullDedup = this.db.prepare("SELECT COUNT(*) as c FROM memories WHERE dedup_hash IS NULL").get();
+        if (nullDedup.c > 0) {
+            const rows = this.db.prepare(`
+        SELECT m.id, m.text, GROUP_CONCAT(ms.scope, ',') as scope_tags
+        FROM memories m
+        LEFT JOIN memory_scopes ms ON ms.memory_id = m.id
+        WHERE m.dedup_hash IS NULL
+        GROUP BY m.id
+      `).all();
+            const update = this.db.prepare("UPDATE memories SET dedup_hash = ? WHERE id = ?");
+            for (const row of rows) {
+                const tags = row.scope_tags
+                    ? [...new Set(row.scope_tags.split(','))].sort().join(',')
+                    : "global";
+                const dedup = createHash("sha256")
+                    .update(row.text.trim())
+                    .update('\x00')
+                    .update(tags)
+                    .digest("hex");
+                update.run(dedup, row.id);
+            }
+        }
+        // Deduplicate before creating the UNIQUE index on dedup_hash.
+        // If pre-existing (text, scope_set) duplicates exist (e.g. from a prior
+        // version that allowed them), keep only the newest entry per group.
+        try {
+            const dupes = this.db.prepare(`
+        SELECT dedup_hash, COUNT(*) as cnt
+        FROM memories
+        WHERE dedup_hash IS NOT NULL
+        GROUP BY dedup_hash
+        HAVING COUNT(*) > 1
+      `).all();
+            if (dupes.length > 0) {
+                const getRows = this.db.prepare("SELECT id, timestamp FROM memories WHERE dedup_hash = ? ORDER BY timestamp DESC");
+                const deleteRow = this.db.prepare("DELETE FROM memories WHERE id = ?");
+                for (const dupe of dupes) {
+                    const rows = getRows.all(dupe.dedup_hash);
+                    // Keep the newest (first row), delete the rest
+                    for (let i = 1; i < rows.length; i++) {
+                        deleteRow.run(rows[i].id);
+                    }
+                }
+            }
+            this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_dedup_hash ON memories(dedup_hash)`);
+        }
+        catch (err) {
+            // Don't swallow silently — a persistent failure here means the constraint
+            // is missing and scope-aware dedup won't be enforced at the DB level.
+            console.warn("Failed to create UNIQUE index idx_memories_dedup_hash:", err?.message ?? err);
+        }
         // Entity backfill for entries missing entities in metadata
         this.backfillEntities();
         // Entity graph (memory links)
@@ -232,6 +290,17 @@ export class MemoryStore {
         embedded_at TEXT NOT NULL
       )
     `);
+        // Multi-valued scope tags (supersedes single memories.scope column)
+        this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_scopes (
+        memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+        scope TEXT NOT NULL,
+        PRIMARY KEY (memory_id, scope)
+      )
+    `);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_scopes_scope ON memory_scopes(scope)`);
+        // Migration: backfill one 'global' tag per existing memory
+        this.backfillMemoryScopes();
         // Create sqlite-vec virtual table
         if (this._sqliteVecAvailable) {
             this.ensureVecTable();
@@ -283,11 +352,25 @@ export class MemoryStore {
             && (text.match(/^\[/gm) || []).length <= 2; // single-turn: at most 2 role tags
         if (isConversationFragment)
             return null;
-        // Guard: reject exact text duplicates
+        // Guard: reject exact text duplicates (scope-aware: text + canonical scope set)
         const textHash = createHash("sha256").update(text).digest("hex");
-        const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+        const canonicalTags = entry.scopes && entry.scopes.length > 0
+            ? [...new Set(entry.scopes)].sort()
+            : [entry.scope || "global"];
+        const dedupHash = createHash("sha256")
+            .update(text)
+            .update('\x00')
+            .update(canonicalTags.join(','))
+            .digest("hex");
+        const existing = this.db.prepare("SELECT id FROM memories WHERE dedup_hash = ?").get(dedupHash);
         if (existing)
             return null;
+        // Guard: reject `device:` prefix in scope tags (device is metadata-only)
+        for (const tag of canonicalTags) {
+            if (tag.startsWith("device:")) {
+                throw new Error(`"device:" is not a valid scope tag (device is metadata-only)`);
+            }
+        }
         // Extract entities and merge into metadata
         const entities = extractEntities(text);
         let meta = {};
@@ -302,8 +385,9 @@ export class MemoryStore {
             id: randomUUID(),
             timestamp: entry.timestamp ?? Date.now(),
             metadata: JSON.stringify(meta),
+            scopes: canonicalTags,
         };
-        this.insertMemory(fullEntry, textHash);
+        this.insertMemory(fullEntry, textHash, dedupHash);
         // Create entity graph links
         if (entities.length >= 2) {
             try {
@@ -314,7 +398,7 @@ export class MemoryStore {
         return fullEntry;
     }
     async bulkStore(entries) {
-        // Filter: reject conversation fragments and dedup by text hash
+        // Filter: reject conversation fragments and dedup by scope-aware hash
         const seenHashes = new Set();
         const filtered = [];
         for (const entry of entries) {
@@ -326,14 +410,22 @@ export class MemoryStore {
             if (isFragment)
                 continue;
             const textHash = createHash("sha256").update(text).digest("hex");
-            if (seenHashes.has(textHash))
+            const canonicalTags = entry.scopes && entry.scopes.length > 0
+                ? [...new Set(entry.scopes)].sort()
+                : [entry.scope || "global"];
+            const dedupHash = createHash("sha256")
+                .update(text)
+                .update('\x00')
+                .update(canonicalTags.join(','))
+                .digest("hex");
+            if (seenHashes.has(dedupHash))
                 continue;
-            // Check DB for existing hash
-            const existing = this.db.prepare("SELECT id FROM memories WHERE text_hash = ?").get(textHash);
+            // Check DB for existing scope-aware hash
+            const existing = this.db.prepare("SELECT id FROM memories WHERE dedup_hash = ?").get(dedupHash);
             if (existing)
                 continue;
-            seenHashes.add(textHash);
-            filtered.push({ entry: { ...entry, text }, textHash });
+            seenHashes.add(dedupHash);
+            filtered.push({ entry: { ...entry, text, scopes: canonicalTags }, textHash, dedupHash, canonicalTags });
         }
         if (filtered.length === 0)
             return [];
@@ -343,10 +435,11 @@ export class MemoryStore {
             timestamp: Date.now(),
             metadata: entry.metadata || "{}",
         }));
-        const hashes = filtered.map(f => f.textHash);
+        const textHashes = filtered.map(f => f.textHash);
+        const dedupHashes = filtered.map(f => f.dedupHash);
         const insertMem = this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash, dedup_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         const insertVec = this._sqliteVecAvailable
             ? this.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`)
@@ -358,7 +451,12 @@ export class MemoryStore {
             const now = new Date().toISOString();
             for (let i = 0; i < fullEntries.length; i++) {
                 const entry = fullEntries[i];
-                insertMem.run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata, hashes[i]);
+                insertMem.run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata, textHashes[i], dedupHashes[i]);
+                // Write scope tags via writeScopeTags (validates device: prefix)
+                const tags = entry.scopes && entry.scopes.length > 0
+                    ? entry.scopes
+                    : [entry.scope || "global"];
+                this.writeScopeTags(entry.id, tags);
                 if (insertVec) {
                     insertVec.run(`mem_${entry.id}`, new Float32Array(entry.vector));
                 }
@@ -423,17 +521,16 @@ export class MemoryStore {
                 bestPerMemory.set(memId, r.distance);
             }
         }
-        // Step 3: Look up memory entries
+        // Step 3: Look up memory entries, filtered by tag-intersection on memory_scopes
         const ids = [...bestPerMemory.keys()];
-        const placeholders = ids.map(() => '?').join(',');
-        let sql = `SELECT id, text, category, scope, importance, timestamp, metadata FROM memories WHERE id IN (${placeholders})`;
+        const idPlaceholders = ids.map(() => '?').join(',');
+        const conditions = [`m.id IN (${idPlaceholders})`];
         const params = [...ids];
-        if (scopeFilter && scopeFilter.length > 0) {
-            const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-            sql += ` AND scope IN (${scopePlaceholders})`;
-            params.push(...scopeFilter);
-        }
+        this.addScopeFilter(conditions, params, scopeFilter, "m");
+        const sql = `SELECT m.id, m.text, m.category, m.scope, m.importance, m.timestamp, m.metadata FROM memories m WHERE ${conditions.join(" AND ")}`;
         const rows = this.db.prepare(sql).all(...params);
+        // Batch-fetch scope tags from memory_scopes for all returned entries
+        const scopesMap = this.fetchScopesForIds(rows.map((r) => r.id));
         const mapped = [];
         for (const row of rows) {
             const distance = bestPerMemory.get(row.id) ?? 0;
@@ -447,6 +544,7 @@ export class MemoryStore {
                     vector: [], // Don't return full vector for search results
                     category: row.category,
                     scope: row.scope,
+                    scopes: scopesMap.get(row.id) || [row.scope || "global"],
                     importance: row.importance,
                     timestamp: row.timestamp,
                     metadata: row.metadata || "{}",
@@ -464,23 +562,22 @@ export class MemoryStore {
         if (!ftsQuery)
             return [];
         try {
-            // Query FTS table and join with memories
+            // Query FTS table and join with memories, filtered by tag-intersection on memory_scopes
+            const conditions = ["memories_fts MATCH ?"];
+            const params = [ftsQuery];
+            this.addScopeFilter(conditions, params, scopeFilter, "m");
             let sql = `
         SELECT m.id, m.text, m.category, m.scope, m.importance, m.timestamp, m.metadata,
                bm25(memories_fts) as bm25_score
         FROM memories_fts f
         JOIN memories m ON m.rowid = f.rowid
-        WHERE memories_fts MATCH ?
+        WHERE ${conditions.join(" AND ")}
       `;
-            const params = [ftsQuery];
-            if (scopeFilter && scopeFilter.length > 0) {
-                const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-                sql += ` AND m.scope IN (${scopePlaceholders})`;
-                params.push(...scopeFilter);
-            }
             sql += ` LIMIT ?`;
             params.push(safeLimit);
             const rows = this.db.prepare(sql).all(...params);
+            // Batch-fetch scope tags from memory_scopes for all returned entries
+            const scopesMap = this.fetchScopesForIds(rows.map((r) => r.id));
             const mapped = [];
             for (const row of rows) {
                 // BM25 returns negative scores (lower = better match).
@@ -494,6 +591,7 @@ export class MemoryStore {
                         vector: [],
                         category: row.category,
                         scope: row.scope,
+                        scopes: scopesMap.get(row.id) || [row.scope || "global"],
                         importance: row.importance,
                         timestamp: row.timestamp,
                         metadata: row.metadata || "{}",
@@ -531,9 +629,8 @@ export class MemoryStore {
         }
         if (!row)
             return null;
-        const rowScope = row.scope ?? "global";
-        // Check scope permissions
-        if (scopeFilter && scopeFilter.length > 0 && !scopeFilter.includes(rowScope)) {
+        // Check scope permissions against memory_scopes (tag-intersection)
+        if (scopeFilter && scopeFilter.length > 0 && !this.memoryInScope(row.id, scopeFilter)) {
             throw new Error(`Memory ${id} is outside accessible scopes`);
         }
         // Build updated entry
@@ -546,6 +643,22 @@ export class MemoryStore {
       SET text = ?, category = ?, importance = ?, metadata = ?
       WHERE id = ?
     `).run(updatedText, updatedCategory, updatedImportance, updatedMetadata, row.id);
+        // Recompute dedup_hash and text_hash when text changes.
+        // Bug C fix: Before this fix, update() did not recompute these hashes,
+        // so the dedup_hash stayed stale and the UNIQUE index on dedup_hash
+        // became inconsistent with the actual (text, scopes) pair.
+        if (updates.text) {
+            const newTextHash = createHash("sha256").update(updatedText.trim()).digest("hex");
+            // Load scope tags from memory_scopes for the scope-aware dedup hash
+            const scopeTagRows = this.db.prepare("SELECT scope FROM memory_scopes WHERE memory_id = ? ORDER BY scope").all(row.id);
+            const canonicalTags = scopeTagRows.map(r => r.scope);
+            const newDedupHash = createHash("sha256")
+                .update(updatedText.trim())
+                .update('\x00')
+                .update(canonicalTags.join(','))
+                .digest("hex");
+            this.db.prepare("UPDATE memories SET dedup_hash = ?, text_hash = ? WHERE id = ?").run(newDedupHash, newTextHash, row.id);
+        }
         // Re-insert vector if changed — also clean up any chunk vectors
         if (updates.vector && this._sqliteVecAvailable) {
             this.db.prepare(`DELETE FROM vectors_vec WHERE hash_seq = ?`).run(`mem_${row.id}`);
@@ -557,12 +670,15 @@ export class MemoryStore {
         if (updates.vector) {
             resultVector = updates.vector;
         }
+        // Fetch scope tags from memory_scopes for the updated entry
+        const scopeTags = this.fetchScopesForIds([row.id]).get(row.id) || [row.scope ?? "global"];
         const updated = {
             id: row.id,
             text: updatedText,
             vector: resultVector,
             category: updatedCategory,
-            scope: rowScope,
+            scope: row.scope ?? "global",
+            scopes: scopeTags,
             importance: updatedImportance,
             timestamp: row.timestamp,
             metadata: updatedMetadata,
@@ -589,27 +705,24 @@ export class MemoryStore {
             throw new Error(`Invalid memory ID format: ${id}`);
         }
         let resolvedId;
-        let rowScope;
         if (isFullId) {
-            const row = this.db.prepare(`SELECT id, scope FROM memories WHERE id = ?`).get(id);
+            const row = this.db.prepare(`SELECT id FROM memories WHERE id = ?`).get(id);
             if (!row)
                 return false;
             resolvedId = row.id;
-            rowScope = row.scope ?? "global";
         }
         else {
             // Prefix match
-            const candidates = this.db.prepare(`SELECT id, scope FROM memories WHERE id LIKE ?`).all(`${id}%`);
+            const candidates = this.db.prepare(`SELECT id FROM memories WHERE id LIKE ?`).all(`${id}%`);
             if (candidates.length > 1) {
                 throw new Error(`Ambiguous prefix "${id}" matches ${candidates.length} memories. Use a longer prefix or full ID.`);
             }
             if (candidates.length === 0)
                 return false;
             resolvedId = candidates[0].id;
-            rowScope = candidates[0].scope ?? "global";
         }
-        // Check scope permissions
-        if (scopeFilter && scopeFilter.length > 0 && !scopeFilter.includes(rowScope)) {
+        // Check scope permissions against memory_scopes (tag-intersection)
+        if (scopeFilter && scopeFilter.length > 0 && !this.memoryInScope(resolvedId, scopeFilter)) {
             throw new Error(`Memory ${resolvedId} is outside accessible scopes`);
         }
         // Delete from memories (CASCADE handles memory_vectors)
@@ -629,13 +742,9 @@ export class MemoryStore {
     async bulkDelete(scopeFilter, beforeTimestamp) {
         const conditions = [];
         const params = [];
-        if (scopeFilter.length > 0) {
-            const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-            conditions.push(`scope IN (${scopePlaceholders})`);
-            params.push(...scopeFilter);
-        }
+        this.addScopeFilter(conditions, params, scopeFilter, "m");
         if (beforeTimestamp) {
-            conditions.push(`timestamp < ?`);
+            conditions.push(`m.timestamp < ?`);
             params.push(beforeTimestamp);
         }
         if (conditions.length === 0) {
@@ -643,11 +752,12 @@ export class MemoryStore {
         }
         const whereClause = conditions.join(" AND ");
         // Get IDs to delete (for vector cleanup)
-        const rows = this.db.prepare(`SELECT id FROM memories WHERE ${whereClause}`).all(...params);
+        const rows = this.db.prepare(`SELECT m.id FROM memories m WHERE ${whereClause}`).all(...params);
         if (rows.length === 0)
             return 0;
-        // Delete memories (CASCADE handles memory_vectors)
-        this.db.prepare(`DELETE FROM memories WHERE ${whereClause}`).run(...params);
+        // Delete memories by IDs (CASCADE handles memory_vectors + memory_scopes)
+        const idPlaceholders = rows.map(() => "?").join(",");
+        this.db.prepare(`DELETE FROM memories WHERE id IN (${idPlaceholders})`).run(...rows.map(r => r.id));
         // Delete corresponding vectors (primary + chunks)
         if (this._sqliteVecAvailable) {
             for (const row of rows) {
@@ -660,28 +770,27 @@ export class MemoryStore {
     async list(scopeFilter, category, limit = 20, offset = 0) {
         const conditions = [];
         const params = [];
-        if (scopeFilter && scopeFilter.length > 0) {
-            const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-            conditions.push(`scope IN (${scopePlaceholders})`);
-            params.push(...scopeFilter);
-        }
+        this.addScopeFilter(conditions, params, scopeFilter, "m");
         if (category) {
-            conditions.push(`category = ?`);
+            conditions.push(`m.category = ?`);
             params.push(category);
         }
-        let sql = `SELECT id, text, category, scope, importance, timestamp, metadata FROM memories`;
+        let sql = `SELECT m.id, m.text, m.category, m.scope, m.importance, m.timestamp, m.metadata FROM memories m`;
         if (conditions.length > 0) {
             sql += ` WHERE ${conditions.join(" AND ")}`;
         }
-        sql += ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+        sql += ` ORDER BY m.timestamp DESC LIMIT ? OFFSET ?`;
         params.push(limit, offset);
         const rows = this.db.prepare(sql).all(...params);
+        // Batch-fetch scope tags from memory_scopes for all returned entries
+        const scopesMap = this.fetchScopesForIds(rows.map((r) => r.id));
         return rows.map((row) => ({
             id: row.id,
             text: row.text,
             vector: [], // Don't include vectors in list results for performance
             category: row.category,
             scope: row.scope ?? "global",
+            scopes: scopesMap.get(row.id) || [row.scope ?? "global"],
             importance: row.importance,
             timestamp: row.timestamp,
             metadata: row.metadata || "{}",
@@ -690,25 +799,46 @@ export class MemoryStore {
     async stats(scopeFilter) {
         const conditions = [];
         const params = [];
-        if (scopeFilter && scopeFilter.length > 0) {
-            const scopePlaceholders = scopeFilter.map(() => '?').join(',');
-            conditions.push(`scope IN (${scopePlaceholders})`);
-            params.push(...scopeFilter);
-        }
-        let sql = `SELECT scope, category, metadata FROM memories`;
+        this.addScopeFilter(conditions, params, scopeFilter, "m");
+        // Total count from filtered memories
+        let countSql = `SELECT COUNT(*) as c FROM memories m`;
         if (conditions.length > 0) {
-            sql += ` WHERE ${conditions.join(" AND ")}`;
+            countSql += ` WHERE ${conditions.join(" AND ")}`;
         }
-        const rows = this.db.prepare(sql).all(...params);
+        const totalCount = this.db.prepare(countSql).get(...params).c;
+        // Scope counts aggregated from memory_scopes (authoritative), not m.scope (legacy).
+        let scopeCountsSql;
+        let scopeCountsParams;
+        if (conditions.length > 0) {
+            scopeCountsSql = `
+        SELECT ms.scope, COUNT(*) as cnt
+        FROM memory_scopes ms
+        JOIN memories m ON m.id = ms.memory_id
+        WHERE ${conditions.join(" AND ")}
+        GROUP BY ms.scope
+      `;
+            scopeCountsParams = params;
+        }
+        else {
+            scopeCountsSql = `SELECT scope, COUNT(*) as cnt FROM memory_scopes GROUP BY scope`;
+            scopeCountsParams = [];
+        }
+        const scopeRows = this.db.prepare(scopeCountsSql).all(...scopeCountsParams);
         const scopeCounts = {};
+        for (const row of scopeRows) {
+            scopeCounts[row.scope] = row.cnt;
+        }
+        // Category and source breakdown from memories
+        let metaSql = `SELECT m.category, m.metadata FROM memories m`;
+        if (conditions.length > 0) {
+            metaSql += ` WHERE ${conditions.join(" AND ")}`;
+        }
+        const metaRows = this.db.prepare(metaSql).all(...params);
         const categoryCounts = {};
         const sourceCounts = {};
-        for (const row of rows) {
-            const scope = row.scope ?? "global";
+        for (const row of metaRows) {
             const category = row.category;
-            scopeCounts[scope] = (scopeCounts[scope] || 0) + 1;
             categoryCounts[category] = (categoryCounts[category] || 0) + 1;
-            // Source breakdown from metadata
             try {
                 const meta = JSON.parse(row.metadata || "{}");
                 const source = meta.source || "unknown";
@@ -719,7 +849,7 @@ export class MemoryStore {
             }
         }
         return {
-            totalCount: rows.length,
+            totalCount,
             scopeCounts,
             categoryCounts,
             sourceCounts,
@@ -856,18 +986,33 @@ export class MemoryStore {
     }
     /** Store a memory with pre-computed chunk vectors (for long text). */
     async storeWithChunks(entry) {
+        // Canonicalize scope tags
+        const canonicalTags = entry.scopes && entry.scopes.length > 0
+            ? [...new Set(entry.scopes)].sort()
+            : [entry.scope || "global"];
+        const text = (entry.text || "").trim();
+        const textHash = createHash("sha256").update(text).digest("hex");
+        const dedupHash = createHash("sha256")
+            .update(text)
+            .update('\x00')
+            .update(canonicalTags.join(','))
+            .digest("hex");
         const fullEntry = {
             ...entry,
+            text,
             id: randomUUID(),
             timestamp: Date.now(),
             vector: entry.chunkVectors[0] || [],
             metadata: entry.metadata || "{}",
+            scopes: canonicalTags,
         };
-        // Insert memory row
+        // Insert memory row with scope-aware dedup hash
         this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(fullEntry.id, fullEntry.text, fullEntry.category, fullEntry.scope, fullEntry.importance, fullEntry.timestamp, fullEntry.metadata);
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash, dedup_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(fullEntry.id, fullEntry.text, fullEntry.category, fullEntry.scope, fullEntry.importance, fullEntry.timestamp, fullEntry.metadata, textHash, dedupHash);
+        // Write scope tags via writeScopeTags (validates device: prefix)
+        this.writeScopeTags(fullEntry.id, canonicalTags);
         // Insert chunk vectors
         if (this._sqliteVecAvailable) {
             for (let i = 0; i < entry.chunkVectors.length; i++) {
@@ -929,21 +1074,109 @@ export class MemoryStore {
         }
         catch { /* best effort */ }
     }
+    /** Backfill memory_scopes with 'global' tag for any memory that has no scope rows yet. */
+    backfillMemoryScopes() {
+        try {
+            const missing = this.db.prepare(`
+        SELECT m.id FROM memories m
+        WHERE NOT EXISTS (SELECT 1 FROM memory_scopes ms WHERE ms.memory_id = m.id)
+      `).all();
+            if (missing.length === 0)
+                return;
+            const insert = this.db.prepare("INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, 'global')");
+            for (const row of missing) {
+                insert.run(row.id);
+            }
+        }
+        catch { /* best effort */ }
+    }
     // ========================================================================
     // Private helpers
     // ========================================================================
-    insertMemory(entry, textHash) {
+    insertMemory(entry, textHash, dedupHash) {
         const hash = textHash || createHash("sha256").update(entry.text.trim()).digest("hex");
+        const dedup = dedupHash || createHash("sha256")
+            .update(entry.text.trim())
+            .update('\x00')
+            .update((entry.scopes && entry.scopes.length > 0
+            ? [...new Set(entry.scopes)].sort()
+            : [entry.scope || "global"]).join(','))
+            .digest("hex");
         this.db.prepare(`
-      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata, hash);
+      INSERT INTO memories (id, text, category, scope, importance, timestamp, metadata, text_hash, dedup_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(entry.id, entry.text, entry.category, entry.scope, entry.importance, entry.timestamp, entry.metadata, hash, dedup);
+        // Write scope tags to memory_scopes (source of truth for multi-valued tags).
+        // The old `memories.scope` column is kept for backward compatibility but
+        // memory_scopes is authoritative.
+        const tagList = entry.scopes && entry.scopes.length > 0
+            ? entry.scopes
+            : [entry.scope || "global"];
+        this.writeScopeTags(entry.id, tagList);
         // Insert vector
         if (this._sqliteVecAvailable && entry.vector.length > 0) {
             this.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`).run(`mem_${entry.id}`, new Float32Array(entry.vector));
         }
         // Insert mapping
         this.db.prepare(`INSERT INTO memory_vectors (memory_id, embedded_at) VALUES (?, ?)`).run(entry.id, new Date().toISOString());
+    }
+    /**
+     * Append a scope-filter EXISTS clause to a WHERE condition list.
+     * Uses tag-intersection against `memory_scopes` (the authoritative source).
+     * scopeFilter is a set of scope tags — a memory matches if it has ANY of them.
+     */
+    addScopeFilter(conditions, params, scopeFilter, alias) {
+        if (!scopeFilter || scopeFilter.length === 0)
+            return;
+        const placeholders = scopeFilter.map(() => "?").join(",");
+        conditions.push(`EXISTS (SELECT 1 FROM memory_scopes ms WHERE ms.memory_id = ${alias}.id AND ms.scope IN (${placeholders}))`);
+        params.push(...scopeFilter);
+    }
+    /**
+     * Check whether a memory has a scope tag in the given filter set.
+     * Used for permission checks in update/delete.
+     */
+    memoryInScope(memoryId, scopeFilter) {
+        if (scopeFilter.length === 0)
+            return true;
+        const placeholders = scopeFilter.map(() => "?").join(",");
+        const row = this.db.prepare(`SELECT 1 FROM memory_scopes WHERE memory_id = ? AND scope IN (${placeholders})`).get(memoryId, ...scopeFilter);
+        return row != null;
+    }
+    /**
+     * Batch-fetch scope tags for a set of memory IDs.
+     * Returns a Map of memoryId → sorted scope tag array.
+     * Returns an empty array for IDs with no scope rows (should not happen in practice).
+     */
+    fetchScopesForIds(ids) {
+        const map = new Map();
+        if (ids.length === 0)
+            return map;
+        const placeholders = ids.map(() => "?").join(",");
+        const scopeRows = this.db.prepare(`
+      SELECT memory_id, scope FROM memory_scopes
+      WHERE memory_id IN (${placeholders})
+      ORDER BY memory_id, scope
+    `).all(...ids);
+        for (const row of scopeRows) {
+            let scopes = map.get(row.memory_id);
+            if (!scopes) {
+                scopes = [];
+                map.set(row.memory_id, scopes);
+            }
+            scopes.push(row.scope);
+        }
+        return map;
+    }
+    /** Validate and write scope tags for a memory. Rejects `device:` prefix. */
+    writeScopeTags(memoryId, tags) {
+        const insert = this.db.prepare("INSERT OR IGNORE INTO memory_scopes (memory_id, scope) VALUES (?, ?)");
+        for (const tag of tags) {
+            if (tag.startsWith("device:")) {
+                throw new Error(`"device:" is not a valid scope tag (device is metadata-only)`);
+            }
+            insert.run(memoryId, tag);
+        }
     }
 }
 //# sourceMappingURL=memory.js.map

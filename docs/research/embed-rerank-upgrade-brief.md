@@ -8,10 +8,10 @@ You are researching a **replacement** for memex's current embedding + reranker s
 - **Domain eval** (entity-rich technical memories, N=15): currently 12/15 = 80%
 
 ### Current stack
-- **Embedding:** `Qwen3-Embedding-4B-Q8_0.gguf` (2560-dim, 4.3GB, served via llama.cpp / llama-swap)
+- **Embedding:** `Qwen3-Embedding-4B-Q8_0.gguf` (2560-dim, 4.3GB, served via llama.cpp / <model-server>)
 - **Reranker:** `bge-reranker-v2-m3-Q8_0.gguf` (635MB, BGE cross-encoder, just deployed)
 - **Retrieval:** Hybrid — vector (0.8 weight) + BM25 (0.2 weight) with z-score fusion. Optional rerank stage.
-- **Deployment:** Single Mac mini (Apple M4, 16GB unified memory, macOS 26). Both models run as GGUF on llama.cpp via llama-swap on Tailscale.
+- **Deployment:** Single always-on host (a capable ARM host). Both models run as GGUF on llama.cpp via <model-server> on the tailnet.
 - **Memory pool:** ~2100 technical memories, mostly 200–2000 chars each.
 
 ### Why we're researching
@@ -33,9 +33,9 @@ We just deployed `bge-reranker-v2-m3` and measured it end-to-end:
 
 ### Hard constraints
 
-- **Single Mac mini with 16GB unified memory.** Peak working set including both models must be < 10GB to leave room for OS + other services.
+- **Single always-on host (a capable ARM host).** Peak working set including both models must fit within available unified memory, leaving room for OS + other services.
 - **Local inference.** The models must run on the inference host via llama.cpp or a comparable local runtime (mlx, oMLX). No dependency on cloud APIs for embed/rerank hot paths.
-- **GGUF quantization preferred** so we can reuse the existing llama.cpp + llama-swap infrastructure. MLX is acceptable if the model has a clearly maintained MLX conversion.
+- **GGUF quantization preferred** so we can reuse the existing llama.cpp + <model-server> infrastructure. MLX is acceptable if the model has a clearly maintained MLX conversion.
 - **Must handle BOTH long conversation sessions (10k-19k chars, chunked) AND short technical memories (<500 chars).** Models tuned only for short queries will hurt our conversation memory benchmark.
 - **Query language is English.** Multilingual is not required; prefer English-optimized models if there's a quality gap.
 - **Latency budget:** embedding ~50ms per query, reranking ~100ms per query (top-10 candidates). Harder limits hurt the auto-recall user experience.
@@ -61,7 +61,7 @@ Identify at least **5 embedding candidates** and **5 reranker candidates** (plus
 | Context length | Token limit for input |
 | Quantization available | List GGUF / MLX / safetensors availability |
 | Llama.cpp support | Works with `--rerank` / `--embeddings` flag? |
-| Memory footprint on M4 | Estimated RAM at inference time |
+| Memory footprint on host | Estimated RAM at inference time |
 | Known benchmark numbers | MTEB, BEIR, LongMemEval, MIRACL, whatever is published |
 | Source URL | HuggingFace or GitHub |
 
@@ -79,10 +79,10 @@ From your list, select the **top 2 candidates per role** (embedding, reranker, u
 Write a concrete, runnable plan for deploying the top candidate to `the inference host`:
 
 1. Model file acquisition — HF URL, expected file size, SHA256 if published
-2. Destination path on the host: `/Users/oc/models/<name>.gguf`
-3. `llama-swap.yaml` model block to add (match the existing format at `~/<infra-repo>/hosts/<host>/etc/llama-swap.yaml`)
+2. Destination path on the host: `<models-dir>/<name>.gguf`
+3. <model-server> config model block to add (match the existing format at `<infra-repo>/hosts/<host>/etc/<config-file>`)
 4. `llama-server` flags needed (`--embeddings`, `--rerank`, `--pooling`, `--normalize`, any model-specific tokenizer flags)
-5. How to restart llama-swap without disrupting in-flight requests
+5. How to restart <model-server> without disrupting in-flight requests
 6. Verification steps:
    - `curl /v1/models` shows the new model
    - `curl /v1/embeddings` or `curl /v1/rerank` returns sensible output
@@ -105,10 +105,10 @@ List what you cannot determine from research alone and would need empirical test
 
 ## Non-negotiables
 
-- **Do not reference lab infrastructure** (IPs, Tailscale hostnames, lab domains, machine names) in any committed file or markdown. Use placeholders.
+- **Do not reference lab infrastructure** (IPs, tailnet hostnames, lab domains, machine names) in any committed file or markdown. Use placeholders.
 - **Secrets go in 1Password** under the `<your-1p-item>` item in vault `<your-vault>`. Never hardcode API keys anywhere.
 - **Do not modify the live host until the user approves the deployment plan.** Plan → approve → execute.
-- **No destructive ops on the live llama-swap host** without explicit permission (no deleting models, no kill -9, no wiping configs).
+- **No destructive ops on the live <model-server> host** without explicit permission (no deleting models, no kill -9, no wiping configs).
 - **Never commit secrets to git.** Pre-commit hook at `.githooks/pre-commit` will block obvious patterns; your work should not come close to triggering it.
 - **No defaults in env config** (keys, URLs, model names) — only tuning knobs (pool sizes, weights) may have defaults.
 
@@ -120,7 +120,7 @@ List what you cannot determine from research alone and would need empirical test
 4. `docs/plans/LEARNINGS.md` — process lessons, especially "don't cite SOTA; walk the mechanism through our failing cases"
 5. `docs/plans/01-methodology.md` — in particular the "Research Rigor: Diagnose Before Scoping" section
 6. `tests/domain-eval.ts`, `tests/fast-benchmark.ts` — the exact benchmarks you'll be compared against
-7. `~/<infra-repo>/hosts/<host>/README.md` and `~/<infra-repo>/hosts/<host>/etc/llama-swap.yaml` — deployment target
+7. `~/<infra-repo>/hosts/<host>/README.md` and `~/<infra-repo>/hosts/<host>/etc/<config-file>` — deployment target
 
 ## Timebox
 
@@ -140,13 +140,13 @@ Walked through against the actual failing cases in `docs/plans/011-reranker-mode
 
 1. **Context length.** `bge-reranker-v2-m3` is 8K. memex's LongMemEval candidates are chunked conversation sessions up to 10k–19k characters (roughly 2.5k–5k tokens each). bge had to truncate; Qwen3-Reranker-0.6B supports 32K and handles them intact. This is the most plausible mechanism for why bge hurt R@1 — it was scoring a different substring than what the reader model ultimately saw.
 2. **Score calibration.** bge emits unbounded logits (observed range during A/B: −11 to +8). Qwen3-Reranker emits sigmoid-calibrated [0,1] scores. memex has a "rerank skip on high confidence" code path that is effectively meaningless under unbounded logits; with calibrated scores the threshold becomes load-bearing.
-3. **Top-1 separation on entity-rich technical queries.** On a 10-doc memex-shaped A/B (query: "What is the llama-swap port used for the memex embedding lane?"), Qwen3-Reranker scored the correct doc 0.9999 vs runner-up 0.4595 — a 0.54 margin that makes precision-at-1 robust. bge's equivalent raw-logit gap was wider in absolute terms but not in rank confidence. The failure mode for memex's domain eval has been top-1 ties in the bge logit space.
+3. **Top-1 separation on entity-rich technical queries.** On a 10-doc memex-shaped A/B (query: "What is the model-server port used for the memex embedding lane?"), Qwen3-Reranker scored the correct doc 0.9999 vs runner-up 0.4595 — a 0.54 margin that makes precision-at-1 robust. bge's equivalent raw-logit gap was wider in absolute terms but not in rank confidence. The failure mode for memex's domain eval has been top-1 ties in the bge logit space.
 4. **Published deltas (for corroboration, not primary justification):** MTEB-R 65.80 vs 57.03 (+8.8), MTEB-Code 73.42 vs 41.38 (+32). The MTEB-Code delta matters because memex's domain eval fixture is entity-rich technical content (identifiers, paths, flag names) — exactly the distribution that MTEB-Code measures.
 5. **Ecosystem fit.** Same Qwen3 family as the embedding model, same tokenizer lineage, same llama.cpp `--rerank` path. One family to reason about instead of a bge/Qwen3 split.
 
 ### Candidates considered and rejected
 
-- **`Qwen3-Reranker-4B`** — higher MTEB-R (69.76) but ~4.3GB weights would co-resident with the 4B embedding and strain the 16GB M4 once KV caches grow. Keep as an upgrade candidate if 0.6B saturates quality.
+- **`Qwen3-Reranker-4B`** — higher MTEB-R (69.76) but ~4.3GB weights would co-resident with the 4B embedding and strain the always-on host's memory once KV caches grow. Keep as an upgrade candidate if 0.6B saturates quality.
 - **`Qwen3-Reranker-8B`** — RAM-prohibitive with the current embedding lane.
 - **`Qwen3-Embedding-8B`** — the only credible embedding upgrade. Rejected because memex's failure mode is precision-at-top (reranker territory), not recall; current R@5=96% shows recall is already strong.
 - **`BAAI/bge-reranker-v2-gemma`** — 1024 ctx is a hard blocker for long sessions.
@@ -159,13 +159,13 @@ llama.cpp PR #20009 ("server: add Qwen3-Reranker instruction support") is still 
 
 ## Spike results (direct evidence)
 
-Spike script at `scripts/spike-qwen3-reranker.sh`. Ran against the live M4 inference host with the embedding + bge lanes already resident.
+Spike script at `scripts/spike-qwen3-reranker.sh`. Ran against the live inference host with the embedding + bge lanes already resident.
 
-**#19756 stack-overflow crash did NOT reproduce.** Server booted cleanly with `--rerank -c 8192`, served `/v1/rerank` across all test payloads without crashing. One unrefuted M2 Max crash report in the wild vs a clean M4 run here; either hardware-specific or build-specific (host build is commit `ecd99d6` from 2026-03-03, postdates PR #15824 Qwen3-Reranker support).
+**#19756 stack-overflow crash did NOT reproduce.** Server booted cleanly with `--rerank -c 8192`, served `/v1/rerank` across all test payloads without crashing. One unrefuted M2 Max crash report in the wild vs a clean run on the always-on host; either hardware-specific or build-specific (host build is commit `ecd99d6` from 2026-03-03, postdates PR #15824 Qwen3-Reranker support).
 
 **Memory footprint (from `llama_memory_breakdown_print`):**
 - Qwen3-Reranker-0.6B @ `-c 8192 --parallel 4`: ~1.8 GB Metal (603 MB model + 896 MB KV + 314 MB compute) + ~180 MB host
-- All three lanes resident concurrently during the spike: ~7.7 GB of ~12 GB Metal-addressable on M4 16GB
+- All three lanes resident concurrently during the spike: ~7.7 GB of ~12 GB Metal-addressable on the always-on host
 - `Pageouts` delta across the entire spike + A/B + lane restarts: **~500 pages (~8 MB)**. Zero meaningful swap I/O.
 
 **A/B top-1 on 3 memex-shaped queries:**
@@ -180,7 +180,7 @@ Both 2/3. Qwen3-Reranker's failure mode on the abstract query is defensible (the
 
 ## Deployed server state (as of 2026-04-10)
 
-The llama-swap inference host now serves **two lanes** via its existing proxy. The bge-reranker lane has been removed.
+The <model-server> inference host now serves **two lanes** via its existing proxy. The bge-reranker lane has been removed.
 
 Configured models block (schema only — replace the `apiKeys` entry with whatever the operator manages, never check it into git):
 
@@ -226,23 +226,23 @@ hooks:
 - `--cache-type-k q8_0 --cache-type-v q8_0` — KV cache quantized to q8_0. Measured directly from `llama_kv_cache` log line: **476 MiB at q8_0 vs 896 MiB at f16** (~420 MiB saved, ~47% reduction). Rerank is a single forward pass per (query, doc) with no autoregressive decoding, so quantization errors cannot accumulate; the scoring sigmoid is sampled once per doc. Verified empirically that top-1 rankings are identical across the three A/B queries at q8_0 vs f16 (Q1, Q2, Q3 all preserve the same sort order at q8_0). Absolute score drift is largest for mid-sigmoid queries (Q2: `idx=0` moved from 0.611 to 0.817) because small logit changes produce larger score changes in the steep region of the sigmoid, but the argsort behavior — which is all that matters for reranking — is unchanged.
 - `--n-gpu-layers 99` — all layers on Metal, same as existing lanes.
 
-**Warm latency after KV quant** (5 sequential top-10 calls through the llama-swap proxy, realistic doc shapes): first call ~0.98s (cold prompt cache), subsequent calls 0.39s-0.71s with most clustering at ~0.40s. This is above the brief's 100ms/top-10 target. Contributing factors: (a) llama-swap proxy overhead vs direct `llama-server`, (b) q8 KV dequantization overhead per layer per forward pass (~5-10% typical, small-model tax), (c) cold KV cache per request because rerank doesn't reuse cache across calls. The next agent should measure end-to-end latency including memex's request construction and fusion logic; the 400ms llama-server call is one component of that, not the whole budget.
+**Warm latency after KV quant** (5 sequential top-10 calls through the <model-server> proxy, realistic doc shapes): first call ~0.98s (cold prompt cache), subsequent calls 0.39s-0.71s with most clustering at ~0.40s. This is above the brief's 100ms/top-10 target. Contributing factors: (a) <model-server> proxy overhead vs direct `llama-server`, (b) q8 KV dequantization overhead per layer per forward pass (~5-10% typical, small-model tax), (c) cold KV cache per request because rerank doesn't reuse cache across calls. The next agent should measure end-to-end latency including memex's request construction and fusion logic; the 400ms llama-server call is one component of that, not the whole budget.
 
 **Model file:** downloaded from `https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF` (official `ggml-org` GGUF, 610 MB). Landed in the standard host models directory alongside the existing Qwen3-Embedding GGUF.
 
-**Backups kept on host** at `<llama-swap-config-dir>/llama-swap.yaml.bak.20260410-011138` (pre-change) and `.20260410-012227` (after adding, before removing bge). To roll back the whole change: `cp` the pre-change backup over the live file and bounce llama-swap.
+**Backups kept on host** at `<config-dir>/<config-file>.bak.20260410-011138` (pre-change) and `.20260410-012227` (after adding, before removing bge). To roll back the whole change: `cp` the pre-change backup over the live file and bounce <model-server>.
 
 ## Handoff — what the next agent must do
 
 Scope for the next session is **memex-side only** (the inference server is ready):
 
-1. **Wire memex to the new reranker via env vars only** (per the brief's "no defaults in env config" rule). The reranker adapter shapes memex already supports (jina / siliconflow / voyage / pinecone) need a new shape or a generic "llama-swap" shape that sends the llama-server `/v1/rerank` request body:
+1. **Wire memex to the new reranker via env vars only** (per the brief's "no defaults in env config" rule). The reranker adapter shapes memex already supports (jina / siliconflow / voyage / pinecone) need a new shape or a generic "<model-server>" shape that sends the llama-server `/v1/rerank` request body:
    ```json
    {"model": "Qwen3-Reranker-0.6B-Q8_0", "query": "...", "documents": ["...", "..."]}
    ```
    and parses `results[].relevance_score`. Check `src/rerank/` (or wherever the existing adapters live — not verified in this session) for the shape that's closest. The llama-server response format is the same as Jina's, so the Jina adapter is likely a drop-in after changing the endpoint + model name.
 
-2. **Run `tests/domain-eval.ts` against the new lane.** Env-var override (no committed config change) pointing `RERANKER_ENDPOINT` (or equivalent) at the llama-swap proxy and `RERANKER_MODEL=Qwen3-Reranker-0.6B-Q8_0`. Baseline to beat: 12/15.
+2. **Run `tests/domain-eval.ts` against the new lane.** Env-var override (no committed config change) pointing `RERANKER_ENDPOINT` (or equivalent) at the <model-server> proxy and `RERANKER_MODEL=Qwen3-Reranker-0.6B-Q8_0`. Baseline to beat: 12/15.
 
 3. **Run `tests/fast-benchmark.ts` at TIER=fast first, then TIER=e2e.** Baseline to beat: R@1=78%, R@3=90%, E2E=92% (GPT-4o reader). The critical number is R@1 — if Qwen3-Reranker beats bge here it validates the mechanistic argument about the 8K context truncation hurting bge.
 
@@ -252,10 +252,10 @@ Scope for the next session is **memex-side only** (the inference server is ready
 
 ### Operational note the next agent should be aware of
 
-The llama-swap instance on the inference host is currently running as an **unmanaged detached process** — no launchd agent loaded, no supervisord, no cron, no gateway supervising it. This was the pre-existing state before the upgrade work (not introduced by this change) but was surfaced by a SIGTERM-and-restart cycle during the spike. If llama-swap dies or the host reboots, nothing restarts it automatically. Fix: from a Terminal.app window **locally on the host** (not over SSH — SSH sessions lack the GUI launchd context),
+The <model-server> instance on the inference host is currently running as an **unmanaged detached process** — no service manager agent loaded, no supervisord, no cron, no gateway supervising it. This was the pre-existing state before the upgrade work (not introduced by this change) but was surfaced by a SIGTERM-and-restart cycle during the spike. If <model-server> dies or the host reboots, nothing restarts it automatically. Fix: from a terminal window **locally on the host** (not over SSH — SSH sessions lack the GUI service context),
 
 ```
-launchctl load -w ~/Library/LaunchAgents/com.openclaw.llama-swap.plist
+launchctl load -w ~/Library/LaunchAgents/<service-unit>.plist
 ```
 
 Then `KeepAlive: true` in the plist will actually take effect. Optionally add `-watch-config` to the plist `ProgramArguments` so future config edits auto-reload without a restart. This is infrastructure work, not memex work — flagging for awareness, not as a blocker for the benchmark runs.
