@@ -23,7 +23,10 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = join(ROOT, "src", "mcp-server.ts");
-const STARTUP_TIMEOUT_MS = 8000;
+// Generous: cold jiti compile + SQLite migrations on a fresh tmp DB can take
+// several seconds under CI parallelism. The readiness signal is emitted only
+// after full init, so allow plenty of headroom.
+const STARTUP_TIMEOUT_MS = 15000;
 const SHUTDOWN_TIMEOUT_MS = 3000;
 
 interface Spawned {
@@ -43,22 +46,30 @@ async function spawnServer(dbPath: string): Promise<Spawned> {
   let stderr = "";
   child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
 
-  // Wait for the "dreaming scheduled" line — proves setInterval was registered,
-  // i.e. the event loop is pinned (the leak condition).
-  await new Promise<void>((resolve, reject) => {
-    const startup = setTimeout(
-      () => reject(new Error(`server did not signal readiness within ${STARTUP_TIMEOUT_MS}ms\n--- stderr ---\n${stderr}`)),
-      STARTUP_TIMEOUT_MS,
-    );
-    const onData = () => {
-      if (stderr.includes("dreaming scheduled")) {
-        clearTimeout(startup);
-        child.stderr.off("data", onData);
-        resolve();
-      }
-    };
-    child.stderr.on("data", onData);
-  });
+  // Wait for the "memex-mcp: ready" line — emitted only AFTER the transport is
+  // connected and all signal handlers are armed, so we never observe a
+  // half-initialized server. If readiness fails, kill the child so it is never
+  // orphaned (the caller's `finally` runs after this await and would otherwise
+  // be skipped on rejection, leaking the subprocess + its dreaming timers).
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const startup = setTimeout(
+        () => reject(new Error(`server did not signal readiness within ${STARTUP_TIMEOUT_MS}ms\n--- stderr ---\n${stderr}`)),
+        STARTUP_TIMEOUT_MS,
+      );
+      const onData = () => {
+        if (stderr.includes("memex-mcp: ready")) {
+          clearTimeout(startup);
+          child.stderr.off("data", onData);
+          resolve();
+        }
+      };
+      child.stderr.on("data", onData);
+    });
+  } catch (err) {
+    try { child.kill("SIGKILL"); } catch { /* already exited */ }
+    throw err;
+  }
 
   return { child, getStderr: () => stderr };
 }

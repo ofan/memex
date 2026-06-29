@@ -294,6 +294,7 @@ export function createMemexMcpServer(options) {
                 reflection: (phase === "all" || phase === "reflect") && !!reflectionLLM,
             },
             reflectionLLM,
+            embedder,
         });
         return {
             content: [{
@@ -403,17 +404,39 @@ async function main() {
         noDream,
     };
     const { server, store } = createMemexMcpServer(sharedOptions);
-    // Dreaming timer handles — captured so shutdown() can clear them. Without this
-    // the repeating setInterval pins the Node event loop forever, orphaning this
-    // process when its MCP client dies (keeps dreaming against the shared DB).
+    // ── Graceful shutdown ──────────────────────────────────────────────────────
+    // Signal handlers are installed BEFORE any timers / listeners / transports so
+    // a SIGTERM/SIGINT arriving during the (sometimes slow) startup window —
+    // systemd stop, Ctrl-C, or the shutdown regression test — is always caught
+    // instead of hitting the default disposition (terminate). The dreaming timers
+    // and httpServer are assigned further down and guarded here.
     let dreamStartupTimer;
     let dreamTimer;
+    let httpServer;
+    let shuttingDown = false;
+    const shutdown = (reason) => {
+        if (shuttingDown)
+            return;
+        shuttingDown = true;
+        console.error(`memex-mcp: shutting down (${reason})`);
+        if (dreamStartupTimer)
+            clearTimeout(dreamStartupTimer);
+        if (dreamTimer)
+            clearInterval(dreamTimer);
+        httpServer?.close();
+        // Safety net: force exit if the DB close stalls (e.g. an in-flight transaction).
+        setTimeout(() => process.exit(0), 2000).unref();
+        store.close().finally(() => process.exit(0));
+    };
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
     // Background dreaming — periodic schedule
     if (!noDream) {
         const dreamConfig = {
             enabled: true,
             phases: { light: true, deep: true, reflection: !!reflectionLLM },
             reflectionLLM,
+            embedder,
         };
         const runDream = async (reason) => {
             try {
@@ -438,33 +461,12 @@ async function main() {
     const httpPort = parseInt(flagValue("--http") || process.env.MEMEX_HTTP_PORT || "0", 10);
     const httpHost = flagValue("--http-host") || process.env.MEMEX_HTTP_HOST || "127.0.0.1";
     const authToken = flagValue("--auth-token") || process.env.MEMEX_AUTH_TOKEN || "";
-    // Graceful shutdown: clear dreaming timers, stop the HTTP listener, close the
-    // DB, exit. SIGTERM/SIGINT are always handled (systemd stop/restart, Ctrl-C).
-    // For stdio we ALSO exit on client disconnect (stdin EOF) — otherwise a dead
-    // MCP client leaves this subprocess orphaned and dreaming against the shared DB.
-    let httpServer;
-    let shuttingDown = false;
-    const shutdown = (reason) => {
-        if (shuttingDown)
-            return;
-        shuttingDown = true;
-        console.error(`memex-mcp: shutting down (${reason})`);
-        if (dreamStartupTimer)
-            clearTimeout(dreamStartupTimer);
-        if (dreamTimer)
-            clearInterval(dreamTimer);
-        httpServer?.close();
-        // Safety net: force exit if the DB close stalls (e.g. an in-flight transaction).
-        setTimeout(() => process.exit(0), 2000).unref();
-        store.close().finally(() => process.exit(0));
-    };
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT", () => shutdown("SIGINT"));
     if (httpPort > 0) {
         // For HTTP, each session gets its own McpServer instance (stateful sessions).
         // The first one constructed above is used for the dreaming timer; HTTP creates fresh.
         const factory = () => createMemexMcpServer(sharedOptions).server;
         httpServer = await startHttpServer(factory, { port: httpPort, host: httpHost, authToken });
+        console.error(`memex-mcp: ready (http ${httpHost}:${httpPort})`);
     }
     else {
         const transport = new StdioServerTransport();
@@ -474,6 +476,10 @@ async function main() {
         process.stdin.on("end", () => shutdown("client-disconnect"));
         process.stdin.on("close", () => shutdown("client-disconnect"));
         await server.connect(transport);
+        // Readiness signal: emitted AFTER the transport is connected and all signal
+        // handlers are armed. Tests key off this (not "dreaming scheduled", which
+        // fires earlier) so they never signal a half-initialized server.
+        console.error("memex-mcp: ready (stdio)");
     }
 }
 async function startHttpServer(serverFactory, opts) {
