@@ -244,7 +244,7 @@ function deriveReflectionTags(db, memoryIds) {
  *
  * Requires an LLM endpoint. Skips gracefully if not configured.
  */
-export async function reflectionSweep(store, llmConfig, logPath) {
+export async function reflectionSweep(store, llmConfig, logPath, embedder) {
     const db = store.db;
     const errors = [];
     let learnings = 0;
@@ -320,6 +320,34 @@ export async function reflectionSweep(store, llmConfig, logPath) {
             }
             // Store learning as a new memory with inherited scope tags
             if (line.length >= 20) {
+                // Semantic dedup: if embedder is available, check for near-duplicate
+                // learnings before storing. Paraphrases of existing knowledge are
+                // caught by cosine similarity > 0.85. Exact-text dupes are already
+                // handled by the dedup_hash UNIQUE index below.
+                let isSemanticDupe = false;
+                if (embedder) {
+                    try {
+                        const vector = await embedder.embedPassage(line);
+                        const results = await store.vectorSearch(vector, 1, 0.85);
+                        if (results.length > 0 && results[0].score > 0.85) {
+                            isSemanticDupe = true;
+                            log(logPath, "dream:reflect", {
+                                skipped_semantic_dupe: line.slice(0, 80),
+                                similar_id: results[0].entry.id,
+                                score: results[0].score.toFixed(3),
+                            });
+                        }
+                    }
+                    catch (err) {
+                        // Embedding or vector search failed — log and continue (fail-open).
+                        // The dedup_hash UNIQUE index still guards against exact duplicates.
+                        log(logPath, "dream:reflect", {
+                            semantic_dedup_error: err?.message ?? String(err),
+                        });
+                    }
+                }
+                if (isSemanticDupe)
+                    continue;
                 const hash = createHash("sha256").update(line).digest("hex");
                 // Compute dedup_hash as sha256(text + '\x00' + sorted scope tags)
                 const sortedTags = [...inheritedTags].sort().join(",");
@@ -405,7 +433,7 @@ export async function runDreamCycle(store, config, track) {
     // Phase 3: Reflection (LLM-driven knowledge synthesis)
     if (config.phases.reflection && config.reflectionLLM) {
         try {
-            result.reflection = await reflectionSweep(store, config.reflectionLLM, logPath);
+            result.reflection = await reflectionSweep(store, config.reflectionLLM, logPath, config.embedder);
             sw.lap("reflect");
             track?.("dream", { phase: "reflection", ...result.reflection, ...sw.timings });
         }
