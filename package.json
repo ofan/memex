@@ -40,7 +40,7 @@
     "compromise": "^14.15.0",
     "fast-glob": "^3.3.0",
     "openai": "^6.37.0",
-    "openclaw": "^2026.5.7",
+    "openclaw": "^2026.5.26",
     "picomatch": "^4.0.4",
     "sqlite-vec": "^0.1.7-alpha.2",
     "typebox": "^1.1.37",
