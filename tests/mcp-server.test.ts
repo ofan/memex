@@ -165,6 +165,46 @@ describe("MCP Server", () => {
     assert.ok(/cite.*\bmem:\w+/i.test(parsed.note), "response should include citation note");
   });
 
+  it("F5: memory_recall bumps persistent recall_count (regression for the MCP capture gap)", async () => {
+    // The MCP memory_recall tool never called recordRecalls, so the daemon's primary
+    // recall path left recall_count at 0 — dreaming then evicts actively-used memories.
+    const tmp = await mkdtemp(join(tmpdir(), "memex-f5-"));
+    const dbPath = join(tmp, "memex.sqlite");
+    const { server, store } = createMemexMcpServer({
+      dbPath, vectorDim: VECTOR_DIM, embedder: makeFakeEmbedder(),
+    });
+    const c = new Client({ name: "f5-test", version: "1.0.0" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([c.connect(ct), server.connect(st)]);
+    try {
+      const storeRes = await c.callTool({
+        name: "memory_store",
+        arguments: { text: "The build server hosts the deploy pipeline", category: "fact" },
+      });
+      const id = JSON.parse((storeRes.content as any)[0].text).id;
+
+      const before = store.db.prepare(
+        "SELECT recall_count, last_recalled_at FROM memories WHERE id = ?"
+      ).get(id) as { recall_count: number; last_recalled_at: number | null };
+      assert.equal(before.recall_count, 0);
+      assert.equal(before.last_recalled_at, null);
+
+      await c.callTool({
+        name: "memory_recall",
+        arguments: { query: "build server deploy", limit: 5 },
+      });
+
+      const after = store.db.prepare(
+        "SELECT recall_count, last_recalled_at FROM memories WHERE id = ?"
+      ).get(id) as { recall_count: number; last_recalled_at: number | null };
+      assert.equal(after.recall_count, 1, "memory_recall must bump persistent recall_count");
+      assert.ok(after.last_recalled_at, "memory_recall must set last_recalled_at");
+    } finally {
+      await c.close(); await server.close();
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("memory_forget accepts an 8-char anchor prefix", async () => {
     const storeResult = await client.callTool({
       name: "memory_store",

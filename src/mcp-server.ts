@@ -244,6 +244,12 @@ export function createMemexMcpServer(options: McpServerOptions) {
 
     if (retriever) {
       const results = await retriever.retrieve({ query, limit, scopes: effectiveScopes });
+      // Record persistent recall signal so dreaming doesn't evict actively-used memories
+      // (the MCP recall path previously never bumped recall_count).
+      const recalledIds = results.map(r => r.entry.id);
+      if (recalledIds.length > 0) {
+        try { store.recordRecalls(recalledIds); } catch { /* best effort */ }
+      }
       return {
         content: [{
           type: "text",
@@ -264,6 +270,10 @@ export function createMemexMcpServer(options: McpServerOptions) {
 
     // BM25-only fallback when no embedder configured
     const bm25Results = await store.bm25Search(query, limit, effectiveScopes);
+    const recalledIds = bm25Results.map(r => r.entry.id);
+    if (recalledIds.length > 0) {
+      try { store.recordRecalls(recalledIds); } catch { /* best effort */ }
+    }
     return {
       content: [{
         type: "text",
