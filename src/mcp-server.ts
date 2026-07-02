@@ -20,6 +20,9 @@ import { anchor, expandAnchor, AnchorAmbiguityError } from "./anchor.js";
 import { detectCategory } from "../index.js";
 import { deriveScopes } from "./scope-derive.js";
 
+/** memex version — keep in sync with package.json (consumed by /health + MCP handshake). */
+const VERSION = "0.7.2";
+
 // ============================================================================
 // Scope tag validation (Bug 5 fix)
 // ============================================================================
@@ -53,12 +56,25 @@ export function createMemexMcpServer(options: McpServerOptions) {
 
   const dim = vectorDim ?? embedder?.dimensions ?? 8;
   const store = new MemoryStore({ dbPath, vectorDim: dim });
+  // Reranker on the MCP path: OFF by default (preserves prior behavior). Enabled only when
+  // MEMEX_RERANK_* env vars are set — flipping the flag alone is a no-op because rerankResults
+  // also guards on rerankApiKey (spec-review round-2 critical). Default model stays the safe
+  // Jina fallback unless MEMEX_RERANK_MODEL overrides it (e.g. Qwen3-Reranker-0.6B).
+  const rerankEndpoint = process.env.MEMEX_RERANK_ENDPOINT;
+  const rerankApiKey = process.env.MEMEX_RERANK_API_KEY;
+  const rerankModel = process.env.MEMEX_RERANK_MODEL;
+  const enableRerank = !!(rerankEndpoint && rerankApiKey);
   const retriever = embedder
-    ? createRetriever(store, embedder, { mode: "hybrid", rerank: "none" })
+    ? createRetriever(store, embedder, {
+        mode: "hybrid",
+        rerank: enableRerank ? "cross-encoder" : "none",
+        ...(enableRerank ? { rerankEndpoint, rerankApiKey } : {}),
+        ...(enableRerank && rerankModel ? { rerankModel } : {}),
+      })
     : null;
 
   const server = new McpServer(
-    { name: "memex", version: "0.6.0" },
+    { name: "memex", version: VERSION },
     {
       capabilities: { tools: {} },
       instructions: [
@@ -261,6 +277,9 @@ export function createMemexMcpServer(options: McpServerOptions) {
               category: r.entry.category,
               scope: r.entry.scope,
               score: Math.round(r.score * 1000) / 1000,
+              source: r.sources?.reranked ? "reranked"
+                : (r.sources?.vector && r.sources?.bm25) ? "both"
+                : r.sources?.vector ? "vector" : "lexical",
             })),
             note: "Cite recalled memories by anchor (e.g. [mem:abc12345]) when relying on them. Pass the anchor (or any longer prefix) to memory_forget to delete a stale entry.",
           }),
@@ -285,6 +304,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
             category: r.entry.category,
             scope: r.entry.scope,
             score: Math.round(r.score * 1000) / 1000,
+            source: "lexical",
           })),
           mode: "bm25-only",
           note: "Cite recalled memories by anchor (e.g. [mem:abc12345]) when relying on them. Pass the anchor (or any longer prefix) to memory_forget to delete a stale entry.",
@@ -582,7 +602,7 @@ async function startHttpServer(
     // Health endpoint
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, version: "0.6.0", sessions: sessions.size }));
+      res.end(JSON.stringify({ ok: true, version: VERSION, sessions: sessions.size }));
       return;
     }
 

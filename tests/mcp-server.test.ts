@@ -162,6 +162,7 @@ describe("MCP Server", () => {
     assert.equal(r0.anchor.length, 8, "anchor should be 8 chars");
     assert.equal(r0.anchor, r0.id.slice(0, 8), "anchor should be id prefix");
     assert.equal(typeof r0.scope, "string", "result should expose scope");
+    assert.ok(typeof r0.source === "string" && ["vector", "lexical", "both", "reranked"].includes(r0.source), "result should expose provenance source");
     assert.ok(/cite.*\bmem:\w+/i.test(parsed.note), "response should include citation note");
   });
 
