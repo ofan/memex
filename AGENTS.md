@@ -43,13 +43,17 @@ in `src/retriever.ts`:
 7. **Provenance stripped** — `sources` (vector/lexical/reranked) is tracked internally but
    omitted from the `memory_recall` output.
 
-**Redesign (design only, not implemented):** `docs/design/retrieval-redesign.md` — RRF fusion,
-revive a **local** cross-encoder reranker (via the llama-swap infra; rerank-client format
-compat with the `/rerank` endpoint is TBD), cap+gate temporal signals, confidence floor 0.40 +
-AutoCut + abstention (return 1 or 0), and expose provenance. Research-grounded; citations in
-the doc. **Build order:** cheap-and-model-free first (RRF + cap temporal + z-score-calibrated
-cosine floor + abstention ⇒ store-invariant, zero added latency); add the reranker last and
-only if precision still falls short (~1–3s/query on Apple Silicon for top-K).
+**Recall-quality design (design only, not implemented):** `docs/design/recall-quality-design.md` —
+the canonical spec (supersedes the earlier retrieval-redesign, validation-analysis, and
+feedback-loop docs, now under `docs/design/archive/`). It has been through a spec-review + 2
+adversarial self-review rounds. Direction: **z-score fusion** (RRF is *not* wired into the
+memory retriever despite the stale `retriever.ts:3` header — it's real plumbing, not a config
+flip), revive **Qwen3-Reranker-0.6B** (already deployed in v0.7; not BGE) on the MCP path
+(requires wiring `MEMEX_RERANK_*` env vars into `createMemexMcpServer` — the flip alone is a
+no-op), cap+gate temporal, wire the dead `hardMinScore` + confidence floor + AutoCut +
+abstention (return 1 or 0, with an agent-facing low-confidence guardrail), expose provenance,
+and a bounded recall-frequency boost. Validation plan + TDD tests + sequencing (5 waves + 5
+gates) are in the same doc.
 
 ## Key Files
 
@@ -79,7 +83,7 @@ only if precision still falls short (~1–3s/query on Apple Silicon for top-K).
 | `docs/flow.md` | Per-turn pipeline flow |
 | `docs/research/` | Ranking math, SOTA survey, baselines |
 | `docs/plans/` | Implementation plans (numbered, chronological) |
-| `docs/design/retrieval-redesign.md` | Retrieval redesign (noise-robust recall): RRF + local reranker + abstention |
+| `docs/design/recall-quality-design.md` | Canonical recall-quality design: redesign + validation + testing-loop + feedback boost (supersedes the archived retrieval-redesign / validation-analysis / feedback-loop) |
 
 ## Constraints
 
