@@ -318,6 +318,13 @@ export async function reflectionSweep(store, llmConfig, logPath, embedder) {
                 }
                 continue;
             }
+            // Skip LLM chain-of-thought / meta-commentary leaked as a "learning" (the root
+            // cause of the 13-entry CoT-leak noise purge). isNoise also catches denials,
+            // boilerplate, etc. that should never be stored as facts.
+            if (isNoise(line)) {
+                log(logPath, "dream:reflect", { skipped_noise: line.slice(0, 80) });
+                continue;
+            }
             // Store learning as a new memory with inherited scope tags
             if (line.length >= 20) {
                 // Semantic dedup: if embedder is available, check for near-duplicate
