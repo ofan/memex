@@ -159,7 +159,7 @@ export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfig = {
   rerankModel: "jina-reranker-v3",
   rerankEndpoint: "https://api.jina.ai/v1/rerank",
   lengthNormAnchor: 500,
-  hardMinScore: 0.40,
+  hardMinScore: 0.15, // F12: wired into applyAdaptiveMinScore. 0.15 preserves pre-fix behavior; raise via MEMEX_HARD_MIN_SCORE_OVERRIDE after F3 calibration.
   timeDecayHalfLifeDays: 60,
 };
 
@@ -882,7 +882,7 @@ export class MemoryRetriever {
     if (results.length === 0) return results;
     const bestScore = results[0].score; // already sorted desc
     const relativeFloor = bestScore * 0.3; // keep if within 30% of best
-    const absoluteFloor = 0.15; // never return pure noise
+    const absoluteFloor = this.config.hardMinScore; // never return pure noise (F12: was hardcoded 0.15, config was dead)
     const effectiveFloor = Math.max(relativeFloor, absoluteFloor);
     return results.filter(r => r.score >= effectiveFloor);
   }
@@ -1035,5 +1035,12 @@ export function createRetriever(
   config?: Partial<RetrievalConfig>
 ): MemoryRetriever {
   const fullConfig = { ...DEFAULT_RETRIEVAL_CONFIG, ...config };
+  // F12 kill-switch / calibration lever: override the absolute score floor at runtime.
+  // Unset = config default (0.15, pre-fix behavior); set after F3 calibration measures the
+  // optimal value. Guards against shipping an uncalibrated floor to production.
+  const hardMinOverride = parseFloat(process.env.MEMEX_HARD_MIN_SCORE_OVERRIDE || "");
+  if (Number.isFinite(hardMinOverride) && hardMinOverride >= 0 && hardMinOverride <= 1) {
+    fullConfig.hardMinScore = hardMinOverride;
+  }
   return new MemoryRetriever(store, embedder, fullConfig);
 }
