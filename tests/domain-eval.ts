@@ -135,6 +135,20 @@ const EVAL_QUERIES: EvalQuery[] = [
     expected: ["private"],
     type: "rule",
   },
+  // Expanded set (2026-07-02): verifiable queries against real pool memories,
+  // to lift N above 15 so reranker-vs-baseline deltas carry a confidence interval.
+  { id: "ext-repo-issues", query: "What's the rule about filing issues on external repos?", expected: ["never file", "external repos"], type: "rule" },
+  { id: "homeinfra-dev-vm", query: "Which repo must never leave the dev VM?", expected: ["homeinfra", "dev VM"], type: "rule" },
+  { id: "virgil-quality-model", query: "What model should Virgil stay on for quality reasons?", expected: ["qwen35-27b-dense"], type: "model" },
+  { id: "mbp1-default-user", query: "Which user account for remote access by default, and which for sudo?", expected: ["oc", "zfeng"], type: "system" },
+  { id: "gh-private-convention", query: "What's the convention for new GitHub repos — private or public?", expected: ["private", "gh repo create"], type: "rule" },
+  { id: "changedetection-replies", query: "How does Ryan want changedetection.io Discord replies formatted?", expected: ["tl;dr", "concise"], type: "preference" as any },
+  { id: "gemma-test-path", query: "For Gemma testing, which inference path does Ryan prefer?", expected: ["llama.cpp", "omlx"], type: "model" },
+  { id: "active-chat-format", query: "Bullets or paragraphs for responses in active chat?", expected: ["paragraphs", "bullet"], type: "preference" as any },
+  { id: "anthropic-credits-date", query: "Until when does Ryan want to use Anthropic credits before switching back to GPT?", expected: ["april 17", "anthropic"], type: "temporal" },
+  { id: "cabbie-small-decisions", query: "What does Ryan want Cabbie to stop doing for small decisions?", expected: ["if you want", "decide"], type: "person" },
+  { id: "mbp1-hardware", query: "What's the MacBook hardware spec?", expected: ["m1 max", "omlx"], type: "system" },
+  { id: "tool-policy-control", query: "What does Ryan want regarding per-agent tool policies — allowlist or denylist?", expected: ["allowlist", "denylist"], type: "rule" },
 ];
 
 // ============================================================================
@@ -219,7 +233,15 @@ async function main() {
 
   console.log(`\n=== Domain Eval Results ===`);
   console.log(`  Total:  ${total}`);
-  console.log(`  Hits:   ${hits}/${total} (${(hits / total * 100).toFixed(0)}%)`);
+  // Wilson 95% CI on the hit rate (F6): small-N evals must report uncertainty.
+  const p = total > 0 ? hits / total : 0;
+  const z = 1.96;
+  const denom = 1 + (z * z) / total;
+  const center = (p + (z * z) / (2 * total)) / denom;
+  const margin = (z * Math.sqrt((p * (1 - p)) / total + (z * z) / (4 * total * total))) / denom;
+  const ciLo = Math.max(0, center - margin);
+  const ciHi = Math.min(1, center + margin);
+  console.log(`  Hits:   ${hits}/${total} (${(p * 100).toFixed(0)}%)  [Wilson 95% CI ${(ciLo * 100).toFixed(0)}–${(ciHi * 100).toFixed(0)}%]`);
   console.log(`  Misses: ${total - hits}`);
 
   // By type
