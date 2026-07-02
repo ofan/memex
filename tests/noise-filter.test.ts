@@ -452,3 +452,31 @@ describe("filterAssistantText", () => {
     assert.equal(filterAssistantText(input), "First point.\n\nSecond point.");
   });
 });
+
+describe("isNoise — LLM commentary filter (reflection CoT-leak regression)", () => {
+  // Each of these is a real leaked entry from the 2026-06-29 noise purge (13 entries
+  // of reflection-LLM output-format self-talk stored as "learnings").
+  it("filters LLM output-format self-talk", () => {
+    assert.equal(isNoise("[Final Check] All constraints met. No contradictions found."), true);
+    assert.equal(isNoise("Final check of the prompt: \"Output format — exactly one learning per line, no numbering, no bullets:\""), true);
+    assert.equal(isNoise("*(Self-Correction/Note during generation)*: I'll make sure the output strictly follows the requested format."), true);
+    assert.equal(isNoise("Output matches the refined version."), true);
+    assert.equal(isNoise("I will output exactly three lines. No extra text. Matches instructions."), true);
+    assert.equal(isNoise("This implies each line should just be `<learning>...` or `<learning>...</learning>`."), true);
+    assert.equal(isNoise("3 themes identified. Concise learnings. Format exact. Proceeds."), true);
+    assert.equal(isNoise("[Output Generation] (Proceeds)"), true);
+    assert.equal(isNoise("Let's check the exact prompt format example:"), true);
+    assert.equal(isNoise("Note: I'll make sure each line is exactly `<learning>...` as requested."), true);
+  });
+
+  it("does NOT filter legitimate synthesized learnings (precision)", () => {
+    assert.equal(isNoise("User strongly prefers TypeScript over JavaScript for new projects."), false);
+    assert.equal(isNoise("The deploy pipeline runs on the build server and redeploys on every push to main."), false);
+    assert.equal(isNoise("Decided to pin Node to 25 because Node 26 breaks the better-sqlite3 native binding."), false);
+    assert.equal(isNoise("memex recall is a hint-net, not an oracle — never trust top-1 or score cutoffs."), false);
+  });
+
+  it("respects filterLlmCommentary option to disable", () => {
+    assert.equal(isNoise("Output matches the refined version.", { filterLlmCommentary: false }), false);
+  });
+});
