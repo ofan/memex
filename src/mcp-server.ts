@@ -410,6 +410,21 @@ export function createMemexMcpServer(options: McpServerOptions) {
     const byScope: Record<string, number> = {};
     for (const row of scopeRows) byScope[row.scope] = row.cnt;
 
+    // Provenance breakdowns from metadata (scope-visibility #7): readable project
+    // name + client identity, so stats answer "which projects / which clients".
+    const metaRows = db.prepare(
+      "SELECT metadata FROM memories WHERE metadata IS NOT NULL AND metadata != ''"
+    ).all() as Array<{ metadata: string }>;
+    const byProject: Record<string, number> = {};
+    const byClient: Record<string, number> = {};
+    for (const row of metaRows) {
+      try {
+        const m = JSON.parse(row.metadata) as { project_name?: string; client?: string };
+        if (m.project_name) byProject[m.project_name] = (byProject[m.project_name] || 0) + 1;
+        if (m.client) byClient[m.client] = (byClient[m.client] || 0) + 1;
+      } catch { /* malformed metadata — skip */ }
+    }
+
     return {
       content: [{
         type: "text",
@@ -417,6 +432,8 @@ export function createMemexMcpServer(options: McpServerOptions) {
           total,
           byCategory,
           byScope,
+          byProject,
+          byClient,
           neverRecalled,
           neverRecalledRatio: total > 0 ? Math.round((neverRecalled / total) * 100) / 100 : 0,
         }),
