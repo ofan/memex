@@ -1,6 +1,10 @@
 # Progress
 
-## Last Updated: 2026-06-29
+## Last Updated: 2026-07-02
+
+## Session 2026-07-02 — recall-quality design consolidation
+
+Merged the three recall-quality design docs into one canonical spec: **`docs/design/recall-quality-design.md`** (supersedes `retrieval-redesign.md`, `recall-validation-analysis-revised.md`, `feedback-loop.md`, now under `docs/design/archive/`). Produced via merge → 2 adversarial self-review rounds. All 7 spec-review criticals (C1–C7) fixed + verified against code; the validation plan (10 criteria, 17 gaps, 18 fixes F1–F18), TDD tests per change, and 5-wave + 5-gate sequencing are all in the one doc. Notable round-2 catch: enabling the reranker on the MCP path is a no-op without wiring `MEMEX_RERANK_*` env vars into `createMemexMcpServer` (the same class of bug as the original "MCP disables reranker"). Visualization: `recall-quality-loop.html`. Next: Wave 0 (measurement — production-config benchmarks, live-sampling, CIs, hardMinScore test audit) + F5 (`recordRecalls` — urgent data-corruption fix).
 
 ## Session 2026-06-29 — v0.7 delivery push
 
@@ -18,7 +22,7 @@ Minor follow-ups surfaced (non-blocking): `/health` reports a stale `version:"0.
 ## Roadmap — next priorities
 
 1. ~~**Containerize memex daemon** (`019`)~~ ✅ done 2026-06-29.
-2. ~~**Feedback loop** — design~~ ✅ done; **TDD implementation next** (see `docs/design/feedback-loop.md` — start with the MCP `recall_count` capture fix, the highest-leverage prerequisite).
+2. ~~**Feedback loop** — design~~ ✅ done; **TDD implementation next** (see `docs/design/recall-quality-design.md` — start with the MCP `recall_count` capture fix / F5, the highest-leverage prerequisite).
 3. **Ship `memex-v0.7` → `main`** — in progress (squash PR).
 4. ~~**Quick wins** — shutdown test; noise purge~~ ✅ done.
 
