@@ -34,22 +34,22 @@ interface EvalQuery {
 }
 
 const EVAL_QUERIES: EvalQuery[] = [
-  // Person entity queries
+  // Person entity queries (anonymized 2026-07-02 — no real names per AGENTS.md)
   {
-    id: "alex-ban-sorry",
-    query: "What words did Alex ban?",
+    id: "user-ban-sorry",
+    query: "What words did the user ban?",
     expected: ["sorry", "ban"],
     type: "person",
   },
   {
-    id: "alex-response-style",
-    query: "How does Alex want responses formatted?",
+    id: "user-response-style",
+    query: "How does the user want responses formatted?",
     expected: ["TLDR", "default"],
     type: "person",
   },
   {
-    id: "alex-grafana",
-    query: "What's Alex's rule about Grafana passwords?",
+    id: "user-grafana",
+    query: "What's the user's rule about Grafana passwords?",
     expected: ["grafana", "password", "never"],
     type: "person",
   },
@@ -64,7 +64,7 @@ const EVAL_QUERIES: EvalQuery[] = [
   {
     id: "host-a-user",
     query: "What user should be used on Mac devices?",
-    expected: ["redacted-acct", "default"],
+    expected: ["default"],
     type: "system",
   },
   {
@@ -82,34 +82,34 @@ const EVAL_QUERIES: EvalQuery[] = [
     type: "model",
   },
   {
-    id: "virgil-streaming",
-    query: "Does Jordan need streaming enabled?",
+    id: "agent-streaming",
+    query: "Does the agent need streaming enabled?",
     expected: ["stream", "must"],
     type: "model",
   },
   {
-    id: "virgil-reasoning",
-    query: "Should reasoning be kept on for Jordan?",
+    id: "agent-reasoning",
+    query: "Should reasoning be kept on for the agent?",
     expected: ["reasoning", "kept on"],
     type: "model",
   },
 
   // Multi-entity queries (tests entity overlap between query and memory)
   {
-    id: "alex-host-a-deployment",
-    query: "What's Alex's deployment rule for host-a?",
+    id: "user-host-a-deployment",
+    query: "What's the user's deployment rule for host-a?",
     expected: ["one", "model", "time"],
     type: "multi-entity",
   },
   {
-    id: "virgil-qwen",
-    query: "Why did Jordan switch from Gemma to Qwen?",
+    id: "agent-qwen",
+    query: "Why did the agent switch from Gemma to Qwen?",
     expected: ["crash", "switch"],
     type: "multi-entity",
   },
   {
-    id: "alex-cabbie-behavior",
-    query: "What does Alex want Cabbie to stop doing?",
+    id: "user-agent-behavior",
+    query: "What does the user want the agent to stop doing?",
     expected: ["explain", "fix"],
     type: "multi-entity",
   },
