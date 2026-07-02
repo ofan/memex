@@ -65,7 +65,7 @@ const LLM_COMMENTARY_PATTERNS = [
   /^let'?s check (the )?(exact )?prompt/i,
   /exactly one learning per line/i,
   /\bduring (generation|thought|reasoning)\b/i,
-  /^i('?ll| will) (output|make sure|ensure|close|use|format|proceed)\b/i,
+  /^i('?ll| will) (output|make sure|ensure|close|format|proceed)\b/i,
   /^i will output exactly\b/i,
   /^this implies each line/i,
   /^\d+\s+themes identified\b/i,
