@@ -536,8 +536,14 @@ export class MemoryRetriever {
         if (!recencyHalfLifeDays || recencyHalfLifeDays <= 0 || !recencyWeight) {
             return results;
         }
+        const relevanceFirst = process.env.MEMEX_RELEVANCE_FIRST === "1";
         const now = Date.now();
         const boosted = results.map(r => {
+            // Relevance gate (MEMEX_RELEVANCE_FIRST): don't add recency to low-relevance results,
+            // so a recent-but-irrelevant memory (the junk-magnet pattern) can't float above an older
+            // relevant one. Recency becomes a tie-break among already-relevant results, not an override.
+            if (relevanceFirst && r.score < 0.40)
+                return r;
             const ts = (r.entry.timestamp && r.entry.timestamp > 0) ? r.entry.timestamp : now;
             const ageDays = (now - ts) / 86_400_000;
             const boost = Math.exp(-ageDays / recencyHalfLifeDays) * recencyWeight;
@@ -774,6 +780,13 @@ export function createRetriever(store, embedder, config) {
     const hardMinOverride = parseFloat(process.env.MEMEX_HARD_MIN_SCORE_OVERRIDE || "");
     if (Number.isFinite(hardMinOverride) && hardMinOverride >= 0 && hardMinOverride <= 1) {
         fullConfig.hardMinScore = hardMinOverride;
+    }
+    // MEMEX_RELEVANCE_FIRST (Wave-1 redesign, off by default): cap temporal signals so relevance
+    // dominates. Recency capped to a tie-break (+0.05 max) and relevance-gated (no boost when
+    // score < 0.40); multiplicative timeDecay disabled (halfLife 0 → applyTimeDecay early-returns).
+    if (process.env.MEMEX_RELEVANCE_FIRST === "1") {
+        fullConfig.recencyWeight = Math.min(fullConfig.recencyWeight, 0.05);
+        fullConfig.timeDecayHalfLifeDays = 0;
     }
     return new MemoryRetriever(store, embedder, fullConfig);
 }
