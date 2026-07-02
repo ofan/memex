@@ -49,12 +49,30 @@ const BOILERPLATE_PATTERNS = [
     /^(I'm here|I'm ready|I'm listening|What do you need)/i,
     /^(Everything looks healthy|model responding|context at \d+%)/i, // agent health status
 ];
+// LLM chain-of-thought / meta-commentary that leaked as "learnings" (the root cause of
+// the 13-entry CoT-leak noise purge on 2026-06-29). The reflection LLM sometimes emits
+// its own output-format self-talk instead of synthesized facts; these catch it.
+const LLM_COMMENTARY_PATTERNS = [
+    /^\[?(final check|output generation|self-correct|self-refine)/i,
+    /\bself-correction\b/i,
+    /^(output (matches|format)|all constraints met|no contradictions found|concise learnings|format exact)\b/i,
+    /^let'?s check (the )?(exact )?prompt/i,
+    /exactly one learning per line/i,
+    /\bduring (generation|thought|reasoning)\b/i,
+    /^i('?ll| will) (output|make sure|ensure|close|use|format|proceed)\b/i,
+    /^i will output exactly\b/i,
+    /^this implies each line/i,
+    /^\d+\s+themes identified\b/i,
+    /^if (there are|you find) contradictions|^add lines in this format/i,
+    /^note:\s*i('?ll| will)\b/i,
+];
 const DEFAULT_OPTIONS = {
     filterDenials: true,
     filterMetaQuestions: true,
     filterBoilerplate: true,
     filterPlatformMetadata: true,
     filterFiller: true,
+    filterLlmCommentary: true,
 };
 /**
  * Check if a memory text is noise that should be filtered out.
@@ -74,6 +92,8 @@ export function isNoise(text, options = {}) {
     if (opts.filterPlatformMetadata && PLATFORM_METADATA_PATTERNS.some(p => p.test(trimmed)))
         return true;
     if (opts.filterFiller && FILLER_PATTERNS.some(p => p.test(trimmed)))
+        return true;
+    if (opts.filterLlmCommentary && LLM_COMMENTARY_PATTERNS.some(p => p.test(trimmed)))
         return true;
     return false;
 }
