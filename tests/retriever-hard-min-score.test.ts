@@ -63,4 +63,37 @@ describe("F12: hardMinScore is wired (regression for the dead-config bug)", () =
     store.close();
     await rm(tmp, { recursive: true, force: true });
   });
+
+  it("MEMEX_RELEVANCE_FIRST caps recency + disables timeDecay (cap-temporal redesign change)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "memex-relfirst-"));
+    const store = new MemoryStore({ dbPath: join(tmp, "m.sqlite"), vectorDim: 8 });
+    const embedder = makeFakeEmbedder(8);
+    const passage = "the quick brown fox jumps over the lazy dog";
+    await store.store({
+      text: passage, vector: await embedder.embedDocument(passage),
+      category: "fact", importance: 0.7, scope: "global",
+    } as any);
+    const base = { mode: "hybrid", rerank: "none" as const, minScore: 0.0, filterNoise: false };
+
+    const prev = process.env.MEMEX_RELEVANCE_FIRST;
+    try {
+      const off = createRetriever(store, embedder, { ...base });
+      const resOff = await off.retrieve({ query: "quick fox dog", limit: 5 }); // flag unset
+
+      process.env.MEMEX_RELEVANCE_FIRST = "1";
+      const on = createRetriever(store, embedder, { ...base }); // flag set: recency capped, decay off
+      const resOn = await on.retrieve({ query: "quick fox dog", limit: 5 });
+
+      assert.ok(resOff.length > 0 && resOn.length > 0, "both should return results");
+      // Flag caps recency (+0.05 vs +0.10) for a brand-new memory and removes timeDecay, so the
+      // score must differ — proves the flag is consulted. (Empirically confirmed via domain-eval:
+      // relevant memories score higher, e.g. private-repos 0.401→0.692, less decay penalty.)
+      assert.notEqual(resOff[0].score, resOn[0].score, "MEMEX_RELEVANCE_FIRST must change scoring");
+    } finally {
+      if (prev === undefined) delete process.env.MEMEX_RELEVANCE_FIRST;
+      else process.env.MEMEX_RELEVANCE_FIRST = prev;
+    }
+    store.close();
+    await rm(tmp, { recursive: true, force: true });
+  });
 });
