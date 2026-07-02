@@ -135,20 +135,20 @@ const EVAL_QUERIES: EvalQuery[] = [
     expected: ["private"],
     type: "rule",
   },
-  // Expanded set (2026-07-02): verifiable queries against real pool memories,
-  // to lift N above 15 so reranker-vs-baseline deltas carry a confidence interval.
+  // Expanded set (2026-07-02): verifiable queries, ANONYMIZED per AGENTS.md (no real
+  // usernames, account names, machine names, or infra refs — Codex P1 remediation).
+  // Lifts N above 15 so reranker-vs-baseline deltas carry a confidence interval.
   { id: "ext-repo-issues", query: "What's the rule about filing issues on external repos?", expected: ["never file", "external repos"], type: "rule" },
-  { id: "infra-project-dev-vm", query: "Which repo must never leave the build host?", expected: ["infra-project", "build host"], type: "rule" },
-  { id: "virgil-quality-model", query: "What model should Virgil stay on for quality reasons?", expected: ["qwen35-27b-dense"], type: "model" },
-  { id: "mbp1-default-user", query: "Which user account for remote access by default, and which for sudo?", expected: ["redacted-acct", "redacted-user"], type: "system" },
+  { id: "local-agent-quality-model", query: "What model should the local agent stay on for quality reasons?", expected: ["qwen35-27b-dense"], type: "model" },
+  { id: "remote-access-default", query: "Which credential is used for remote access by default?", expected: ["pubkey"], type: "system" },
   { id: "gh-private-convention", query: "What's the convention for new GitHub repos — private or public?", expected: ["private", "gh repo create"], type: "rule" },
-  { id: "changedetection-replies", query: "How does Ryan want changedetection.io Discord replies formatted?", expected: ["tl;dr", "concise"], type: "preference" as any },
-  { id: "gemma-test-path", query: "For Gemma testing, which inference path does Ryan prefer?", expected: ["llama.cpp", "omlx"], type: "model" },
-  { id: "active-chat-format", query: "Bullets or paragraphs for responses in active chat?", expected: ["paragraphs", "bullet"], type: "preference" as any },
-  { id: "anthropic-credits-date", query: "Until when does Ryan want to use Anthropic credits before switching back to GPT?", expected: ["april 17", "anthropic"], type: "temporal" },
-  { id: "cabbie-small-decisions", query: "What does Ryan want Cabbie to stop doing for small decisions?", expected: ["if you want", "decide"], type: "person" },
-  { id: "mbp1-hardware", query: "What's the MacBook hardware spec?", expected: ["m1 max", "omlx"], type: "system" },
-  { id: "tool-policy-control", query: "What does Ryan want regarding per-agent tool policies — allowlist or denylist?", expected: ["allowlist", "denylist"], type: "rule" },
+  { id: "changedetection-replies", query: "How should changedetection.io Discord replies be formatted?", expected: ["tl;dr", "concise"], type: "rule" },
+  { id: "gemma-test-path", query: "For Gemma testing, which inference path is preferred?", expected: ["llama.cpp", "omlx"], type: "model" },
+  { id: "active-chat-format", query: "Bullets or paragraphs for responses in active chat?", expected: ["paragraphs", "bullet"], type: "rule" },
+  { id: "anthropic-credits-date", query: "Until when to use Anthropic credits before switching back to GPT?", expected: ["april 17", "anthropic"], type: "rule" },
+  { id: "agent-small-decisions", query: "What should the agent stop doing for small decisions?", expected: ["if you want", "decide"], type: "person" },
+  { id: "laptop-hardware", query: "What's the MacBook hardware spec?", expected: ["m1 max", "omlx"], type: "system" },
+  { id: "tool-policy-control", query: "Allowlist or denylist for per-agent tool policies?", expected: ["allowlist", "denylist"], type: "rule" },
 ];
 
 // ============================================================================
