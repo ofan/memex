@@ -362,6 +362,21 @@ export function createMemexMcpServer(options) {
         const byScope = {};
         for (const row of scopeRows)
             byScope[row.scope] = row.cnt;
+        // Provenance breakdowns from metadata (scope-visibility #7): readable project
+        // name + client identity, so stats answer "which projects / which clients".
+        const metaRows = db.prepare("SELECT metadata FROM memories WHERE metadata IS NOT NULL AND metadata != ''").all();
+        const byProject = {};
+        const byClient = {};
+        for (const row of metaRows) {
+            try {
+                const m = JSON.parse(row.metadata);
+                if (m.project_name)
+                    byProject[m.project_name] = (byProject[m.project_name] || 0) + 1;
+                if (m.client)
+                    byClient[m.client] = (byClient[m.client] || 0) + 1;
+            }
+            catch { /* malformed metadata — skip */ }
+        }
         return {
             content: [{
                     type: "text",
@@ -369,6 +384,8 @@ export function createMemexMcpServer(options) {
                         total,
                         byCategory,
                         byScope,
+                        byProject,
+                        byClient,
                         neverRecalled,
                         neverRecalledRatio: total > 0 ? Math.round((neverRecalled / total) * 100) / 100 : 0,
                     }),
@@ -523,8 +540,9 @@ async function startHttpServer(serverFactory, opts) {
     // Per-session transports. Each MCP client gets its own session and transport.
     const sessions = new Map();
     const httpServer = createHttpServer(async (req, res) => {
-        // Auth: bearer token via Authorization header
-        if (authToken) {
+        // Auth: bearer token via Authorization header. /health is exempt so Docker/k8s
+        // liveness probes (which can't send a bearer) can check it.
+        if (authToken && req.url !== "/health") {
             const auth = req.headers["authorization"];
             const expected = `Bearer ${authToken}`;
             if (auth !== expected) {
