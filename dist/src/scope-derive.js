@@ -138,6 +138,12 @@ export function deriveScopes(input) {
         if (gitInfo.remote) {
             const normalized = normalizeGitRemote(gitInfo.remote);
             metadata.git_remote = normalized;
+            // Readable project name (last path segment of the normalized remote) for
+            // observability — scope-visibility #7. The stable filter key stays
+            // project:<hash>; project_name is human-readable provenance only.
+            const repoName = normalized.replace(/^https?:\/\//, "").split("/").filter(Boolean).pop();
+            if (repoName)
+                metadata.project_name = repoName;
             tags.push(`project:${hashValue(normalized)}`);
         }
         else {
