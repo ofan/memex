@@ -605,8 +605,9 @@ async function startHttpServer(
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
   const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // Auth: bearer token via Authorization header
-    if (authToken) {
+    // Auth: bearer token via Authorization header. /health is exempt so Docker/k8s
+    // liveness probes (which can't send a bearer) can check it.
+    if (authToken && req.url !== "/health") {
       const auth = req.headers["authorization"];
       const expected = `Bearer ${authToken}`;
       if (auth !== expected) {
