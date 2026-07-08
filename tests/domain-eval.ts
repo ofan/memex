@@ -192,11 +192,13 @@ async function main() {
   // rerank toggle via RERANK=1 env var is intentional — lets us diff pipelines without forking the script.
   // Default remains disabled, matching production memex config.
 
+  const queryDelayMs = parseInt(process.env.QUERY_DELAY_MS || "2000");
   let hits = 0;
   let total = 0;
   const results: { id: string; type: string; hit: boolean; topText: string }[] = [];
 
   for (const eq of EVAL_QUERIES) {
+    if (total > 0) await new Promise(r => setTimeout(r, queryDelayMs));
     total++;
     const retrieved = await retriever.retrieve({ query: eq.query, limit: 3 });
 
