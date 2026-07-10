@@ -6,14 +6,13 @@
 
 ### F1 Final Results (domain-eval through llm-proxy, 26 queries)
 
-| Config | Hit Rate | Wilson 95% CI |
-|--------|----------|---------------|
-| Baseline (no reranker) | 18/26 = **69%** | 50–83% |
-| Reranker on | 20/26 = **77%** | 58–89% |
+| Config | Hit Rate | Wilson 95% CI | Latency |
+|--------|----------|---------------|---------|
+| Baseline (no reranker) | 18/26 = **69%** | 50–83% | ~200ms |
+| Cross-encoder reranker | 20/26 = **77%** | 58–89% | ~500ms |
+| **LLM reranker (ordering)** | **22/26 = 85%** | 66–94% | ~2-5s |
 
-**Delta: +8pp.** The reranker is a clear win but has a tradeoff: 2 queries went empty (floor filtering removed correct results). The hardMinScore (0.40) needs tuning for reranker score distribution (0.39–0.56 vs fusion 0.38–0.88).
-
-**3 gains, 2 regressions to empty, net +2 hits.**
+**Reranker deltas: cross-encoder +8pp, LLM +16pp over baseline.**
 
 ### Architecture — post-session state
 
@@ -51,6 +50,20 @@ The default was lowered from 0.40 to 0.15 in #95. At 0.40 the reranker would hav
 1. Container daemon deploy
 2. Wire nDCG@5 into domain-eval (F16)
 3. Live-production sampling (V9)
+
+### LLM Reranker Spike (ordering-based)
+
+New `src/rerankers/llm-reranker.ts` — uses a chat model (deepseek-v4-flash via llm-proxy) as a relevance ranker. Opt-in via `MEMEX_RERANK_LLM_MODEL`; takes priority over cross-encoder when set.
+
+**Design:** the model ORDER documents (most relevant first), not score them. A bare comma-separated index list is trivial to parse and far more robust than JSON extraction. Ordering → rank-normalized scores (top=1.0), blended with fusion like the cross-encoder's "rank" mode.
+
+- 22/26 = 85% (vs 77% cross-encoder, 69% baseline)
+- 256 max_tokens, lower token use than a scoring prompt
+- Uses `node:http` (not fetch) — proxy nginx returns empty bodies for undici chunked requests
+- Handles reasoning models via `reasoning_content` fallback
+- Fails gracefully to fusion scores on any error
+
+The daemon's LLM endpoint was also consolidated onto the llm-proxy (was pointing at an offline host).
 
 ## Session 2026-07-07 — recall-quality: proxy wiring + F1/F3/F5 (see below)
 
