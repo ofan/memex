@@ -65,19 +65,18 @@ describe("withTransientRetry", () => {
     assert.equal(calls, 1, "should not retry on 401");
   });
 
-  it("does NOT retry on 500 by default", async () => {
+  it("retries on 500 (llama.cpp Compute error)", async () => {
     let calls = 0;
-    await assert.rejects(
-      withTransientRetry(
-        async () => {
-          calls++;
-          throw httpError(500);
-        },
-        { baseBackoffMs: 1 },
-      ),
-      /HTTP 500/,
+    const result = await withTransientRetry(
+      async () => {
+        calls++;
+        if (calls < 2) throw httpError(500);
+        return "ok";
+      },
+      { baseBackoffMs: 1 },
     );
-    assert.equal(calls, 1, "500 is not transient by default");
+    assert.equal(result, "ok");
+    assert.equal(calls, 2, "500 should be retried (llama.cpp transient compute error)");
   });
 
   it("retries on AbortError (timeout)", async () => {
