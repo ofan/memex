@@ -8,6 +8,7 @@ import type { Embedder } from "./embedder.js";
 import { filterNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
 import { detectTemporalRange } from "./temporal.js";
+import { llmRerank } from "./rerankers/llm-reranker.js";
 import { extractEntities, entityOverlap } from "./entities.js";
 import { expandOneHop, LINK_SCORE_DISCOUNT_FACTOR } from "./graph.js";
 import { withTransientRetry } from "./transient-retry.js";
@@ -26,7 +27,7 @@ export interface RetrievalConfig {
    *  (default: "weighted") */
   fusionMethod: "weighted" | "zscore";
   minScore: number;
-  rerank: "cross-encoder" | "lightweight" | "none";
+  rerank: "cross-encoder" | "llm" | "lightweight" | "none";
   candidatePoolSize: number;
   /** Recency boost half-life in days (default: 14). Set 0 to disable. */
   recencyHalfLifeDays: number;
@@ -46,6 +47,16 @@ export interface RetrievalConfig {
    *  - "voyage": Authorization: Bearer, string[] documents, data[].relevance_score
    *  - "pinecone": Api-Key header, {text}[] documents, data[].score */
   rerankProvider?: "jina" | "siliconflow" | "voyage" | "pinecone";
+  /** LLM reranker: OpenAI-compatible chat completions endpoint. */
+  rerankLlmEndpoint?: string;
+  /** LLM reranker: API key (dummy if proxy doesn't require auth). */
+  rerankLlmApiKey?: string;
+  /** LLM reranker: model name (e.g. deepseek/deepseek-v4-flash). */
+  rerankLlmModel?: string;
+  /** LLM reranker: request timeout in ms (default: 30000). */
+  rerankLlmTimeoutMs?: number;
+  /** LLM reranker: max documents per call (default: 10, max: 20). */
+  rerankLlmMaxDocs?: number;
   /**
    * How to interpret the reranker's output score for blending:
    *
@@ -733,6 +744,54 @@ export class MemoryRetriever {
       // aggressively re-ranked and displaced correct fusion winners.
       // That behavior is intended for the case where rerank is not
       // configured at all, not for transient rerank API failures.)
+      return results;
+    }
+
+    // LLM-based reranker: use a chat model as relevance judge.
+    // Slower and costlier than cross-encoder but often higher quality.
+    if (this.config.rerank === "llm" && this.config.rerankLlmEndpoint && this.config.rerankLlmModel) {
+      try {
+        const documents = results.map(r => r.entry.text);
+        const originalScores = results.map(r => r.score);
+        const parsed = await llmRerank(query, documents, originalScores, {
+          endpoint: this.config.rerankLlmEndpoint,
+          apiKey: this.config.rerankLlmApiKey ?? "",
+          model: this.config.rerankLlmModel,
+          timeoutMs: this.config.rerankLlmTimeoutMs,
+          maxDocuments: this.config.rerankLlmMaxDocs,
+        });
+
+        if (parsed) {
+          const blendWeight = this.config.rerankBlendWeight ?? 0.8;
+          const fusionWeight = 1 - blendWeight;
+
+          const reranked = parsed
+            .filter(item => item.index >= 0 && item.index < results.length)
+            .map(item => {
+              const original = results[item.index];
+              const blended = clamp01(
+                item.score * blendWeight + (original.score ?? 0) * fusionWeight,
+              );
+              return {
+                ...original,
+                score: blended,
+                sources: { ...original.sources, reranked: { score: item.score } },
+              };
+            });
+
+          // Keep documents that the LLM didn't return (un-reranked) at their
+          // original fusion scores, marked as not reranked.
+          const rerankedIndices = new Set(parsed.map(r => r.index));
+          const untouched = results
+            .filter((_, i) => !rerankedIndices.has(i))
+            .map(r => ({ ...r, score: r.score }));
+
+          const merged = [...reranked, ...untouched].sort((a, b) => b.score - a.score);
+          return merged;
+        }
+      } catch {
+        // LLM reranker failed — return fusion results unchanged
+      }
       return results;
     }
 

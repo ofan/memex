@@ -2,14 +2,15 @@
  * Transient error retry helper.
  *
  * Wraps an async operation in N attempts with exponential backoff,
- * retrying only on transient upstream failures (502/503/504 or network
- * timeouts). Non-transient errors propagate immediately on the first
+ * retrying only on transient upstream failures (500/502/503/504 or network
+ * timeouts). 500 is included because llama.cpp returns "Compute error" (500)
+ * for transient OOM/queue-full conditions that recover in seconds. Non-transient errors propagate immediately on the first
  * attempt so bugs aren't masked by silent retries.
  *
  * Used by the embedder and reranker clients to absorb transient
  * inference-server crashes that llama-swap recovers from in 2-5s.
  */
-const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const TRANSIENT_STATUSES = new Set([500, 502, 503, 504]);
 const DEFAULT_MAX_ATTEMPTS = 4;
 
 export interface TransientRetryOptions {
@@ -18,7 +19,7 @@ export interface TransientRetryOptions {
   /** Base backoff in ms. Doubled each retry. Default: 1000 (so 1s, 2s, 4s). */
   baseBackoffMs?: number;
   /**
-   * Additional status codes to treat as transient. Defaults to 502/503/504.
+   * Additional status codes to treat as transient. Defaults to 500/502/503/504.
    * Useful if a specific upstream uses non-standard codes for transient
    * failures.
    */

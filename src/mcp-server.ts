@@ -64,12 +64,22 @@ export function createMemexMcpServer(options: McpServerOptions) {
   const rerankApiKey = process.env.MEMEX_RERANK_API_KEY;
   const rerankModel = process.env.MEMEX_RERANK_MODEL;
   const enableRerank = !!(rerankEndpoint && rerankApiKey);
+
+  // LLM-based reranker: opt-in via MEMEX_RERANK_LLM_MODEL. When set, uses the
+  // chat model as a relevance judge instead of the local cross-encoder.
+  // Requires MEMEX_LLM_ENDPOINT to be configured (shared with reflection).
+  const rerankLlmModel = process.env.MEMEX_RERANK_LLM_MODEL;
+  const rerankLlmEndpoint = reflectionLLM?.endpoint;
+  const rerankLlmApiKey = reflectionLLM?.apiKey ?? "";
+  const enableLlmRerank = !!(rerankLlmEndpoint && rerankLlmModel);
+
   const retriever = embedder
     ? createRetriever(store, embedder, {
         mode: "hybrid",
-        rerank: enableRerank ? "cross-encoder" : "none",
+        rerank: enableLlmRerank ? "llm" : enableRerank ? "cross-encoder" : "none",
         ...(enableRerank ? { rerankEndpoint, rerankApiKey } : {}),
         ...(enableRerank && rerankModel ? { rerankModel } : {}),
+        ...(enableLlmRerank ? { rerankLlmEndpoint, rerankLlmApiKey, rerankLlmModel } : {}),
       })
     : null;
 

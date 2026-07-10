@@ -169,14 +169,15 @@ async function main() {
     dimensions: VECTOR_DIM,
   });
 
-  const rerankEnabled = process.env.RERANK === "1";
+  const rerankMode = process.env.RERANK || "none"; // "1"|"cross-encoder"|"llm"|"none"
   const poolSize = parseInt(process.env.POOL_SIZE || "30");  // tuning knob
   const retriever = createRetriever(store, embedder, {
     mode: "hybrid",
     fusionMethod: "zscore",
     vectorWeight: 0.8,
     bm25Weight: 0.2,
-    rerank: rerankEnabled ? "cross-encoder" : "none",
+    rerank: (rerankMode === "1" || rerankMode === "cross-encoder") ? "cross-encoder"
+      : rerankMode === "llm" ? "llm" : "none",
     rerankApiKey: process.env.MEMEX_RERANK_API_KEY,
     rerankEndpoint: process.env.MEMEX_RERANK_ENDPOINT,
     rerankModel: process.env.MEMEX_RERANK_MODEL,
@@ -185,18 +186,27 @@ async function main() {
       ? parseFloat(process.env.MEMEX_RERANK_BLEND_WEIGHT)
       : undefined,
     rerankScoreMode: (process.env.MEMEX_RERANK_SCORE_MODE as "raw" | "rank" | undefined),
+    rerankLlmEndpoint: process.env.MEMEX_LLM_ENDPOINT
+      ? `${process.env.MEMEX_LLM_ENDPOINT.endsWith("/v1") ? process.env.MEMEX_LLM_ENDPOINT : process.env.MEMEX_LLM_ENDPOINT + "/v1"}/chat/completions`
+      : undefined,
+    rerankLlmApiKey: process.env.MEMEX_LLM_API_KEY || "dummy",
+    rerankLlmModel: process.env.MEMEX_RERANK_LLM_MODEL || process.env.MEMEX_LLM_MODEL,
+    rerankLlmTimeoutMs: parseInt(process.env.MEMEX_LLM_TIMEOUT || "60000"),
     minScore: 0.05,
     candidatePoolSize: poolSize,
   });
-  console.log(`Reranker: ${rerankEnabled ? "ENABLED (" + (process.env.MEMEX_RERANK_MODEL || "(missing MEMEX_RERANK_MODEL)") + ")" : "disabled"}  Pool: ${poolSize}\n`);
-  // rerank toggle via RERANK=1 env var is intentional — lets us diff pipelines without forking the script.
-  // Default remains disabled, matching production memex config.
+  const rerankLabel = rerankMode === "llm" ? `LLM (${process.env.MEMEX_RERANK_LLM_MODEL || process.env.MEMEX_LLM_MODEL || "?"})`
+    : rerankMode !== "none" ? `cross-encoder (${process.env.MEMEX_RERANK_MODEL || "?"})`
+    : "disabled";
+  console.log(`Reranker: ${rerankLabel}  Pool: ${poolSize}\n`);
 
+  const queryDelayMs = parseInt(process.env.QUERY_DELAY_MS || "2000");
   let hits = 0;
   let total = 0;
   const results: { id: string; type: string; hit: boolean; topText: string }[] = [];
 
   for (const eq of EVAL_QUERIES) {
+    if (total > 0) await new Promise(r => setTimeout(r, queryDelayMs));
     total++;
     const retrieved = await retriever.retrieve({ query: eq.query, limit: 3 });
 
