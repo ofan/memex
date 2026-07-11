@@ -25,8 +25,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = join(ROOT, "src", "mcp-server.ts");
 // Generous: cold jiti compile + SQLite migrations on a fresh tmp DB can take
 // several seconds under CI parallelism. The readiness signal is emitted only
-// after full init, so allow plenty of headroom.
-const STARTUP_TIMEOUT_MS = 15000;
+// after full init, so allow plenty of headroom. The openclaw 2026.6.x dep tree
+// adds import weight, pushing cold-start past 15s under full-suite parallel
+// load (~6.5s in isolation). 30s keeps CI deterministic.
+const STARTUP_TIMEOUT_MS = 30000;
 const SHUTDOWN_TIMEOUT_MS = 3000;
 
 interface Spawned {
