@@ -1,6 +1,7 @@
 # Memex Roadmap — Path to SOTA Memory System
 
-**Date:** 2026-04-12
+**Original date:** 2026-04-12 (historical vision document)
+**Status as of 2026-07-11:** Projects 1-3 shipped. Pool stats, domain-eval metrics, and "where memex is" below reflect April 2026 state; see PROGRESS.md for current metrics.
 **Research base:** 15 SOTA iterations (`agent-memory-sota-2026.md`), data quality research (`006-data-quality-research-apr2026.md`), session learnings (`LEARNINGS.md`)
 
 ---
@@ -67,7 +68,7 @@ Ordered by dependency and impact.
                                       → 6. Memory Hierarchy (future)
 ```
 
-### Project 1: Pool cleanup
+### Project 1: Pool cleanup ✅ SHIPPED (v0.7.x)
 **Goal:** Remove the noise floor so every subsequent improvement has clean data to work with.
 
 **What:**
@@ -81,7 +82,12 @@ Ordered by dependency and impact.
 
 **Measured by:** Pool size reduction, domain eval stability (should not regress), never-recalled ratio drop.
 
-### Project 2: MCP server
+**Shipped as:** Dreaming mechanical sweeps (dedup, noise removal, re-scoring, reflection). 13 noise entries purged (LLM meta-commentary). CoT/meta-commentary noise rule added.
+
+### Project 2: MCP server ✅ SHIPPED (v0.7.0)
+
+**Shipped as:** `src/mcp-server.ts` with HTTP+stdio transports, bearer auth, `/health` endpoint. Deployed via systemd+jiti behind Tailscale. Dockerfile built + smoke-validated. Cross-platform (OpenClaw + Claude Code). See original vision below:
+
 **Goal:** Memex as a standalone, always-on memory server. Cross-platform. Enables background processing.
 
 **What:**
@@ -100,7 +106,10 @@ Ordered by dependency and impact.
 
 **Measured by:** Platforms supported (≥2), background dreaming running, latency overhead (<10ms).
 
-### Project 3: Dreaming reflection
+### Project 3: Dreaming reflection ✅ SHIPPED (v0.7.0)
+
+**Shipped as:** Light sweep + deep sweep + LLM reflection phase (`src/dreaming.ts`). Reflection runs via `/dream` command or on a schedule in the MCP server. Dedicated LLM endpoint supported. See original vision below:
+
 **Goal:** LLM-driven knowledge synthesis — turn scattered facts into coherent learnings.
 
 **What:**
@@ -121,7 +130,7 @@ Session import was an OpenClaw-specific workaround for backfilling from historic
 
 Agents that want to bulk-import memories can use the `memory_store` MCP tool directly.
 
-### Project 4: Model bakeoff
+### Project 4: Model bakeoff 🔄 PARTIAL (ongoing)
 **Goal:** Evaluate whether newer models improve retrieval without architectural changes.
 
 **What:**
@@ -167,11 +176,15 @@ Agents that want to bulk-import memories can use the `memory_store` MCP tool dir
 
 ## Success criteria
 
-| Metric | Current | Target | Which project |
+**Note:** This table reflects April 2026 targets. Current state (July 2026) summarized below.
+
+| Metric | April 2026 | Target | Which project |
 |---|---|---|---|
 | Pool noise ratio | ~79% | < 20% | 1 (cleanup decay) |
 | Never-recalled ratio | 99% | < 60% | 1 (cleanup) + 3 (reflection) |
-| Domain eval | 12/15 (80%) | ≥ 14/15 | 3 (reflection) + 4 (models) |
-| LongMemEval E2E | 94% | ≥ 95% | 3 + 4 |
+| Domain eval | 12/15 (80%) | >= 14/15 | 3 (reflection) + 4 (models) |
+| LongMemEval E2E | 94% | >= 95% | 3 + 4 |
 | Memories with contradictions | Unknown | 0 detected | 3 (reflection) |
 | Learnings generated | 0 | 10+ per reflection cycle | 3 (reflection) |
+
+**July 2026 update:** Domain eval is now 26 queries: baseline 69%, cross-encoder 77%, LLM reranker 85% (Wilson CI). MCP path calls `recordRecalls` (F5 fix). LLM reranker added as opt-in second reranker option. See `docs/design/recall-quality-design.md` for the canonical quality plan.

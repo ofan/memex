@@ -35,7 +35,7 @@ graph TB
 
 ## 1. Capture Pipeline (Auto-Capture)
 
-**Trigger:** `agent_end` event — fires after every agent conversation turn.
+**Trigger:** Hook fires after every agent conversation turn.
 
 ```mermaid
 flowchart TD
@@ -140,11 +140,11 @@ we don't want to burn tokens on embedding every message
 
 ### 2a. Auto-Recall (Injected Context)
 
-**Trigger:** `agent_start` event — fires before every agent conversation turn.
+**Trigger:** `before_prompt_build` hook — fires before the agent processes a turn.
 
 ```mermaid
 flowchart TD
-    A["agent_start event"] --> B["Extract query from<br/>last user message"]
+    A["before_prompt_build hook"] --> B["Extract query from<br/>last user message"]
     B --> C{"shouldSkipRetrieval()"}
 
     C -->|"Greeting / command / affirmation<br/>short text / HEARTBEAT"| SKIP["Return — no injection"]
@@ -195,9 +195,9 @@ flowchart TD
         BM["BM25 Search<br/>(keyword FTS5)<br/>weight: 0.3"]
     end
 
-    S1 --> S2["Stage 2 — RRF Fusion<br/>Both hit: vectorScore + 15% BM25 boost<br/>Vector only: vectorScore<br/>BM25 only: bm25Score (validate exists)<br/>Ghost entry detection"]
+    S1 --> S2["Stage 2 — Score Fusion (weighted/z-score)<br/>Both hit: vectorScore + 15% BM25 boost<br/>Vector only: vectorScore<br/>BM25 only: bm25Score (validate exists)<br/>Ghost entry detection"]
 
-    S2 --> S3["Stage 3 — Rerank (cross-encoder)<br/>80% reranker + 20% fused score<br/>Timeout: 5s, fallback: cosine sim<br/>Provider: Jina / SiliconFlow / Voyage / Pinecone"]
+    S2 --> S3["Stage 3 — Rerank (cross-encoder or LLM)<br/>Configurable blend with fusion score<br/>Timeout: 15s, fallback: hybrid ranking<br/>Cross-encoder: Jina / SiliconFlow / Voyage / Pinecone<br/>LLM: ordering-based (opt-in via env)"]
 
     S3 --> S4["Stage 4 — Recency Boost<br/>boost = exp(-ageDays / 14) * 0.10<br/>Today: +0.10 | 7d: +0.06 | 14d: +0.04 | 30d: +0.01"]
 
@@ -205,7 +205,7 @@ flowchart TD
 
     S5 --> S6["Stage 6 — Time Decay + Length Norm<br/>Decay: 0.5 + 0.5 * exp(-age/60), floor 0.5x<br/>Length: 1 / (1 + 0.5 * log2(len/500))"]
 
-    S6 --> S7["Stage 7 — Hard Cutoff + Noise + MMR<br/>hardMinScore: 0.40<br/>Noise filter (denials, boilerplate)<br/>MMR: cosine > 0.85 → defer duplicate"]
+    S6 --> S7["Stage 7 — Hard Cutoff + Noise + MMR<br/>hardMinScore: 0.15 (adaptive)<br/>Noise filter (denials, boilerplate)<br/>MMR: cosine > 0.85 → defer duplicate"]
 
     S7 --> OUT["Return top-k results"]
 
@@ -231,7 +231,7 @@ flowchart TD
 | 4. Recency | "Switched to Qwen3-Embedding" (2 days old) gets +0.09 | 0.78 -> 0.87 |
 | 5. Importance | Same entry has importance=0.8, factor x0.94 | 0.87 -> 0.82 |
 | 6. Decay/Len | 3-day old, 45 chars, minimal penalties | 0.82 -> 0.81 |
-| 7. Cutoff | All above 0.40 survive; MMR defers duplicate phrasing | 5 results returned |
+| 7. Cutoff | All above 0.15 survive; MMR defers duplicate phrasing | 5 results returned |
 
 ---
 
@@ -300,7 +300,8 @@ gantt
 | Vector search (sqlite-vec) | ~33ms | CPU (SIMD) |
 | BM25 search (FTS5) | ~14ms | CPU (index) |
 | Rerank (5 docs, cross-encoder) | ~53ms | Network I/O |
-| Full hybrid+rerank pipeline | ~250ms | Mixed |
+| Rerank (LLM, ordering-based) | ~1-2s | Network I/O (LLM inference) |
+| Full hybrid+rerank pipeline (cross-enc) | ~250ms | Mixed |
 | Unified recall (both sources) | ~300-400ms | Mixed |
 
 ---
@@ -324,7 +325,7 @@ graph LR
 {
   id: string;          // UUID
   text: string;        // The memory content
-  vector: number[];    // 1024-dim embedding (Qwen3-Embedding)
+  vector: number[];    // Embedding dimensions (varies by model; e.g. Qwen3-Embedding-4B = 2560d, 0.6B = 1024d)
   importance: number;  // 0.0-1.0 (set by heuristic at capture)
   category: string;    // "preference" | "fact" | "decision" | "entity" | "other"
   scope: string;       // "global" | "agent:<id>" | "session:<id>"
@@ -341,16 +342,12 @@ Key config knobs that affect the pipeline:
 | Config | Default | Effect |
 |--------|---------|--------|
 | `autoCapture` | true | Enable/disable auto-capture pipeline |
-| `captureAssistant` | false | Also capture assistant messages |
-| `captureMinImportance` | 0.5 | Heuristic score threshold |
+| `autoCapture` | true | Enable/disable auto-capture pipeline |
+| `autoRecall` | true | Enable/disable auto-recall |
 | `retrieval.mode` | "hybrid" | "hybrid" or "vector" only |
-| `retrieval.rerank` | "cross-encoder" | "cross-encoder", "lightweight", "none" |
-| `retrieval.hardMinScore` | 0.40 | Post-pipeline score cutoff |
-| `retrieval.recencyHalfLifeDays` | 14 | Recency boost decay rate |
+| `retrieval.rerank` | "cross-encoder" | "cross-encoder", "llm", "lightweight", "none" |
+| `retrieval.hardMinScore` | 0.15 | Post-pipeline score cutoff (adaptive; override via `MEMEX_HARD_MIN_SCORE_OVERRIDE`) |
 | `retrieval.timeDecayHalfLifeDays` | 60 | Staleness penalty rate |
-| `retrieval.lengthNormAnchor` | 500 | Length penalty reference |
-| `unifiedRecall.crossRerank` | false | Cross-source reranking |
-| `unifiedRecall.earlyTermination` | false | Skip docs when memories are strong |
 
 ---
 

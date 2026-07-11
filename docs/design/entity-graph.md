@@ -1,5 +1,7 @@
 # Entity Graph — Design Doc
 
+**Status: Implemented (v0.7.0).** `src/graph.ts` exists with `createLinks()`, `expandOneHop()`, `deleteLinks()`. Wired into `src/memory.ts` (store-time link creation) and `src/retriever.ts` (retrieval-time one-hop expansion). However, `entityGraph` defaults to **off** — measured zero quality impact on the current 26-query domain eval (BM25 + rerank already capture the same signal). Domain eval baseline is 69% (no rerank), 77% (cross-encoder), 85% (LLM reranker) on Wilson CI; graph expansion does not improve these.
+
 ## Problem
 
 Entity boost as a score multiplier doesn't work — BM25 already captures keyword entity matching. Tuning showed it hurts ranking (80% without boost vs 73% with).
@@ -62,27 +64,31 @@ Graph traversal surfaces the *related but different* memory that keyword matchin
 | Schema migration on existing DB | Startup delay | New table, no ALTER — instant |
 | Orphaned links after memory deletion | Dead links | ON DELETE CASCADE handles it |
 
-## Open Questions (for user)
+## Open Questions
 
 1. Should graph expansion only run for `memory_recall` tool, or also for auto-recall? Auto-recall is latency-sensitive (~150ms budget).
+   **Resolved: off by default for both.** Measured zero quality impact on domain eval — BM25 + rerank already capture the signal.
 2. Should dreaming maintain links (relink after dedup/eviction)?
 3. Cap on links per memory — 10? 20?
+   **Resolved: 10** (MAX_LINKS_PER_MEMORY in src/graph.ts).
 
 ## Metrics
 
 | Metric | Baseline (no graph) | Target |
 |---|---|---|
-| Domain eval | 12/15 (80%) | ≥14/15 (93%) |
-| Multi-entity queries | 1/3 (33%) | ≥3/3 (100%) |
+| Domain eval | 18/26 (69%, Wilson CI) | N/A — graph off by default |
+| Multi-entity queries | 2/3 (67%, old 15-query set) | N/A |
 | LongMemEval R@3 | 90% | ≥90% (no regression) |
 | Retrieval latency | ~150ms | <200ms (one-hop adds ~10ms) |
+
+Note: domain eval expanded from 15 to 26 queries (2026-07-02). The original 12/15 (80%) metric was measured before the query set expansion. Graph expansion is disabled by default — BM25 + rerank already capture the same entity-overlap signal.
 
 ## Files
 
 | File | Change |
 |---|---|
-| `src/graph.ts` | **NEW** — createLinks(), expandByLinks() |
-| `src/memory.ts` | Create links table, call createLinks on store |
-| `src/retriever.ts` | Call expandByLinks after fusion |
-| `tests/acceptance-entity-graph.test.ts` | **NEW** |
-| `tests/graph.test.ts` | **NEW** |
+| `src/graph.ts` | Implemented — createLinks(), expandByLinks() |
+| `src/memory.ts` | Links table created, createLinks called on store |
+| `src/retriever.ts` | expandByLinks after fusion (gated behind `entityGraph` config, off by default) |
+| `tests/acceptance-entity-graph.test.ts` | Acceptance tests |
+| `tests/graph.test.ts` | Unit tests |

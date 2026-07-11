@@ -20,6 +20,43 @@
 
 ---
 
+## [0.7.3] — 2026-07-09
+
+**Theme: recall-quality correctness + production wiring.** Wires the reranker into the MCP path, fixes dead config (hardMinScore, recordRecalls), adds LLM-based reranker, retries on 500, and hardens dependency resolution. Domain eval expanded to 26 queries with Wilson 95% CI: baseline 69%, cross-encoder 77%, LLM reranker 85%.
+
+### Added
+- **LLM reranker** (`src/rerankers/llm-reranker.ts`) — ordering-based relevance judge using a chat model (deepseek-v4-flash). Opt-in via `MEMEX_RERANK_LLM_MODEL`. Uses `node:http` directly (not fetch) to avoid chunked-encoding issues with the nginx ingress. Quality: 85% on domain eval (vs 69% baseline, 77% cross-encoder).
+- **`src/transient-retry.ts`** — retry helper for embedding + reranker clients. Retries on 500/502/503/504 (llama.cpp "Compute error" returns 500 for transient OOM/queue-full) + network timeouts (AbortError/TimeoutError). 4 attempts with exponential backoff (1s, 2s, 4s).
+- **`MEMEX_HARD_MIN_SCORE_OVERRIDE` env var** — runtime kill-switch for the absolute score floor. Set to override `config.hardMinScore` without redeploy.
+- **`MEMEX_RELEVANCE_FIRST` env flag** (opt-in, off by default) — caps recency to a tie-break (+0.05 max) and relevance-gates it (no boost when score < 0.40). Disables multiplicative timeDecay.
+- **Domain eval expansion** (PR #97) — 26 queries (was 15), Wilson 95% CI on hit rate, `QUERY_DELAY_MS` pacing, `RERANK` env supports `"1"|"cross-encoder"|"llm"|"none"`.
+- **Scope-visibility** (PR #100) — `memory_stats` now returns `byProject` and `byClient` breakdowns read from metadata JSON. Makes scope tags human-readable.
+
+### Fixed
+- **F5: `recordRecalls` wired in MCP path** (`src/mcp-server.ts`) — `memory_recall` now calls `store.recordRecalls()` in both the retriever and BM25 fallback paths. Fixes the 99.26% zero `recall_count` data-corruption bug (Gap 10).
+- **F12: `hardMinScore` wired** (`src/retriever.ts`) — `applyAdaptiveMinScore` now reads `this.config.hardMinScore` instead of hardcoding `0.15`. Default changed from 0.40 to 0.15 (preserves pre-fix behavior). Kill-switch via `MEMEX_HARD_MIN_SCORE_OVERRIDE`. 8+ test files that set `hardMinScore: 0.0` were vacuously testing at the old hardcoded floor.
+- **Reranker enabled in MCP path** (PR #103) — `createMemexMcpServer` reads `MEMEX_RERANK_ENDPOINT`, `MEMEX_RERANK_API_KEY`, `MEMEX_RERANK_MODEL` and dynamically sets `rerank: "cross-encoder"` (or `"llm"` when `MEMEX_RERANK_LLM_MODEL` is set). Was hardcoded `rerank: "none"` (C5, Gap 5).
+- **CoT filter in dreaming** (`src/dreaming.ts`) — `filterLlmCommentary` strips LLM meta-commentary from reflection learnings (13 purged, PR #95).
+- **`@modelcontextprotocol/sdk` declared as direct dependency** (PR #104) — was transitive via openclaw; broke when openclaw bumped its peer. Pinned at `^1.29.0`.
+- **Typebox dedup with openclaw** (PRs #105, #106) — exact-pin `typebox` to `1.1.39` to guarantee single copy (dual-instance breaks `tools.ts`). Paired with openclaw's matching pin.
+- **`/health` exempt from auth** (PR #101) — Docker/k8s liveness probes can check `/health` without a bearer token.
+- **Secrets hygiene** (PRs #98, #99) — anonymized domain eval queries and original eval. Broadened secret-pattern guidance in AGENTS.md.
+
+### Changed
+- **`better-sqlite3` 11.x → 12.11.1** (PR #75) — Node 26 compatible native bindings.
+- **Node engine floor raised to >=22.19.0** (PR #105) — required by undici dep via openclaw.
+- **`openai` ^6.46.0** — dependency bumps.
+- **Temporal signals behind `MEMEX_RELEVANCE_FIRST` flag** (PR #96) — off by default, prevents recency from overriding relevance.
+
+### Known gap
+- `VERSION` in `src/mcp-server.ts` is still `"0.7.2"` (UNFIXED as of 0.7.3 — needs bump to 0.7.3).
+- `retriever.ts:3` header comment still says "RRF fusion" instead of "weighted or zscore fusion".
+- `openclaw.plugin.json` `openclawVersion` is `"2026.5.7"` — should be `"2026.6.11"` matching the `openclaw` dep.
+- Domain eval uses zscore fusion (0.8/0.2 weights), not the production weighted default (0.7/0.3) — config drift remains (Gap 4).
+- Plugin auto-recall hook still uses legacy scope derivation (deferred to T2.1/T2.2).
+
+---
+
 ## [0.7.2] — 2026-05-11
 
 **Theme: configuration ergonomics + debug visibility.** Three user-visible improvements on top of v0.7.1, all backward-compatible. Test count 725 → 740 (+15). `npm audit` still 0.

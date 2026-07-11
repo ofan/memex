@@ -1,5 +1,6 @@
 # Memex Recall Validation: Gaps, Criteria, and Improvement Plan
 
+**Superseded by:** [recall-quality-design.md](../recall-quality-design.md) — canonical spec.
 **Status:** REVISED (iteration 3 -- addresses 16 critique points from third adversarial review: 7 critical, 6 major, 3 minor). All claims cite file:line sources verified 2026-07-01. Target audience: engineering team that owns the eval and retrieval pipelines.
 
 ---

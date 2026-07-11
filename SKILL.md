@@ -12,8 +12,9 @@ metadata:
 
 | System | Memory E2E Accuracy | Reader LLM |
 |---|---|---|
+| **Memex (Qwen3-Reranker)** | **94.0%** | GPT-4o |
 | Hindsight/TEMPR | 91.4% | GPT-4o |
-| **Memex** | **90%** | GPT-4o |
+| Memex (no reranker) | 90.0% | GPT-4o |
 | Zep/Graphiti | ~85% | GPT-4o |
 | mem0 | ~78% | GPT-4o |
 | MemGPT | ~75% | GPT-4o |
@@ -98,7 +99,13 @@ openclaw config set plugins.entries.memex.config.documents.reindexIntervalMinute
 Cross-encoder reranker. Off by default. Recommended when `autoRecallLimit=1`.
 
 ```bash
-openclaw config set plugins.entries.memex.config.reranker '{"enabled":true,"endpoint":"http://localhost:8090/v1/rerank","model":"Qwen3-Reranker-0.6B-Q8_0"}'
+openclaw config set plugins.entries.memex.config.reranker '{"enabled":true,"endpoint":"http://<rerank-host>:8090/v1/rerank","model":"Qwen3-Reranker-0.6B-Q8_0"}'
+```
+
+LLM-based reranker (opt-in, higher quality). Set `MEMEX_RERANK_LLM_MODEL` to activate.
+
+```bash
+export MEMEX_RERANK_LLM_MODEL="deepseek-v4-flash"
 ```
 
 ## All Settings

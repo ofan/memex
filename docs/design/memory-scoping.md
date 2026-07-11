@@ -142,3 +142,5 @@ Always captured server-side, orthogonal to tags: `project_root` (hash), `device_
 ## Known gap
 
 The plugin-side auto-recall hook (`index.ts`) still uses the legacy `scopeManager.getAccessibleScopes(agentId)` for the active-context scope set. It does not yet derive `project:` tags for the auto-recall filter because the plugin hook runs inside the OpenClaw gateway process where `process.cwd()` is the gateway's directory, not the agent's project directory. The standalone MCP server (stdio) correctly derives project tags because it has access to the client process's cwd. The plugin (effectively HTTP backend) needs the OpenClaw client to supply project context — deferred to T2.1/T2.2. See PROGRESS.md line ~34 for the same note.
+
+**Related shipped (2026-07-02):** Scope-visibility (#7, #100) — stats breakdowns show readable project names; `MEMEX_CLIENT_NAME` env var for client identity — landed on main independent of the scoping branch.

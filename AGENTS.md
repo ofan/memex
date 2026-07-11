@@ -1,6 +1,6 @@
 # memex
 
-Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. **~892 tests, 51 files.**
+Unified memory plugin for OpenClaw — conversation memory + document search in a single SQLite database. **~909 tests.**
 
 ## Architecture
 
@@ -28,32 +28,32 @@ in `src/retriever.ts`:
    `timeDecay ×(0.5+0.5*exp(-age/60))` compound; both universal, applied post-rerank with no
    relevance gate. A 1-day-old memory gets ~+0.09 and ~×1.0; a 60-day-old relevant one gets ~+0
    and ×0.60. The ~0.4-pt temporal swing exceeds the ~0.15 relevance spread.
-2. **Dead reranker** — `rerank="cross-encoder"` (jina-reranker-v3) is the default, but
-   `rerankApiKey` is unset, so the cross-encoder is silently skipped every query. The system
-   runs vector+BM25 only.
-3. **No confidence floor / always pads** — `applyAdaptiveMinScore = max(best*0.3, 0.15)` returns
-   ~`limit` results almost no matter what. No abstention (return 1, or 0).
+2. **Reranker now wired (FIXED in #103)** — `MEMEX_RERANK_*` env vars now plumb through
+   `createMemexMcpServer` to the retriever. Cross-encoder and LLM reranker both activate when
+   their respective env vars are set. The flip alone is no longer a no-op.
+3. **hardMinScore now wired (FIXED in #95)** — `applyAdaptiveMinScore` uses `config.hardMinScore`
+   (default 0.15). Kill-switch `MEMEX_HARD_MIN_SCORE_OVERRIDE` for emergency tuning. Abstention
+   (return 1 or 0) is not yet implemented — still under design.
 4. **Miscalibrated fusion** — `fusionMethod="weighted"` (raw cosine[0,1] × unbounded BM25). The
    file header claims RRF but the default is weighted; RRF is a supported option.
-5. **Counter disconnected** — `recordRecalls` (DB `recall_count`) runs only on the auto-inject
-   path; `memory_recall` increments only an in-memory `recallFrequency`. `neverRecalled 99%` is
-   an artifact, not a real signal.
+5. **Counter now wired (FIXED F5 in #95)** — `recordRecalls` (DB `recall_count`) now runs on
+   the MCP `memory_recall` path too (both unified and BM25-fallback branches). The old
+   `neverRecalled 99%` artifact should resolve gradually as recalls accrue.
 6. **dream "deep" ≠ cleanup** — `deepSweep` is ephemeral/session-import decay only; dedup +
    noise removal live in `lightSweep`. Running "deep" no-ops when nothing qualifies.
-7. **Provenance stripped** — `sources` (vector/lexical/reranked) is tracked internally but
-   omitted from the `memory_recall` output.
+7. **Provenance now exposed (FIXED in #95)** — `sources` (vector/lexical/reranked) is
+   included in `memory_recall` output via the `source` field. Each result shows whether it
+   came from vector, lexical (BM25), or was reranked.
 
-**Recall-quality design (design only, not implemented):** `docs/design/recall-quality-design.md` —
+**Recall-quality design (partially implemented):** `docs/design/recall-quality-design.md` —
 the canonical spec (supersedes the earlier retrieval-redesign, validation-analysis, and
 feedback-loop docs, now under `docs/design/archive/`). It has been through a spec-review + 2
-adversarial self-review rounds. Direction: **z-score fusion** (RRF is *not* wired into the
-memory retriever despite the stale `retriever.ts:3` header — it's real plumbing, not a config
-flip), revive **Qwen3-Reranker-0.6B** (already deployed in v0.7; not BGE) on the MCP path
-(requires wiring `MEMEX_RERANK_*` env vars into `createMemexMcpServer` — the flip alone is a
-no-op), cap+gate temporal, wire the dead `hardMinScore` + confidence floor + AutoCut +
-abstention (return 1 or 0, with an agent-facing low-confidence guardrail), expose provenance,
-and a bounded recall-frequency boost. Validation plan + TDD tests + sequencing (5 waves + 5
-gates) are in the same doc.
+adversarial self-review rounds. **Shipped in #95/#103:** z-score fusion, MEMEX_RERANK_* MCP
+wiring (cross-encoder + LLM reranker), hardMinScore wired via applyAdaptiveMinScore,
+recordRecalls on MCP path (F5), provenance in memory_recall output, CoT filter,
+cap-temporal behind MEMEX_RELEVANCE_FIRST, 500 added to transient retries. **Still design-only:**
+confidence floor + AutoCut + abstention (return 1 or 0), bounded recall-frequency boost.
+Validation plan + TDD tests + sequencing (5 waves + 5 gates) are in the same doc.
 
 ## Key Files
 
