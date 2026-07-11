@@ -1,5 +1,6 @@
 # Dreaming LLM Integration Design
 
+**Status:** Implemented (shipped v0.7.0, 2026-05-10). LLM reranker added 2026-07-02 reusing the same endpoint + model config (see `src/rerankers/llm-reranker.ts`).
 **Date:** 2026-04-12
 **Project:** Project 3 (Dreaming Reflection) from `docs/plans/02-projects.md`
 **Goal:** Wire an LLM chat endpoint into the MCP server so dreaming reflection runs autonomously.
@@ -38,10 +39,11 @@ fetch(llmConfig.endpoint + "/v1/chat/completions")
 ```
 MEMEX_LLM_ENDPOINT   — base URL (e.g. http://<host>:<port>), /v1/chat/completions appended
 MEMEX_LLM_MODEL      — model name for chat completions
-MEMEX_LLM_API_KEY    — optional, falls back to MEMEX_EMBED_API_KEY, then op://
+MEMEX_LLM_API_KEY    — optional, falls back to MEMEX_EMBED_API_KEY
+MEMEX_LLM_TIMEOUT    — optional, request timeout in ms (default: 120000)
 ```
 
-Same pattern as embedding config. Same inference host, different model.
+Same pattern as embedding config. Same inference host, different model. Also supports CLI flags: `--llm-endpoint`, `--llm-model`, `--llm-api-key`, `--llm-timeout`.
 
 ### Changes
 
@@ -99,6 +101,11 @@ reflectionLLM,
 1. Unit test: `createMemexMcpServer` with reflectionLLM config → dream cycle includes reflection
 2. Unit test: `memory_dream` tool with phase="reflect" → calls reflectionSweep
 3. Production test: run against live DB with real LLM, verify learnings
+
+## Post-implementation additions (v0.7.3)
+
+- **LLM reranker** (`src/rerankers/llm-reranker.ts`, opt-in via `MEMEX_RERANK_LLM_MODEL`) reuses the same `MEMEX_LLM_ENDPOINT` + `reflectionLLM.apiKey`. Uses deepseek-v4-flash for ordering-based relevance ranking. Domain-eval: 85% (vs 69% baseline, 77% cross-encoder).
+- **MEMEX_LLM_TIMEOUT** env var added for configurable request timeouts.
 
 ## Not in scope
 

@@ -1,6 +1,6 @@
 # Session Import v2: Full-Transcript LLM Extraction
 
-> **Status: Open.** Not started. Highest-ROI quality project — 76% of memories are low-quality session imports.
+> **Status: KILLED.** Project killed per 02-projects.md — real-time capture via memory_store MCP tool replaces batch session import.
 > Note: tech stack references below are stale (LanceDB → SQLite, model names may have changed).
 
 **Goal:** Redesign the `import-sessions` pipeline to feed complete conversation transcripts (both user and assistant turns) into a capable LLM using session bin-packing into ~190K token windows, producing high-quality extracted memories with global scope and rich metadata provenance.

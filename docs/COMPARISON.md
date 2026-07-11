@@ -15,7 +15,7 @@ memex was built by merging and rewriting two open-source projects. Here's what c
 | **Processes** | 2 (MCP server + plugin) | 1 | **1** |
 | **Section-level FTS** | No | No | **Yes (heading + bullet splitting)** |
 | **Embedding model tracking** | No | No | **Yes (detect changes, warn user)** |
-| **Session import (LLM)** | No | No | **Yes (Gemini extraction)** |
+| **Session import (LLM)** | No | No | **Yes (configurable LLM extraction)** |
 | **Durability-aware decay** | No | Single half-life | **Per-type (permanent/transient/ephemeral)** |
 | **Tests** | ~50 | ~80 | **506** |
 
@@ -24,7 +24,7 @@ memex was built by merging and rewriting two open-source projects. Here's what c
 |  | **memex** | mem0 | Zep/Graphiti | MemGPT/Letta |
 |---|---|---|---|---|
 | **Architecture** | SQLite + local models | Cloud API | Neo4j graph DB | LLM-managed paging |
-| **Latency (p50)** | ~130ms | ~200ms¹ | ~300ms¹ | ~500ms+¹ |
+| **Latency (p50)** | ~130ms (no rerank), ~1050ms (cross-enc), ~1-2s (LLM rerank) | ~200ms¹ | ~300ms¹ | ~500ms+¹ |
 | **Memory** | 13MB heap | Cloud (N/A) | 500MB+ (Neo4j) | Varies |
 | **Cost per query** | $0 (local inference) | ~$0.01 (API) | Self-host | LLM token cost |
 | **Offline capable** | Yes | No | Partial | No |
@@ -102,6 +102,8 @@ Measured on LongMemEval_s (ICLR 2025). N=50 for memex, published numbers for oth
 Evaluated using official LongMemEval prompts and GPT-4o-mini LLM-judge (same methodology as published systems). Numbers from `tests/fast-benchmark.ts` with chunked embeddings. The Qwen3-Reranker variant is the current production configuration (upgraded 2026-04-10); the "no reranker" row is kept for comparison because the reranker adds meaningful latency. In production memex returns ≤3 results, making R@3 the most relevant retrieval metric.
 
 N=50 is small enough that a ±2 query swing is within noise. The reranker improvement was reproduced independently on two runs and is supported by a mechanistic argument (Qwen3-Reranker has 32K context vs bge-reranker-v2-m3's 8K-truncation on long chunked sessions — see `docs/research/embed-rerank-upgrade-brief.md`).
+
+In addition to the cross-encoder, an **LLM-based ordering reranker** is available (opt-in via `MEMEX_RERANK_LLM_MODEL`). On the domain-eval benchmark (26 queries, Wilson 95% CI), it achieves **85% accuracy** vs 77% for the cross-encoder and 69% baseline (no reranker). The LLM reranker adds ~1-2s latency and is best suited when quality matters more than speed. See `docs/design/recall-quality-design.md` for the canonical spec.
 
 ## Performance Profile
 

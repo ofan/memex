@@ -1,5 +1,7 @@
 # Memex Development Plan — Overview
 
+**Last reviewed: 2026-07-11.** This file is a historical index; it may not reflect current state. See PROGRESS.md for latest.
+
 ## Files
 
 | File | Contents | Review Priority |
@@ -12,20 +14,23 @@
 
 ## Decisions Needing Your Review
 
-### Resolved (April 2026)
+### Resolved (April–July 2026)
 
 | Project | Outcome |
 |---|---|
 | Entity Extraction | Shipped, net-neutral. Entity boost disabled (weight=0). Entity graph disabled by default. Gated behind config flags. |
 | Temporal Queries | Shipped. Regex date detection + timestamp filtering merged. |
 | Entity boost weight | Resolved: 0 (disabled). BM25 already captures keyword entities. |
-| Reflection LLM | Deferred. Light + deep dreaming work without LLM. Reflection phase is future work. |
+| Reflection LLM | Shipped (v0.7.0). Dreaming reflection phase: light + deep + LLM reflection via `/dream`. |
 | Eviction threshold | Resolved: 0.05. Implemented in deep sweep. |
+| MCP transport | Shipped (v0.7.0). HTTP + stdio, bearer auth, systemd+jiti deployment. |
+| MCP server | Shipped (v0.7.0). See `docs/design/mcp-server.md`. |
+| Session import | Killed. Real-time capture via `memory_store` replaces batch import. |
 
 ### Still Open
 
 | Question | Options | Current assumption |
 |---|---|---|
-| Temporal detection scope | Regex vs full NLP date parsing | Regex only — shipped, covers 80% |
-| MCP transport | stdio vs HTTP vs both | Not started |
 | Contradiction detection | Heuristic vs embedding similarity | Not started |
+| Memory hierarchy (topic->episode->fact) | Future architectural project | Not started |
+| Container daemon deploy | Dockerfile built + smoke-validated, not deployed | TBD |

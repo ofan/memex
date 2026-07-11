@@ -197,8 +197,8 @@ The `UnifiedRetriever` (src/unified-retriever.ts) replaces the dual-pipeline arc
 | Embed query | API timeout | No vector search | BM25-only results (degraded but functional) |
 | Memory search | SQLite error | No memory results | Document results only |
 | Document search | SQLite error | No doc results | Memory results only |
-| Reranking | API timeout (10s) | Skip reranking | Calibrated scores pass through (slightly lower quality) |
-| Reranking | Model swap timeout | Same as above | Same — confidence gate may skip future reranks |
+| Reranking | API timeout (15s) | Skip reranking | Calibrated scores pass through (slightly lower quality) |
+| Reranking | Model swap timeout | Same as above | Same — confidence gate may skip future reranks (transient-retry with 4 attempts) |
 
 ### Confidence gate
 

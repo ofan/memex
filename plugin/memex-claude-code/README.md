@@ -22,7 +22,7 @@ in Claude Code's `settings.json` `env` block — no shell exports needed:
 ```json
 {
   "env": {
-    "MEMEX_ENDPOINT": "http://<your-memex-host>:7878/mcp",
+    "MEMEX_ENDPOINT": "http://<your-memex-host>:8000/mcp",
     "MEMEX_AUTH_TOKEN": "PASTE_YOUR_TOKEN_HERE"
   }
 }
@@ -95,5 +95,9 @@ After installing, restart Claude Code. On the first user message, you should see
 Daemon logs show activity:
 
 ```sh
+# systemd (dev host):
 journalctl --user -u memex.service -f
+
+# Docker:
+docker compose logs -f memex
 ```

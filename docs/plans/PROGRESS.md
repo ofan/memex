@@ -1,6 +1,6 @@
 # Progress
 
-## Last Updated: 2026-07-08
+## Last Updated: 2026-07-11
 
 ## Session 2026-07-08 — F1 complete through llm-proxy + GPU contention resolved
 
@@ -28,11 +28,15 @@ All traffic now goes through the **llm-proxy** (k8s, v0.4.63) with circuit-break
 - Reranker and embed run on the same inference host — GPU contention was traced to a separate dev deployment, not the production path
 - Dev deployment (llama-swap on a secondary host) was shut down — only proxy-routed production remains
 - Daemon env points at the llm-proxy for both embed and rerank
-- `memex.env.example` updated with proxy URLs and model names
+- `memex.env.example` updated with proxy URLs and model names; `MEMEX_CLIENT_NAME` placeholder added (commented out)
 - `transient-retry.ts`: 500 added as retryable status (llama.cpp Compute error)
 - `domain-eval.ts`: `QUERY_DELAY_MS` env var for pacing (default 2s)
 - `MEMEX_CLIENT_NAME` set in daemon env (scope visibility)
-- Tests: 909/909 passing
+- Node engine floor raised to `>=22.19.0` (undici dep via openclaw; #105)
+- `better-sqlite3` bumped 11.x -> 12.11.1 (Node 26 compat; #75)
+- `@modelcontextprotocol/sdk` declared as direct dep (was transitive via openclaw; #104)
+- `typebox` exact-pinned to 1.1.39 to guarantee dedup with openclaw (#105, #106)
+- Tests: 909+ passing
 
 ### F3 Calibration — hardMinScore sweep
 
@@ -50,6 +54,15 @@ The default was lowered from 0.40 to 0.15 in #95. At 0.40 the reranker would hav
 1. Container daemon deploy
 2. Wire nDCG@5 into domain-eval (F16)
 3. Live-production sampling (V9)
+4. `openclaw.plugin.json` version bump to 0.7.3 and `openclawVersion` to 2026.6.11 (stale metadata)
+5. `openclaw.plugin.json` `hardMinScore` default still 0.40 — code default is 0.15 (stale config schema)
+
+### Post-v0.7.3 dependency bumps (2026-07-09..11)
+
+- **#104** — `@modelcontextprotocol/sdk` declared as direct dep (broke when openclaw dropped its transitive dep)
+- **#105** — Node engine floor `>=22.19.0` + typebox unscoped alignment (prevents dual-package install)
+- **#106** — typebox exact-pin to `1.1.39` (must match openclaw pin; dual-instance breaks `tools.ts`)
+- **#75** — `better-sqlite3` 11.x -> 12.11.1 (Node 26 compat)
 
 ### LLM Reranker Spike (ordering-based)
 

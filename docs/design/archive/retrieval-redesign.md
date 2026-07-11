@@ -1,5 +1,6 @@
 # memex Retrieval Redesign — Noise-Robust Hybrid Recall
 
+**Superseded by:** [recall-quality-design.md](../recall-quality-design.md) — canonical spec.
 **Status:** design proposal (not implemented) · **Date:** 2026-06-29
 **Goal:** make recall **store-invariant** — return the one relevant memory (or none) regardless of how polluted the store is.
 

@@ -1,6 +1,6 @@
 # model-bakeoff — quick go/no-go for a candidate reranker or embedder
 
-**Status:** Design draft. Built after the manual Qwen3-Reranker bakeoff on 2026-04-10 codified the workflow.
+**Status: Implemented (v0.7.0).** `scripts/bakeoff` (CLI entry point) and `tests/bakeoff/` (runner, criteria, cache-guard, tests) exist. The harness supports both reranker and embedder swaps. Domain eval has expanded from 15 to 26 queries since the original bakeoff. The workflow now covers 2 reranker variants (cross-encoder via qwen3-reranker, LLM-based via deepseek-v4-flash). Built after the manual Qwen3-Reranker bakeoff on 2026-04-10 codified the workflow.
 
 ## Problem
 
@@ -45,6 +45,7 @@ Required env vars (no hardcoded defaults; missing → fail with a clear message)
 | `MEMEX_LLAMA_SWAP_API_KEY` | from 1Password — auth header for the embed/rerank endpoints |
 | `MEMEX_BENCHMARK_OPENAI_API_KEY` | from 1Password — for GPT-4o e2e judging |
 | `EMBED_MODEL` | the *current* embedding model (used as the reference in reranker swaps) |
+| `EMBED_BASE_URL` | base URL of the inference host (from openclaw config or set explicitly) |
 
 The candidate's endpoint URL and model name are positional args, not env vars, because they're the thing that varies per candidate and should be visible in shell history.
 
@@ -54,14 +55,14 @@ Two stages, gated. The cheap stage runs first; if it fails decisively, the expen
 
 ### Stage 1 — fast benchmarks (target: < 60s wall clock, no LLM cost)
 
-1. **Domain eval** (N=15 queries, live memex DB) — both with and without the candidate, retrieval-only, no LLM reader
+1. **Domain eval** (N=26 queries as of 2026-07, live memex DB) — both with and without the candidate, retrieval-only, no LLM reader
 2. **fast-benchmark TIER=fast** (N=50 LongMemEval cached fixture) — both with and without the candidate, in-process fusion math + optional rerank, no LLM cost
 
 Output:
 ```
 === Stage 1 ===
               | baseline | candidate | Δ
-domain-eval   |   12/15  |   14/15   | +2  ✓
+domain-eval   |   18/26  |   20/26   | +2  ✓
 LME R@1       |   78%    |   82%     | +4  ✓
 LME R@3       |   90%    |   90%     |  0  ◯
 ```
@@ -146,9 +147,9 @@ const PASS_CRITERIA = {
 - **Multi-candidate sweep** — `bakeoff sweep <candidates.txt>` is a v2 feature. v1 does one candidate at a time.
 - **Statistical significance** — N=50 + N=15 is small enough that single-query swings dominate. Don't over-engineer the decision math; the criteria above are intentionally conservative.
 
-## When to build it
+## When it was built
 
-After this loop's commits land. The manual bakeoff codified today is the v1 spec — `bakeoff reranker` should produce the exact same comparison table I produced manually today, just in 5 minutes instead of 60.
+Shipped as part of v0.7.0. The `scripts/bakeoff` CLI and `tests/bakeoff/` harness produce the comparison table originally done manually — in ~5 minutes for a reranker swap.
 
 ## Connection to the methodology rule
 

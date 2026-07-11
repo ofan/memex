@@ -8,10 +8,10 @@ transfer workflow described in `docs/plans/019-containerize-memex.md`.
 
 ## What's in the image
 
-- **Runtime:** `node:25-slim`. Node is pinned to the 25 series because Node 26
-  breaks `better-sqlite3`'s prebuilt native binding (see
-  `reference-node-26-better-sqlite3-blocker`). Bump to `node:26-slim` once
-  upstream ships Node-26 prebuilds.
+- **Runtime:** `node:25-slim`. Previously pinned to 25 because Node 26 broke
+  `better-sqlite3`'s prebuilt native binding. `better-sqlite3` has been bumped
+  to 12.x (Node-26-compatible), clearing that blocker. Bump to `node:26-slim`
+  when convenient.
 - **Artifact:** pre-compiled `dist/` (multi-stage `tsc` build) — smaller image,
   fast startup. The daemon entrypoint is `node dist/src/mcp-server.js`.
 - **Native deps:** `better-sqlite3` + `sqlite-vec`, rebuilt for the runtime ABI
@@ -22,7 +22,7 @@ transfer workflow described in `docs/plans/019-containerize-memex.md`.
 ## Build
 
 ```bash
-docker build -t memex-daemon:0.7 .
+docker build -t memex-daemon:0.7.3 .
 ```
 
 ## Configure
@@ -34,10 +34,13 @@ or the repo). All values are env-driven:
 | Var | Purpose |
 |-----|---------|
 | `MEMEX_EMBED_ENDPOINT` / `_API_KEY` / `_MODEL` / `_DIM` | Embedding server (OpenAI-compatible). Omit → BM25-only. |
-| `MEMEX_LLM_ENDPOINT` / `_MODEL` / `_API_KEY` | Reflection LLM. Omit → reflection skipped. |
+| `MEMEX_RERANK_ENDPOINT` / `_API_KEY` / `_MODEL` | Cross-encoder reranker (Qwen3-Reranker-0.6B). Omit → no reranking. |
+| `MEMEX_LLM_ENDPOINT` / `_MODEL` / `_API_KEY` | Reflection LLM + LLM reranker (shared endpoint). Omit → reflection skipped, no LLM reranker. |
+| `MEMEX_RERANK_LLM_MODEL` | LLM-based reranker model (opt-in). Requires `MEMEX_LLM_ENDPOINT`. |
 | `MEMEX_AUTH_TOKEN` | Bearer token clients must send. **Set in production.** |
 | `MEMEX_HTTP_HOST` / `_PORT` | Bind. Inside a container use `0.0.0.0`. |
 | `MEMEX_DB_PATH` | SQLite path. Defaults to `/data/memex.sqlite`. |
+| `MEMEX_CLIENT_NAME` | Client identity for scope visibility (e.g. `claude-code`). |
 
 ## Run
 
@@ -57,7 +60,7 @@ docker run -d --name memex-daemon --network host \
   --env-file memex.env \
   -v memex-data:/data \
   --restart unless-stopped \
-  memex-daemon:0.7
+  memex-daemon:0.7.3
 ```
 
 ## DB persistence

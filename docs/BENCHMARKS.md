@@ -1,6 +1,6 @@
 # Benchmarks — memex
 
-**Updated:** 2026-04-11
+**Updated:** 2026-07-11
 
 ## Environment
 
@@ -8,7 +8,7 @@
 |---|---|
 | Test host | Ubuntu, Xeon CPU, 16GB RAM, Node 25.9 |
 | Embedding | Qwen3-Embedding-4B-Q8_0 (2560d) via llama-swap on a dedicated Apple Silicon host |
-| Reranker | **Qwen3-Reranker-0.6B-Q8_0** via same endpoint (upgraded 2026-04-10, replaced bge-reranker-v2-m3-Q8_0) |
+| Reranker | Cross-encoder: **Qwen3-Reranker-0.6B-Q8_0** via same endpoint (upgraded 2026-04-10, replaced bge-reranker-v2-m3-Q8_0). LLM reranker also available (opt-in via `MEMEX_RERANK_LLM_MODEL`, ordering-based, e.g. deepseek-v4-flash). |
 | Network | Test host → inference host via Tailscale (~3-90ms RTT) |
 | Database | SQLite + sqlite-vec + FTS5 |
 | Memories | ~2100 entries (avg 94 chars, max 650 chars) |
@@ -82,6 +82,20 @@ Embedding API call dominates. Local compute (SQLite, fusion) is negligible.
 
 ---
 
+## Domain Eval (Recall Quality)
+
+Production recall-quality benchmark against live memex DB. 26 entity-rich queries, Wilson 95% confidence intervals. Measured via `tests/domain-eval.ts`.
+
+| Config | Accuracy | Notes |
+|---|---|---|
+| Baseline (no reranker) | 69% | Hybrid retrieval only |
+| Cross-encoder (Qwen3-Reranker-0.6B) | 77% | Standard reranker |
+| LLM reranker (deepseek-v4-flash) | **85%** | Ordering-based, opt-in via `MEMEX_RERANK_LLM_MODEL` |
+
+The LLM reranker adds ~1-2s latency but is the strongest option for quality. Cross-encoder is the default (fast, local). See `docs/design/recall-quality-design.md` for the canonical spec.
+
+---
+
 ## Issue #7 Production Recall Test
 
 9 queries against known facts from conversations.
@@ -121,6 +135,10 @@ TIER=fast node --import jiti/register tests/fast-benchmark.ts
 TIER=fast RERANK=1 RERANK_ENDPOINT=... RERANK_MODEL=Qwen3-Reranker-0.6B-Q8_0 RERANK_API_KEY=... \
   node --import jiti/register tests/fast-benchmark.ts
 
+# LongMemEval fast benchmark with LLM reranker
+TIER=fast RERANK=llm MEMEX_RERANK_LLM_MODEL=deepseek/deepseek-v4-flash \
+  node --import jiti/register tests/fast-benchmark.ts
+
 # LongMemEval E2E benchmark with fresh GPT-4o generation (~4min, OpenAI cost)
 TIER=e2e RERANK=1 LLM_API_KEY=... OPENAI_API_KEY=... \
   node --import jiti/register tests/fast-benchmark.ts
@@ -137,4 +155,21 @@ BEIR_MODE=hybrid EMBED_BASE_URL=... EMBED_MODEL=... node --import jiti/register 
 
 # Latency benchmark
 node --import jiti/register tests/benchmark.ts
+
+# Domain eval (26 queries, Wilson 95% CI) — baseline
+EVAL_DB=~/.openclaw/memory/memex/memex.sqlite \
+  EMBED_BASE_URL=... EMBED_API_KEY=... EMBED_MODEL=... \
+  node --import jiti/register tests/domain-eval.ts
+
+# Domain eval — cross-encoder rerank
+EVAL_DB=~/.openclaw/memory/memex/memex.sqlite \
+  EMBED_BASE_URL=... EMBED_API_KEY=... EMBED_MODEL=... \
+  RERANK=cross-encoder RERANK_ENDPOINT=... RERANK_MODEL=... RERANK_API_KEY=... \
+  node --import jiti/register tests/domain-eval.ts
+
+# Domain eval — LLM rerank
+EVAL_DB=~/.openclaw/memory/memex/memex.sqlite \
+  EMBED_BASE_URL=... EMBED_API_KEY=... EMBED_MODEL=... \
+  RERANK=llm MEMEX_RERANK_LLM_MODEL=deepseek/deepseek-v4-flash \
+  node --import jiti/register tests/domain-eval.ts
 ```
