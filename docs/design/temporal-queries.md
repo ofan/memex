@@ -1,5 +1,7 @@
 # Temporal Queries Design
 
+**Status: Implemented but not yet wired into retrieval.** `src/temporal.ts` exports `detectTemporalRange()` and passes all unit + acceptance tests. However, the retriever import is present but the function is **not called** in the retrieval pipeline — the wiring step described below was gated behind `MEMEX_RELEVANCE_FIRST` (commit 3434df1, #96) and remains off by default. The import in `src/retriever.ts` line 10 is dead until the feature flag is enabled or the gate is removed.
+
 ## Problem
 
 Queries like "What happened last week?" or "What did I do yesterday?" carry
@@ -33,9 +35,9 @@ date range `[start, end]`, applied as a `WHERE timestamp BETWEEN` filter
 ### Wiring
 
 In `src/retriever.ts`:
-- Before calling `vectorSearch` / `bm25Search`, call `detectTemporalRange(query)`.
-- If a range is detected, pass it as an additional timestamp filter to both search paths.
-- The `MemoryStore` search methods accept an optional `timestampRange: [number, number]` parameter and add `WHERE timestamp BETWEEN ? AND ?` to the SQL.
+- `detectTemporalRange` is imported but **not yet called** in the retrieval pipeline.
+- The wiring step described in the original design (call before vectorSearch/bm25Search, pass timestampRange to search methods) was gated behind `MEMEX_RELEVANCE_FIRST` (#96) and has not shipped as an always-on feature.
+- When enabled, `MemoryStore` search methods accept an optional `timestampRange: [number, number]` parameter and add `WHERE timestamp BETWEEN ? AND ?` to the SQL.
 
 ### Trade-offs
 

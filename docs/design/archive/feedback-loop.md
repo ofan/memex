@@ -1,5 +1,6 @@
 # Feedback Loop — Bounded Recall-Frequency Boost (design)
 
+**Superseded by:** [recall-quality-design.md](../recall-quality-design.md) — canonical spec.
 **Status:** design-only (ready for TDD implementation). No code changes in this doc.
 **Date:** 2026-06-29
 **Roadmap item:** "Feedback loop — implicit recall-frequency boost (bounded)."

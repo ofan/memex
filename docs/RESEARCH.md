@@ -1,8 +1,8 @@
 # Research Notes — Unified Memory System
 
-**Note:** This document reflects the research phase. The architecture has since been consolidated to a single SQLite database with unified retriever pipeline. See CLAUDE.md for current architecture.
+**Note:** This document reflects the research phase (2026-03). The architecture has since been consolidated to a single SQLite database with unified retriever pipeline. Reranking is now a core feature (cross-encoder + LLM reranker). The production embedding model is Qwen3-Embedding-4B (not 0.6B). See CLAUDE.md and `docs/design/recall-quality-design.md` for current architecture and quality baselines.
 
-**Updated:** 2026-03-05
+**Updated:** 2026-07-11 (staleness review — content preserved as historical record)
 
 ---
 
@@ -39,17 +39,17 @@
 | Ollama | ✅ | ✅ | ❌ no endpoint | ✅ one port | brew | Same as llama.cpp |
 | LocalAI | ✅ | ✅ | ✅ Python backend | ✅ one port | Docker/native | Same as llama.cpp + Python overhead |
 
-**Decision:** <model-server>. Go binary, manages llama-server child processes, proper HTTP reverse proxy, health monitoring, web UI. One port, zero deps. Router mode was tried first but abandoned (child processes crash after 2 requests, never respawn).
+**Decision:** llama.cpp with a Go reverse-proxy manager. Go binary manages llama-server child processes, proper HTTP reverse proxy, health monitoring, web UI. One port, zero deps. Router mode was tried first but abandoned (child processes crash after 2 requests, never respawn).
 
-### <model-server> Setup
+### Model Server Setup
 - Go binary at `<binary-path>`, config at `<config-path>`
 - `groups.inference.swap: false` keeps all models loaded simultaneously (default `swap: true` would hot-swap)
 - `--batch-size 8192 --ubatch-size 8192` on embedding + reranker (avoids "too large to process" for large docs)
-- Dynamic ports via `${PORT}` macro (embedding, reranker, chat each on their own port)
+- Dynamic ports via `${PORT}` macro
 - Preload hooks load all models on startup
-- service manager: `<service-unit>` (RunAtLoad, KeepAlive)
+- service manager: systemd (RunAtLoad, KeepAlive)
 - Current setup on the always-on host: 3 models, on a single port
-- Config tracked in `github.com/example/config` (private)
+- Config tracked in private config repo
 
 ### mlx-openai-server Potential
 - 244 stars, actively maintained (as of Mar 2026)
@@ -105,7 +105,7 @@ vs current (Gemini, no reranker): ~350ms
 
 1. **Embedding is the bottleneck.** LanceDB search is <30ms. Switching to local drops embed from 250ms to 45ms.
 2. **Quality gap doesn't matter at our scale.** With <100 memories, MTEB 64.3 vs 68.3 returns identical top-5 results.
-3. **Reranking is new capability.** Currently disabled. Local reranker at 61ms is essentially free to add.
+3. **Reranking is now a core feature.** Cross-encoder (Qwen3-Reranker-0.6B) is the default; LLM-based ordering reranker is opt-in. Both are wired into the MCP and plugin paths.
 4. **The always-on host has headroom.** Using ~3.5GB of 12.7GB VRAM. TTS already running, ~8-9GB available.
 5. **Model swapping is config-only.** Plugin uses OpenAI-compat API — change baseURL + model name to switch.
 

@@ -58,7 +58,7 @@ Memex's 94% is honestly self-measured and reproducible from this repo, but a lea
 
 ### Domain eval
 
-A 15-query entity-rich eval against the author's production memex DB lives at `tests/domain-eval.ts`. It's the primary regression gate for day-to-day retrieval tuning because it runs in under 10s with no LLM cost. Current score: 12/15 without reranker, 11/15 with Qwen3-Reranker (one query loses to a "defensible but wrong" semantic match). See `docs/plans/LEARNINGS.md` for the history.
+A 26-query entity-rich eval against the author's production memex DB lives at `tests/domain-eval.ts`. It's the primary regression gate for day-to-day retrieval tuning because it runs in under 10s with no LLM cost. Scores reported with Wilson 95% confidence intervals: baseline 69%, cross-encoder (Qwen3-Reranker) 77%, LLM reranker (DeepSeek-V4-Flash) 85%. See `docs/plans/PROGRESS.md` for the history.
 
 ### Model bakeoff harness
 
@@ -84,8 +84,9 @@ This is why memex is a `memory` plugin instead of a plain search plugin: the goa
 
 - **7 tools**: `memory_recall`, `memory_store`, `memory_forget`, `memory_dream`, `memory_stats` (MCP server) + `memory_update`, `memory_list` (plugin) + `document_search` — 5 MCP tools, 7 total via plugin
 - **Hybrid retrieval**: z-score fusion (vector + BM25), max-sim chunked embedding
-- **Cross-encoder reranking**: configurable (Jina / SiliconFlow / Voyage / Pinecone shapes). Default off; enable via config when running against an instruction-capable reranker like Qwen3-Reranker-0.6B.
-- **Transient-failure retry**: embedder and reranker clients both retry on 502/503/504/timeouts with exponential backoff (`src/transient-retry.ts`), so inference-server crashes never propagate to callers as failed recalls.
+- **Cross-encoder reranking**: configurable (Jina / SiliconFlow / Voyage / Pinecone shapes). Default off; enable via `MEMEX_RERANK_*` env vars or config when running against an instruction-capable reranker like Qwen3-Reranker-0.6B.
+- **LLM-based reranking**: optional alternative to cross-encoder (DeepSeek-V4-Flash via ordering-based prompt). Opt-in via `MEMEX_RERANK_LLM_MODEL`; highest-quality option at ~85% domain-eval accuracy.
+- **Transient-failure retry**: embedder and reranker clients both retry on 500/502/503/504/timeouts with exponential backoff (`src/transient-retry.ts`), so inference-server crashes never propagate to callers as failed recalls.
 - **Document search**: FTS5 + sqlite-vec, dual-granularity (whole-doc + section/bullet)
 - **Auto-recall**: injects relevant memories into prompt every turn, with an in-turn dedup cache so multiple prompt rebuilds per agent turn only cost one retrieve() call
 - **LLM-driven storage**: system prompt nudges the LLM to store facts, no heuristic auto-capture
@@ -134,8 +135,7 @@ The `npm install` runs a postinstall hook that auto-rebuilds `better-sqlite3` fr
 
 | Node | Status |
 |---|---|
-| 22.x – 25.x | Supported. Prebuilt `better-sqlite3` binaries available; postinstall is a no-op. |
-| 26.x | **Not supported yet.** `better-sqlite3` (latest 12.9.0) doesn't compile against Node 26's V8 API (`GetPrototype`/`GetIsolate`/`PropertyCallbackInfo::This` removed). Tracking upstream: [WiseLibs/better-sqlite3](https://github.com/WiseLibs/better-sqlite3). Pin OpenClaw's runtime to Node ≤ 25 until a compatible version ships, OR memex's switch to `node:sqlite` lands. If memex registers under Node 26, you'll see `documents: disabled (initialization failed — common cause: better-sqlite3 native binding missing for this Node version)` in the gateway log — that's this issue. |
+| 22.x – 26.x | Supported. `better-sqlite3` ^12.11.1 includes Node 26 V8 API compatibility. Prebuilt binaries available; postinstall is a no-op. |
 
 Add to your OpenClaw config:
 
@@ -208,6 +208,7 @@ memex (kind: "memory")
 │   ├── Z-score fusion (0.8 vec + 0.2 BM25)
 │   ├── Max-sim chunked embedding
 │   ├── Cross-encoder reranking (optional)
+│   ├── LLM-based reranking (optional, via ordering prompt)
 │   ├── Tag-intersection scoping
 │   ├── In-turn recall cache (per-agent-turn dedup)
 │   ├── Rerank-failure fallback → hybrid fusion ranking unchanged (not cosine)
@@ -220,7 +221,7 @@ memex (kind: "memory")
 ├── Embedding + Rerank Clients
 │   ├── OpenAI-compatible HTTP client
 │   ├── LRU cache (256 entries, 30min TTL)
-│   ├── Transient-failure retry (502/503/504/AbortError, exponential backoff)
+│   ├── Transient-failure retry (500/502/503/504/AbortError, exponential backoff)
 │   └── Auto-chunking for long documents
 ```
 

@@ -1,4 +1,20 @@
-# Learnings — April 2026 Session
+# Learnings — April 2026 Session (+ updates through July 2026)
+
+**Note:** This is a historical learnings document. Most entries are from the April 2026 development cycle. Learnings remain valid lessons; some situations described have since been resolved (noted inline).
+
+## v0.7.3 post-release — dependency management takeaways
+
+- **typebox dual-package is a recurring hazard.** v0.7.1 had it with `@sinclair/typebox` vs `typebox`. v0.7.2 fixed it by switching to unscoped. v0.7.3 had it AGAIN because openclaw and memex resolved to different patch versions of `typebox` — `tools.ts` broke because `stringEnum` and `Type.Optional` came from different instances with incompatible nominal types. Fix: exact-pin `"typebox": "1.1.39"` in memex (must match openclaw's pin). Lesson: when two packages share a typebox dependency, the version must be an exact match, not a range.
+- **`@modelcontextprotocol/sdk` must be a direct dep.** It was resolved transitively through openclaw until openclaw dropped it — then memex broke. Declared as direct dep in #104 at `^1.29.0`. Lesson: if your package imports from a module directly in its own source, list it as a direct dependency.
+- **Node engine floor:** Raising to `>=22.19.0` was required by undici (via openclaw). Pinning ensures users get a clear error rather than cryptic runtime failures.
+
+## v0.7.3 recall-quality — LLM reranker, proxy wiring
+
+- **LLM reranker (ordering-based) beats cross-encoder.** At 22/26 = 85% vs 20/26 = 77% (Wilson CI). Design: ask the model to ORDER documents (comma-separated index list), not score them. Ordering -> rank-normalized scores. Uses `node:http` (not fetch) because the proxy's nginx returns empty bodies for undici chunked requests.
+- **Two reranker options now exist:** cross-encoder (qwen3-reranker, via `MEMEX_RERANK_*` env) and LLM reranker (deepseek-v4-flash, opt-in via `MEMEX_RERANK_LLM_MODEL`). LLM takes priority when both are configured.
+- **hardMinScore was dead config.** The default 0.40 was in the config schema but the retriever hardcoded 0.15. Fixed in #95 by wiring `hardMinScore` into `applyAdaptiveMinScore`. New default 0.15; kill-switch `MEMEX_HARD_MIN_SCORE_OVERRIDE`.
+- **`recordRecalls` was never called on the MCP path.** The in-memory `recallCounts` map (used for per-doc boost) was always empty — 99.26% of memories had recall_count=0. Fixed in #95 (F5): `store.recordRecalls()` now called on both hybrid path and BM25-only fallback.
+- **500 should be retried.** llama.cpp returns HTTP 500 for transient "Compute error" (OOM/queue-full) that recovers in seconds. Added to `transient-retry.ts` statuses `{500,502,503,504}`.
 
 ## v0.7.1 security bump — vulnerability deltas
 
@@ -99,6 +115,7 @@ Measured in 2026-04-10 against memex production DB (2105 memories) and cached Lo
 - **Qwen3-Reranker was a decisive win on LongMemEval** (+2 queries R@1, +2 queries E2E) and a small loss on domain eval (−1). The larger benchmark win (N=50 vs N=15) and clearer mechanism drove ship.
 - **Mechanism:** Qwen3-Reranker has 32K context (vs bge's 8K) — bge was truncating memex's chunked conversation sessions before scoring them. Qwen3-Reranker also emits sigmoid-calibrated [0,1] scores instead of bge's unbounded logits, which makes memex's "rerank skip on high confidence" code path actually meaningful.
 - **Lesson:** "Enable reranking" and "disable reranking" are not the real decision. The real decision is "which reranker." Don't extrapolate a finding across reranker families.
+- **July 2026 update:** This lesson proved correct again — the LLM reranker (deepseek-v4-flash, ordering-based) achieves 85% vs cross-encoder's 77% vs baseline 69% on the expanded 26-query domain eval. Reranker choice continues to dominate reranker-on/off.
 - **Process lesson:** The fix came from a separate Claude doing a full mechanistic research trail (`docs/research/embed-rerank-upgrade-brief.md` Conclusion section) — walking each rejected candidate through our actual failure modes, not just citing MTEB scores. This is the `Research Rigor: Diagnose Before Scoping` rule in action — and it worked this time.
 - **Latency follow-up:** memex made **10 /v1/rerank calls** during a single `openclaw agent main` turn in live verification. That's suspicious — the batch API takes N documents per call, so it should be 1-ish per retrieval. Possibly per-source duplication or the agent making multiple tool calls. Flagged for next-session investigation.
 

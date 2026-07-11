@@ -4,7 +4,7 @@
 
 ## Problem statement
 
-The only way to inspect what memex has stored today is `openclaw memex list` / `openclaw memex search` — text-only, paginated by terminal height, hard to filter by category × scope × date × similarity simultaneously. Three things suffer:
+The only way to inspect what memex has stored today is `memory_list` / `memory_recall` (MCP tools) or `openclaw memex list` / `openclaw memex search` — text-only, paginated by terminal height, hard to filter by category × scope × date × similarity simultaneously. Three things suffer:
 
 1. **Trust building** — users (and we) don't have a quick way to look at "what does memex remember about me?"
 2. **Noise debugging** — when retrieval surfaces something weird, finding all related entries (same entity, same scope, same time window) is multi-step CLI work.
@@ -97,9 +97,9 @@ Self-contained: vanilla JS + CSS embedded in one HTML file. No build step. Serve
 
 ## Auth model
 
-Reuse `auth: "gateway"` from `/__memex/health`. The gateway already has bearer-token auth in front of HTTP routes. Anyone with the gateway's URL + token can hit it. Localhost-only by default (gateway binds to 127.0.0.1 unless explicitly Tailscale-exposed).
+Use `auth: "gateway"` pattern (same as `/__memex/health`, though note health is now exempt from auth as of #101). The gateway already has bearer-token auth in front of HTTP routes. Anyone with the gateway's URL + token can hit it. Localhost-only by default (gateway binds to 127.0.0.1 unless explicitly exposed).
 
-**No additional auth surface needed** — piggybacks on existing infra.
+**No additional auth surface needed** — piggybacks on existing infra. Browser routes should require auth (unlike the health probe).
 
 ## Security considerations
 

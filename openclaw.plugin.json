@@ -2,7 +2,7 @@
   "id": "memex",
   "name": "Memex",
   "description": "Unified memory for OpenClaw: conversation memory + document search in a single SQLite database",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "kind": "memory",
   "contracts": {
     "tools": [
@@ -11,7 +11,8 @@
       "memory_forget",
       "document_search",
       "memory_stats",
-      "memory_list"
+      "memory_list",
+      "memory_update"
     ]
   },
   "configSchema": {
@@ -41,6 +42,7 @@
       "autoRecallLimit": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3, "description": "Number of results to inject per turn (default: 3). R@3=90%, R@5=96%." },
       "autoCapture": { "type": "boolean", "default": true, "description": "Nudge LLM to store facts via memory_store tool" },
       "autoCaptureAgents": { "type": "array", "items": { "type": "string" }, "description": "Agent IDs to enable auto-capture for. Unset = all agents." },
+      "memoryAgents": { "type": "array", "items": { "type": "string" }, "description": "Unified agent whitelist for both recall + capture (v0.7.2+). Supersedes separate autoRecallAgents/autoCaptureAgents. Legacy keys extend via union semantics." },
       "documents": {
         "type": "object",
         "additionalProperties": false,
@@ -71,7 +73,7 @@
           "vectorWeight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.7 },
           "bm25Weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
           "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
-          "hardMinScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.40 },
+          "hardMinScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15 },
           "candidatePoolSize": { "type": "integer", "minimum": 10, "maximum": 100, "default": 20 },
           "timeDecayHalfLifeDays": { "type": "number", "minimum": 0, "maximum": 365, "default": 60 },
           "filterNoise": { "type": "boolean", "default": true }

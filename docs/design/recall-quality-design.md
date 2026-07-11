@@ -1,10 +1,12 @@
 # Recall Quality Design -- Canonical Spec
 
-**Status:** design · **Date:** 2026-07-01
+**Status:** design (with implementation notes) · **Date:** 2026-07-01 · **Updated:** 2026-07-11
 **Supersedes:** `retrieval-redesign.md`, `recall-validation-analysis-revised.md`, `feedback-loop.md`
 **Single source of truth for:** recall quality redesign, validation framework, feedback-loop boost, and sequencing.
 
 > This document is the canonical spec. The three source docs are archived; this doc is the authority for all recall-quality work going forward. It includes corrections from a spec-review pass (C1-C7) verified against current code at the listed file:line references.
+>
+> **Implementation status (2026-07-11):** Wave 0 is complete (PRs #95, #103). F5 (recordRecalls in MCP), F12 (hardMinScore wired), C1 (reranker enabled in MCP — both cross-encoder and LLM), and C3 (hardMinScore wired with MEMEX_HARD_MIN_SCORE_OVERRIDE kill-switch) are implemented. The LLM reranker (deepseek-v4-flash, ordering-based, opt-in via MEMEX_RERANK_LLM_MODEL) was added as a second reranker option alongside the cross-encoder. Changes 2 (zscore default), 4 (temporal caps), 5 (semantic dedup), 6 (AutoCut), 7 (abstention), and 8 (provenance) remain planned. See §1.4 for per-change status.
 
 ---
 
@@ -12,11 +14,11 @@
 
 memex retrieval returns ~20 results that are mostly noise. A leaked CoT fragment (`ca1b32c6`) tops unrelated queries at ~0.7 score. The 94% LongMemEval E2E headline (reported in PROGRESS.md) disguises the fact that:
 
-- **No eval tests the production config.** MCP `memory_recall` hardcodes `rerank:"none"` and `fusionMethod:"weighted"` (`mcp-server.ts:57` + `retriever.ts:148-152`). Every quality eval uses a different (better) config: zscore fusion, 0.8/0.2 weights (`domain-eval.ts:160-165`, `longmemeval-benchmark.ts:356-363`). The BEIR benchmark calls `hybridQuery()` from `src/search.ts:3326` -- a third, completely different code path that always reranks internally (`search.ts:3490`).
-- **The reranker is dead in production.** `mcp-server.ts:57` hardcodes `rerank:"none"`. `UnifiedRetriever` has zero quality-eval coverage. Published reranker-on numbers describe a code path users never hit.
-- **hardMinScore (0.40) is dead config.** `applyAdaptiveMinScore` (`retriever.ts:881-888`) hardcodes `max(best*0.3, 0.15)` and never reads `this.config.hardMinScore`. 8+ test files set `hardMinScore:0.0` believing they disabled the floor -- vacuously testing at a floor of 0.15 (or higher, depending on the best score).
-- **Temporal signals are double-applied, uncapped, and universal.** `timeDecay` (half-life 60d) and `recencyBoost` (+0.10) both apply to every query. Re3 ablation: removing a per-query temporal gate drops R@1 from 0.742 to 0.268. memex has no gate.
-- **The recall-frequency signal (`recall_count`) is 99.26% zero.** MCP `memory_recall` never calls `store.recordRecalls()` (`mcp-server.ts:245-261`). The live boost (`retriever.ts:806-808`) uses an in-memory `Map` that resets on restart -- it never reads the persistent column. Dreaming deprioritizes and may evict memories that users actively consume, because it believes they were never recalled (`dreaming.ts:168-183`).
+- **No eval tests the production config.** MCP `memory_recall` ~~hardcodes `rerank:"none"`~~ (FIXED v0.7.3 — now reads MEMEX_RERANK_* env vars, supports "cross-encoder" and "llm" modes) and used `fusionMethod:"weighted"` (`mcp-server.ts:76-83` + `retriever.ts:163`). Every quality eval uses a different (better) config: zscore fusion, 0.8/0.2 weights (`domain-eval.ts:160-165`). The BEIR benchmark calls `hybridQuery()` from `src/search.ts` -- a third, completely different code path that always reranks internally.
+- **The reranker was dead in production.** ~~`mcp-server.ts:57` hardcodes `rerank:"none"`.~~ (FIXED v0.7.3 — MCP server reads MEMEX_RERANK_ENDPOINT, MEMEX_RERANK_API_KEY, MEMEX_RERANK_MODEL and dynamically enables cross-encoder reranking. Also supports opt-in LLM reranker via MEMEX_RERANK_LLM_MODEL.) `UnifiedRetriever` has zero quality-eval coverage.
+- **hardMinScore was dead config.** ~~`applyAdaptiveMinScore` (`retriever.ts:881-888`) hardcodes `max(best*0.3, 0.15)` and never reads `this.config.hardMinScore`.~~ (FIXED v0.7.3 — now reads `this.config.hardMinScore`, default changed from 0.40 to 0.15, MEMEX_HARD_MIN_SCORE_OVERRIDE kill-switch wired in `createRetriever`.) 8+ test files set `hardMinScore:0.0` believing they disabled the floor -- vacuously testing at a floor of the wired config value.
+- **Temporal signals are double-applied, uncapped, and universal.** `timeDecay` (half-life 60d) and `recencyBoost` (+0.10) both apply to every query. Re3 ablation: removing a per-query temporal gate drops R@1 from 0.742 to 0.268. memex has no gate (MEMEX_RELEVANCE_FIRST env flag exists as opt-in, off by default).
+- **The recall-frequency signal (`recall_count`) was 99.26% zero.** ~~MCP `memory_recall` never calls `store.recordRecalls()` (`mcp-server.ts:245-261`).~~ (FIXED v0.7.3 — MCP recall now calls `store.recordRecalls()` in both the retriever path and the BM25 fallback path.) The live boost (`retriever.ts:806-808`) still uses an in-memory `Map` that resets on restart -- it never reads the persistent column. Dreaming deprioritizes and may evict memories that users actively consume, because it believed they were never recalled (`dreaming.ts:168-183`).
 - **E2E numbers conflate retrieval quality with LLM inference ability.** LongMemEval's synthetic chat histories mean GPT-4o cannot know the answers from pre-training, but it can infer plausible answers from persona-modeling. The published 94% E2E number has no zero-context baseline subtracted, so retrieval contribution is unknown.
 
 ### 0.1 Dual-Gate Iteration Thesis
@@ -44,12 +46,13 @@ Iteration is a closed loop: live-sampling reveals gaps → validation adds crite
 query → vector(0.7) + BM25(0.3)
       → weighted fusion (incomparable scales: cosine[0,1] vs unbounded BM25)
       → minScore ≥ 0.3
-      → [cross-encoder reranker: OFF -- mcp-server.ts:57 hardcodes rerank:"none"]
-      → + recencyBoost (+≤0.10, universal, halfLife 14d)              [retriever.ts:774]
-      → × importance (0.7-1.0)                                         [retriever.ts:800]
-      → × lengthNorm (charLen/500)                                      [retriever.ts:461-462]
-      → × timeDecay (×0.50-1.0, universal, halfLife 60d)               [retriever.ts:850]
-      → adaptiveFloor = max(best×0.3, 0.15)                            [retriever.ts:881-888]
+      → [cross-encoder reranker: DYNAMIC (env-var gated; "cross-encoder", "llm", or "none")]
+      → [LLM reranker: opt-in via MEMEX_RERANK_LLM_MODEL]
+      → + recencyBoost (+≤0.10, universal, halfLife 14d)              [retriever.ts:833]
+      → × importance (0.7-1.0)                                         [retriever.ts:865]
+      → × lengthNorm (charLen/500)                                      [retriever.ts:887]
+      → × timeDecay (×0.50-1.0, universal, halfLife 60d)               [retriever.ts:920]
+      → adaptiveFloor = max(best×0.3, config.hardMinScore)             [retriever.ts:945 — FIXED v0.7.3, was hardcoded 0.15]
       → noiseFilter / MMR
       → slice(limit=20)
 ```
@@ -92,39 +95,19 @@ Oversample → reranker threshold → empty if nothing clears the bar. **CORRECT
 
 ### 1.4 Change Specifications (with file:line references)
 
-#### Change 1: Enable reranker in MCP production path
+#### Change 1: Enable reranker in MCP production path -- IMPLEMENTED (v0.7.3, PR #103)
 
-**File:** `src/mcp-server.ts:51-58` (createRetriever call + env var reads), `src/retriever.ts:623` (rerankResults guard)
+**File:** `src/mcp-server.ts:63-84` (createRetriever call + env var reads), `src/retriever.ts:628` (rerankResults guard)
 
-**Current:** `createRetriever(store, embedder, { mode: "hybrid", rerank: "none" })` at `mcp-server.ts:57`. The MCP server never reads `MEMEX_RERANK_ENDPOINT`, `MEMEX_RERANK_API_KEY`, or `MEMEX_RERANK_MODEL` from the environment (zero references to these env vars in mcp-server.ts).
+**Implementation (complete):** The MCP server now reads `MEMEX_RERANK_ENDPOINT`, `MEMEX_RERANK_API_KEY`, and `MEMEX_RERANK_MODEL` from the environment. It dynamically sets `rerank: "cross-encoder"` when both endpoint and API key are set; `rerank: "none"` otherwise (preserving the prior safe default). Model default is `jina-reranker-v3`; override via env var.
 
-**Target:** Three changes required -- flipping `rerank:"none"` to `"cross-encoder"` is necessary but INSUFFICIENT. `rerankResults` (`retriever.ts:623`) guards on BOTH `config.rerank === 'cross-encoder'` AND `config.rerankApiKey`. Without the API key, the reranker stays dead even after the flip.
+**LLM reranker (also implemented):** A second reranker option, opt-in via `MEMEX_RERANK_LLM_MODEL`, uses a chat model (e.g., deepseek-v4-flash) as an ordering-based relevance judge (`src/rerankers/llm-reranker.ts`). When set, `rerank: "llm"` takes precedence over the cross-encoder. Requires `MEMEX_LLM_ENDPOINT`. Quality: baseline 69%, cross-encoder 77%, LLM reranker 85% (domain-eval, 26 queries, Wilson 95% CI).
 
-1. **Read env vars in `createMemexMcpServer` (`mcp-server.ts:51-58`):**
-   ```ts
-   const rerankEndpoint = process.env.MEMEX_RERANK_ENDPOINT;
-   const rerankApiKey = process.env.MEMEX_RERANK_API_KEY;
-   const rerankModel = process.env.MEMEX_RERANK_MODEL;
-   ```
-   These three env vars are currently only read by `domain-eval.ts` (lines 166-169). The MCP server must read them independently.
+**Graceful degradation:** Cross-encoder failures return fusion results unchanged (not cosine-fallback). LLM reranker failures also return fusion results unchanged. Both paths are in `retriever.ts:730-796`.
 
-2. **Pass as config overrides to `createRetriever()`:**
-   ```ts
-   createRetriever(store, embedder, {
-     mode: "hybrid",
-     rerank: "cross-encoder",
-     ...(rerankEndpoint ? { rerankEndpoint } : {}),
-     ...(rerankApiKey ? { rerankApiKey } : {}),
-     ...(rerankModel ? { rerankModel } : {}),
-   })
-   ```
-   This overrides `DEFAULT_RETRIEVAL_CONFIG` fields only when env vars are set. If env vars are absent, the reranker will initialize but fail gracefully via the existing fallback path (`retriever.ts:728-736`).
+**Prerequisite:** Deploy Qwen3-Reranker-0.6B via llama-swap (the same infra serving the embedder). This model is already deployed as of v0.7, replacing the stale BGE-reranker-v2-m3 (which had an 8K context bug). Reranker endpoint + API key configured via env vars, not hardcoded. **Model config:** Do NOT change the DEFAULT `rerankModel` (`jina-reranker-v3` in `retriever.ts:170`) -- it is a safe Jina fallback. Override via env var `MEMEX_RERANK_MODEL=Qwen3-Reranker-0.6B` in the production environment.
 
-3. **Implement `MEMEX_RERANK_MODEL` env var read:** This env var does not currently exist anywhere in the codebase. Add it to the MCP server (step 1 above). Also scan for stale comment-only env vars like `MEMEX_RERANK_BLEND_WEIGHT` (`retriever.ts:78`, mentioned in a comment but never read from `process.env`) -- either wire or remove the comment to avoid confusion.
-
-**Prerequisite:** Deploy Qwen3-Reranker-0.6B via llama-swap (the same infra serving the embedder). This model is already deployed as of v0.7, replacing the stale BGE-reranker-v2-m3 (which had an 8K context bug). Reranker endpoint + API key configured via env vars, not hardcoded. **Model config:** Do NOT change the DEFAULT `rerankModel` (`jina-reranker-v3` in `retriever.ts:171`) -- it is a safe Jina fallback. Override via env var `MEMEX_RERANK_MODEL=Qwen3-Reranker-0.6B` in the production environment.
-
-**CORRECTION (C5, C7):** This enables the reranker on the primary explicit recall path. Without this change, the entire reranker-dependent design is a NO-OP. Paired with the graceful-degradation fallback (`retriever.ts:728-736` already returns fusion results on reranker failure).
+**CORRECTION (C5, C7):** This enables the reranker on the primary explicit recall path. Paired with the graceful-degradation fallback.
 
 #### Change 2: Flip fusion method from weighted to zscore
 
@@ -138,21 +121,10 @@ Oversample → reranker threshold → empty if nothing clears the bar. **CORRECT
 
 **Note:** The file header comment at `retriever.ts:3` (`Combines vector search + BM25 full-text search with RRF fusion`) is stale and misleading. Update it to `Combines vector search + BM25 full-text search with weighted or zscore fusion` as part of this change. Do not replace "RRF" with just "zscore" -- the code still supports both `"weighted"` and `"zscore"` (`config.fusionMethod` union type at `retriever.ts:27`).
 
-#### Change 3: Wire hardMinScore into applyAdaptiveMinScore
+#### Change 3: Wire hardMinScore into applyAdaptiveMinScore -- IMPLEMENTED (v0.7.3, PR #95)
 
-**File:** `src/retriever.ts:881-888`
-**Current:**
-```ts
-private applyAdaptiveMinScore(results: RetrievalResult[]): RetrievalResult[] {
-  if (results.length === 0) return results;
-  const bestScore = results[0].score;
-  const relativeFloor = bestScore * 0.3;
-  const absoluteFloor = 0.15;                              // hardcoded, ignores config
-  const effectiveFloor = Math.max(relativeFloor, absoluteFloor);
-  return results.filter(r => r.score >= effectiveFloor);
-}
-```
-**Target:**
+**File:** `src/retriever.ts:945-951`
+**Implementation (complete):**
 ```ts
 private applyAdaptiveMinScore(results: RetrievalResult[]): RetrievalResult[] {
   if (results.length === 0) return results;
@@ -163,23 +135,9 @@ private applyAdaptiveMinScore(results: RetrievalResult[]): RetrievalResult[] {
   return results.filter(r => r.score >= effectiveFloor);
 }
 ```
+`DEFAULT_RETRIEVAL_CONFIG.hardMinScore` is now `0.15` (was `0.40`). The kill-switch `MEMEX_HARD_MIN_SCORE_OVERRIDE` is wired in `createRetriever` (`retriever.ts:1105-1108`), allowing rollback without redeploy.
 
-**CORRECTION (C2):** `hardMinScore: 0.40` is defined (`retriever.ts:108,162`) but never read. This change wires it.
-
-**Kill-switch / override env var:** `MEMEX_HARD_MIN_SCORE_OVERRIDE` does not currently exist anywhere in the codebase. Implement it in `createRetriever` (`retriever.ts:1032-1039`, where `RetrievalConfig` is assembled):
-```ts
-const override = process.env.MEMEX_HARD_MIN_SCORE_OVERRIDE;
-if (override !== undefined) {
-  const parsed = parseFloat(override);
-  if (isNaN(parsed) || parsed < 0 || parsed > 1) {
-    throw new Error(`MEMEX_HARD_MIN_SCORE_OVERRIDE must be a float in [0,1], got: ${override}`);
-  }
-  config.hardMinScore = parsed;
-}
-```
-This allows rollback without redeploy: set `MEMEX_HARD_MIN_SCORE_OVERRIDE=0.15` to revert to the current hardcoded behavior.
-
-This change MUST follow the calibration probe (F3 in Wave 1, §2.4 V2/V3) -- the empirical optimal value is established before wiring, not guessed.
+**CORRECTION (C2):** `hardMinScore` is no longer dead config. The test audit (§3.1) still applies: 8+ test files set `hardMinScore` values whose effective floor was previously hardcoded.
 
 #### Change 4: Cap temporal signals + add QDF gate
 
@@ -544,9 +502,9 @@ The boost is applied AFTER all relevance signals (reranker, recency, importance)
 | **fusionMethod** | weighted | zscore | zscore | RRF | weighted |
 | **vectorWeight** | 0.7 | 0.8 | 0.8 | N/A (RRF) | 0.7 |
 | **bm25Weight** | 0.3 | 0.2 | 0.2 | N/A (RRF) | 0.3 |
-| **rerank** | **none** (hardcoded) | none (RERANK=1 to enable) | none (RERANK=1 to enable) | **always on** (search.ts:3490) | cross-encoder |
+| **rerank** | **dynamic** (env-var gated: "cross-encoder", "llm", or "none") | env-var gated (RERANK env) | env-var gated (RERANK env) | **always on** (search.ts) | cross-encoder |
 | **minScore** | 0.3 | 0.05 | 0.05 | N/A | 0.3 |
-| **hardMinScore** | 0.40 (DEAD) | (not configured) | 0.10 (DEAD) | N/A | 0.40 (DEAD) |
+| **hardMinScore** | 0.15 (WIRED, was 0.40 dead) | (not configured) | 0.10 | N/A | 0.15 (WIRED, was 0.40 dead) |
 | **candidatePoolSize** | 20 | 30 | K*6 (~60) | N/A | 20 |
 | **recencyHalfLifeDays** | 14 | (default 14) | 0 | N/A | 14 |
 | **recencyWeight** | 0.10 | (default 0.10) | 0 | N/A | 0.10 |
@@ -554,8 +512,8 @@ The boost is applied AFTER all relevance signals (reranker, recency, importance)
 
 Key takeaways:
 1. **No eval matches the production config.**
-2. **hardMinScore is dead in all paths** -- any value set is silently ignored by `applyAdaptiveMinScore` (`retriever.ts:881-888` hardcodes `max(best*0.3, 0.15)`).
-3. **The DEFAULT config is never used anywhere** -- both MCP and evals override it.
+2. **hardMinScore is now wired** (v0.7.3) -- config value 0.15 is read by `applyAdaptiveMinScore`, with MEMEX_HARD_MIN_SCORE_OVERRIDE kill-switch.
+3. **The DEFAULT config is never used by evals** -- both MCP and evals override it. DEFAULT applies to the MCP path unless overridden by env vars.
 4. **Embedding model is unspecified** -- all calibration thresholds are model-specific.
 
 **Config field classification -- eval-only vs production:**
@@ -578,10 +536,10 @@ Implementers must not wire eval-only fields (`rerankBlendWeight`, `rerankScoreMo
 | # | Critical | Resolution in This Doc |
 |---|---|---|
 | C1 | RRF is not a one-line config flip (type + branch + mapping) | Adopted. Z-score fusion is the immediate target (§1.4 Change 2). RRF on memory path deferred to post-zscore measurement. |
-| C2 | hardMinScore is dead config (hardcoded floor, 8+ test files vacuously true) | Adopted. Wire hardMinScore (§1.4 Change 3). Audit plan (§3.1). Two-phase canary test. |
+| C2 | hardMinScore is dead config (hardcoded floor, 8+ test files vacuously true) | IMPLEMENTED (v0.7.3). hardMinScore wired to config at 0.15. MEMEX_HARD_MIN_SCORE_OVERRIDE kill-switch in createRetriever. Test audit (§3.1) still applies. |
 | C3 | Fallback architecture contradicts primary path (RRF scores not on relevance scale) | Adopted. Z-score fallback used, not RRF. Relaxed floor on reranker failure. Best-effort fallback with confidence:"low" (§1.4 Change 7). |
 | C4 | Only 1 of 3 recall pipelines covered | Adopted. Three pipelines identified (§1.5). MCP path prioritized. UnifiedRetriever deferred to Wave 4 mixed-source benchmark. Document path out of scope. |
-| C5 | MCP memory_recall disables reranker (NO-OP for reranker-dependent design) | Adopted. Enable reranker in MCP path as Change 1 (§1.4). Prerequisite: Qwen3-Reranker-0.6B deployed. |
+| C5 | MCP memory_recall disables reranker (NO-OP for reranker-dependent design) | IMPLEMENTED (v0.7.3). MCP path reads MEMEX_RERANK_* env vars and dynamically enables "cross-encoder" or "llm" reranker. |
 | C6 | Abstention has zero agent guardrails | Adopted. Three-part guardrail: confidence field + sentinel result + agent instruction (§1.4 Change 7). |
 | C7 | Reranker is single point of failure | Adopted. Graceful-degradation path preserved (`retriever.ts:728-736`). Best-effort fallback with relaxed floor + confidence:"low" (§1.4 Change 7). |
 
@@ -593,12 +551,12 @@ Implementers must not wire eval-only fields (`rerankBlendWeight`, `rerankScoreMo
 - embedding model sensitivity: calibration probe now includes 2+ embedding models (F3/F18).
 - **Gap 11 / C2 crosswalk:** Gap 11 (hardMinScore dead config) in §2.2 is resolved by C2/Change 3. The 17-gaps list in §2.2 tracks the validation-doc gap inventory; the Change 3 spec (§1.4) and test audit (§3.1) track the implementation. Both references point to the same fix; there is no inconsistency.
 - **Sentinel id:** Changed from `__no_strong_match__` to `memex:abstention:no_strong_match` (namespace-prefixed, avoids collision with UUID-based entry IDs and any future `__`-prefixed internal conventions).
-- **retriever.ts:3 header comment:** Updated from `RRF fusion` to `Combines vector search + BM25 full-text search with weighted or zscore fusion` as part of Change 2.
+- **retriever.ts:3 header comment:** Still says `RRF fusion` (UNFIXED as of v0.7.3). Should be updated to `Combines vector search + BM25 full-text search with weighted or zscore fusion` as part of Change 2.
 
 ## Appendix C: Related Files
 
-- `/home/ubuntu/projects/memex/src/retriever.ts` -- RetrievalConfig (line 19), DEFAULT_RETRIEVAL_CONFIG (line 148), MemoryRetriever.retrieve() (line 330), fuseResults (line 513), recencyBoost (line 774), importanceWeight (line 800), lengthNormalization (line 461), timeDecay (line 850), applyAdaptiveMinScore (line 881) with hardcoded `max(best*0.3, 0.15)`, rerankResults (line 623), ephemeral freqBoost (line 806), graceful-degradation (line 728-736), stale RRF header comment (line 3)
-- `/home/ubuntu/projects/memex/src/mcp-server.ts` -- createRetriever with rerank:"none" (line 57), memory_recall handler (line 245-261, no recordRecalls), BM25-only fallback (line 266)
+- `/home/ubuntu/projects/memex/src/retriever.ts` -- RetrievalConfig (line 20), DEFAULT_RETRIEVAL_CONFIG (line 159), MemoryRetriever.retrieve() (line 356), fuseResults (line 524), recencyBoost (line 833), importanceWeight (line 865), lengthNormalization (line 887), timeDecay (line 920), applyAdaptiveMinScore (line 945, now wired to config.hardMinScore), rerankResults (line 628), ephemeral freqBoost (line 871), graceful-degradation (line 730-747), stale RRF header comment (line 3, UNFIXED), LLM reranker branch (line 752-796), MEMEX_HARD_MIN_SCORE_OVERRIDE (line 1105-1108), MEMEX_RELEVANCE_FIRST (line 1112-1115)
+- `/home/ubuntu/projects/memex/src/mcp-server.ts` -- createRetriever with dynamic rerank (line 76-83, reads MEMEX_RERANK_* env vars), memory_recall handler (line 225-297, now calls recordRecalls at line 275-278), BM25-only fallback (line 300-323, also calls recordRecalls at line 303), VERSION (line 24, stale at 0.7.2), LLM reranker wiring (line 71-74, 82)
 - `/home/ubuntu/projects/memex/src/memory.ts` -- MemoryEntry (line 21, missing recall_count), recall_count column (line 222), recordRecalls (line 848-852)
 - `/home/ubuntu/projects/memex/src/unified-retriever.ts` -- UnifiedRetriever (line 138), applyPostMergeModifiers (line 524-567)
 - `/home/ubuntu/projects/memex/src/search.ts` -- hybridQuery (line 3326), reciprocalRankFusion (line 2798), always-on reranker (line 3490)
@@ -608,7 +566,7 @@ Implementers must not wire eval-only fields (`rerankBlendWeight`, `rerankScoreMo
 - `/home/ubuntu/projects/memex/src/recall-cache.ts` -- Retrieval cache (89 lines, zero quality-eval coverage)
 - `/home/ubuntu/projects/memex/src/debug-recall.ts` -- MEMEX_DEBUG_RECALL path (145 lines, zero quality-eval coverage)
 - `/home/ubuntu/projects/memex/index.ts` (project root, not src/) -- line 1344: ONLY caller of recordRecalls (auto-recall hook path only)
-- `/home/ubuntu/projects/memex/tests/domain-eval.ts` -- 15 queries, MemoryRetriever, zscore fusion (line 160-165), binary metrics (line 193-197)
+- `/home/ubuntu/projects/memex/tests/domain-eval.ts` -- 26 queries, MemoryRetriever, zscore fusion (line 160-165), binary metrics, Wilson 95% CI, RERANK env supports "1"|"cross-encoder"|"llm"|"none", QUERY_DELAY_MS pacing
 - `/home/ubuntu/projects/memex/tests/longmemeval-benchmark.ts` -- 50 queries, MemoryRetriever, zscore fusion (line 356-363), temporal disabled (line 374-376), temp DB (line 273-274)
 - `/home/ubuntu/projects/memex/tests/beir-benchmark.ts` -- BEIR document retrieval, hybridQuery() (line 192-194), temp DB (line 148), always reranks
 - `/home/ubuntu/projects/memex/tests/helpers/ir-metrics.ts` -- nDCG@k (line 36-56), MRR, precision, recall (defined, unused in quality evals except BEIR)

@@ -15,7 +15,7 @@
                     └──────────┬──────────┘
                                │
               ┌────────────────┴────────────────┐
-              │  autoRecall: true? (default: no) │
+              │  autoRecall: true? (default: yes) │
               └────────────────┬────────────────┘
                           yes  │  no → skip
                                ▼
@@ -44,7 +44,7 @@
                      RESPONSE TO USER
                                │
               ┌────────────────┴────────────────┐
-              │ autoCapture: true? (default: no) │
+              │ autoCapture: true? (default: yes) │
               └────────────────┬────────────────┘
                           yes  │  no → done
                                ▼
@@ -149,8 +149,8 @@
   ✅ Memory instruction   ─── injected every turn (0ms)
   ✅ Tools                 ─── always available to LLM
   ✅ Auto-recall           ─── on by default (~150ms)
-  ❌ Auto-capture          ─── off (opt-in: autoCapture: true)
+  ✅ Auto-capture          ─── on by default (~834ms async)
   ✅ Doc indexer            ─── background, every 30min
 ```
 
-**Zero added latency per turn by default.** LLM decides when to recall/store via tools.
+**Auto-recall injects relevant memories before each turn (~150ms).** Auto-capture runs asynchronously after each turn (~834ms fire-and-forget). Both are on by default. LLM can also recall/store via tools.

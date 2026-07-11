@@ -59,14 +59,14 @@ src/benchmark/
 Key wiring decisions:
 
 1. **Indexing path**: BEIR corpora become `documents` in memex's existing `documents` pool, not synthetic memories. This honestly tests the document-side production path. (Conversation memory is tested separately by LongMemEval.)
-2. **Embedding model**: same as production (Qwen3-Embedding-4B-Q8_0). Don't switch to BEIR-tuned models — defeats the point.
-3. **Reranker**: run twice — without and with Qwen3-Reranker-0.6B. Two columns in the report.
+2. **Embedding model**: same as production (qwen3-embedding via llm-proxy). Don't switch to BEIR-tuned models — defeats the point.
+3. **Reranker**: run three passes — without, with cross-encoder (qwen3-reranker via llm-proxy), and with LLM reranker (deepseek-v4-flash, ordering-based). Three columns in the report (cf. domain-eval: baseline 69%, cross-encoder 77%, LLM 85%).
 4. **Output**: structured JSON to `bench/beir-<dataset>-<timestamp>.json` + summary table.
 
 ## Expected runtime + cost
 
-- **Indexing**: ~65K documents at ~50 docs/sec via Qwen3-Embedding-4B-Q8_0 = ~22 min. One-time per dataset (cache embeddings).
-- **Querying**: 1500 queries × ~150ms p50 = ~3.75 min per pass. Two passes (no rerank, with rerank) = ~7.5 min.
+- **Indexing**: ~65K documents at ~50 docs/sec via qwen3-embedding = ~22 min. One-time per dataset (cache embeddings).
+- **Querying**: 1500 queries × ~150ms p50 = ~3.75 min per pass. Three passes (no rerank, cross-encoder, LLM) = ~11 min.
 - **Total wall-clock**: ~30 min for first run, ~10 min for cached re-runs.
 - **API cost**: zero if running against local Qwen3 + Qwen3-Reranker. (Could also run against GPT embeddings for a comparison column, but that's $$$.)
 
@@ -100,7 +100,7 @@ The README leaderboard table gets two clearly-labeled sections instead of a conf
 
 ## Out of scope for issue #19
 
-- **Live agent E2E benchmark** (does the agent's answer use the recalled context correctly?). That's a separate research lane closer to MemoryAgentBench (`arXiv:2507.05257`) — see roadmap T4.2.
+- **Live agent E2E benchmark** (does the agent's answer use the recalled context correctly?). That's a separate research lane closer to MemoryAgentBench (`arXiv:2507.05257`) — see roadmap T4.2. Note: `tests/domain-eval.ts` (26 queries, Wilson 95% CI) now fills part of this gap as the primary quality metric for recall — see `docs/design/recall-quality-design.md`.
 - **Multi-modal documents** (PDFs, images). BEIR is text-only; that's fine.
 - **Real-time streaming benchmark**. BEIR is batch-oriented.
 
