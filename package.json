@@ -14,7 +14,7 @@
     "url": "https://github.com/ofan/memex/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "files": [
     "dist/**",
@@ -44,7 +44,7 @@
     "openclaw": "^2026.6.11",
     "picomatch": "^4.0.5",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "typebox": "^1.3.6",
+    "typebox": "^1.1.39",
     "yaml": "^2.9.0"
   },
   "openclaw": {
