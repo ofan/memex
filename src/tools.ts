@@ -6,6 +6,7 @@
 import { Type } from "typebox";
 import { stringEnum } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { randomUUID } from "node:crypto";
 import type { MemoryRetriever, RetrievalResult } from "./retriever.js";
 import type { MemoryStore } from "./memory.js";
 import { isNoise } from "./noise-filter.js";
@@ -183,16 +184,18 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
 
           // Use unified retriever (single-pass pipeline) when available
           if (context.unifiedRetriever) {
+            const debugId = randomUUID().slice(0, 8);
             const results = await context.unifiedRetriever.retrieve(query, {
               limit: safeLimit,
               scopeFilter,
               collection: undefined,
+              debugId,
             });
 
             if (results.length === 0) {
               return {
                 content: [{ type: "text", text: "No relevant results found." }],
-                details: { count: 0, query, scopes: scopeFilter, source },
+                details: { count: 0, query, scopes: scopeFilter, source, debugId },
               };
             }
 
@@ -222,6 +225,7 @@ export function registerMemoryRecallTool(api: OpenClawPluginApi, context: ToolCo
                 query,
                 scopes: scopeFilter,
                 mode: "unified-retriever",
+                debugId,
               },
             };
           }

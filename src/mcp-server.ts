@@ -19,6 +19,8 @@ import { runDreamCycle, type ReflectionLLMConfig } from "./dreaming.js";
 import { anchor, expandAnchor, AnchorAmbiguityError } from "./anchor.js";
 import { detectCategory } from "../index.js";
 import { deriveScopes } from "./scope-derive.js";
+import { resolveDebugDir, writeDebugRecall, buildPayloadFromMcpRecall } from "./debug-recall.js";
+import { randomUUID } from "node:crypto";
 
 /** memex version — keep in sync with package.json (consumed by /health + MCP handshake). */
 const VERSION = "0.7.3";
@@ -73,6 +75,9 @@ export function createMemexMcpServer(options: McpServerOptions) {
   const rerankLlmApiKey = reflectionLLM?.apiKey ?? "";
   const enableLlmRerank = !!(rerankLlmEndpoint && rerankLlmModel);
 
+  // Trace capture is on only when MEMEX_DEBUG_RECALL is set (zero overhead otherwise).
+  const captureTrace = !!resolveDebugDir();
+
   const retriever = embedder
     ? createRetriever(store, embedder, {
         mode: "hybrid",
@@ -80,6 +85,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
         ...(enableRerank ? { rerankEndpoint, rerankApiKey } : {}),
         ...(enableRerank && rerankModel ? { rerankModel } : {}),
         ...(enableLlmRerank ? { rerankLlmEndpoint, rerankLlmApiKey, rerankLlmModel } : {}),
+        captureTrace,
       })
     : null;
 
@@ -269,17 +275,38 @@ export function createMemexMcpServer(options: McpServerOptions) {
     }
 
     if (retriever) {
-      const results = await retriever.retrieve({ query, limit, scopes: effectiveScopes });
+      const debugId = randomUUID().slice(0, 8);
+      const results = await retriever.retrieve({ query, limit, scopes: effectiveScopes, debugId });
       // Record persistent recall signal so dreaming doesn't evict actively-used memories
       // (the MCP recall path previously never bumped recall_count).
       const recalledIds = results.map(r => r.entry.id);
       if (recalledIds.length > 0) {
         try { store.recordRecalls(recalledIds); } catch { /* best effort */ }
       }
+      // Debug capture: write the per-stage trace keyed by debugId when enabled.
+      const captured = captureTrace;
+      if (captured) {
+        writeDebugRecall(buildPayloadFromMcpRecall({
+          debugId,
+          agentId: "mcp",
+          sessionId: session_id ?? null,
+          query,
+          trace: retriever.lastTrace ?? undefined,
+          results: results.map(r => ({
+            id: r.entry.id, score: r.score,
+            source: r.sources?.reranked ? "reranked"
+              : (r.sources?.vector && r.sources?.bm25) ? "both"
+              : r.sources?.vector ? "vector" as const : "lexical" as const,
+            text: r.entry.text, category: r.entry.category, scope: r.entry.scope,
+          })),
+        })).catch(() => { /* best effort — debug must never break recall */ });
+      }
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
+            debugId,
+            captured,
             results: results.map(r => ({
               id: r.entry.id,
               anchor: anchor(r.entry.id),
@@ -298,6 +325,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
     }
 
     // BM25-only fallback when no embedder configured
+    const debugId = randomUUID().slice(0, 8);
     const bm25Results = await store.bm25Search(query, limit, effectiveScopes);
     const recalledIds = bm25Results.map(r => r.entry.id);
     if (recalledIds.length > 0) {
@@ -307,6 +335,8 @@ export function createMemexMcpServer(options: McpServerOptions) {
       content: [{
         type: "text",
         text: JSON.stringify({
+          debugId,
+          captured: false,
           results: bm25Results.map(r => ({
             id: r.entry.id,
             anchor: anchor(r.entry.id),
