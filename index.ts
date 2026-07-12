@@ -6,6 +6,7 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { randomUUID } from "node:crypto";
+import { applyEnvOverrides, syncDebugEnvFromConfig } from "./src/env-overrides.js";
 import { homedir } from "node:os";
 import { join, dirname, basename, resolve } from "node:path";
 import { readFile, readdir, writeFile, mkdir } from "node:fs/promises";
@@ -110,6 +111,12 @@ interface PluginConfig {
   memoryInstructions?: "off" | string;
   /** Automatically purge noise entries from store on startup (default: false) */
   autoFixNoise?: boolean;
+  /**
+   * Per-query debug capture (default: off). `true` writes a trace per recall to
+   * the default debug dir; a string writes to that path. Overridable via the
+   * MEMEX_DEBUG_RECALL env var (env wins). See scripts/show-trace.ts.
+   */
+  debugRecall?: boolean | string;
   retrieval?: {
     mode?: "hybrid" | "vector";
     vectorWeight?: number;
@@ -295,6 +302,9 @@ const memoryUnifiedPlugin = {
 
     // Parse and validate configuration
     const config = parsePluginConfig(api.pluginConfig);
+    // Env vars override config (env > config > default). See src/env-overrides.ts.
+    applyEnvOverrides(config);
+    syncDebugEnvFromConfig(config);
 
     const resolvedDbPath = api.resolvePath(config.dbPath || getDefaultDbPath());
 
@@ -1884,6 +1894,7 @@ function parsePluginConfig(value: unknown): PluginConfig {
     autoCapture: cfg.autoCapture !== false,
     autoCaptureAgents: mergeAgentLists(cfg.memoryAgents, cfg.autoCaptureAgents),
     autoFixNoise: cfg.autoFixNoise === true,
+    debugRecall: cfg.debugRecall === true ? true : typeof cfg.debugRecall === "string" ? cfg.debugRecall : undefined,
     retrieval: typeof cfg.retrieval === "object" && cfg.retrieval !== null ? cfg.retrieval as any : undefined,
     scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes as any : undefined,
     enableManagementTools: cfg.enableManagementTools === true,

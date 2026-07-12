@@ -43,6 +43,7 @@
       "autoCapture": { "type": "boolean", "default": true, "description": "Nudge LLM to store facts via memory_store tool" },
       "autoCaptureAgents": { "type": "array", "items": { "type": "string" }, "description": "Agent IDs to enable auto-capture for. Unset = all agents." },
       "memoryAgents": { "type": "array", "items": { "type": "string" }, "description": "Unified agent whitelist for both recall + capture (v0.7.2+). Supersedes separate autoRecallAgents/autoCaptureAgents. Legacy keys extend via union semantics." },
+      "debugRecall": { "type": ["boolean", "string"], "description": "Per-query debug capture (default: off). true = default debug dir; a string = custom dir. Each recall writes a trace keyed by the debugId returned in the response; load with scripts/show-trace.ts. Overridable via MEMEX_DEBUG_RECALL env." },
       "documents": {
         "type": "object",
         "additionalProperties": false,
