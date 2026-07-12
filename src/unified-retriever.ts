@@ -11,6 +11,8 @@ import type { Embedder } from "./embedder.js";
 import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 import { buildRerankRequest, parseRerankResponse } from "./retriever.js";
 import { withTransientRetry } from "./transient-retry.js";
+import { TraceRecorder, type RetrievalTrace, type TraceItem } from "./retrieval-trace.js";
+import { randomUUID } from "node:crypto";
 
 // =============================================================================
 // Types
@@ -60,6 +62,12 @@ export interface UnifiedRetrieverConfig {
    * Default: "raw" (backward compat).
    */
   rerankScoreMode: "raw" | "rank";
+  /**
+   * When true, `retrieve()` populates `lastTrace` with a per-stage ranking
+   * snapshot. Off by default (zero overhead). Gated at the call site by
+   * MEMEX_DEBUG_RECALL.
+   */
+  captureTrace?: boolean;
 }
 
 export interface UnifiedResult {
@@ -135,8 +143,31 @@ const MEM_PATTERNS = [
 // Unified Retriever
 // =============================================================================
 
+/** Curated config snapshot embedded in a trace so it is self-describing. */
+function unifiedTraceConfigSnapshot(c: UnifiedRetrieverConfig): Record<string, unknown> {
+  return {
+    limit: c.limit, minScore: c.minScore,
+    conversationWeight: c.conversationWeight, documentWeight: c.documentWeight,
+    candidatePoolSize: c.candidatePoolSize,
+    reranker: c.reranker ? { model: c.reranker.model, provider: c.reranker.provider } : null,
+    rerankBlendWeight: c.rerankBlendWeight, rerankScoreMode: c.rerankScoreMode,
+    confidenceThreshold: c.confidenceThreshold, confidenceGap: c.confidenceGap,
+  };
+}
+
+/** Snapshot a calibrated unified result into a trace item. */
+function toUnifiedTraceItem(r: CalibratedResult): TraceItem {
+  return { id: r.id, score: r.score, source: r.source, scores: { calibrated: r.calibrated, raw: r.rawScore } };
+}
+
 export class UnifiedRetriever {
   private config: UnifiedRetrieverConfig;
+  private _lastTrace: RetrievalTrace | null = null;
+  /** Recorder active during the current retrieve() call; null when captureTrace is off. */
+  private _currentRec: TraceRecorder | null = null;
+
+  /** Per-stage ranking trace from the most recent call. Null unless captureTrace was on. */
+  get lastTrace(): RetrievalTrace | null { return this._lastTrace; }
 
   constructor(
     private memoryStore: MemoryStore,
@@ -160,9 +191,22 @@ export class UnifiedRetriever {
     scopeFilter?: string[];
     collection?: string;
     recentlyRecalled?: Set<string>;
+    /** Stable per-recall id embedded in the trace header (caller-owned). */
+    debugId?: string;
   }): Promise<UnifiedResult[]> {
+    this._lastTrace = null;
     // Stage 0: Skip check -- greetings, commands, etc.
     if (shouldSkipRetrieval(query)) return [];
+
+    // Set up the per-call trace recorder (null when capture is off → no overhead).
+    this._currentRec = this.config.captureTrace
+      ? new TraceRecorder({
+          debugId: options?.debugId ?? randomUUID().slice(0, 8),
+          query,
+          pipeline: "unified",
+          config: unifiedTraceConfigSnapshot(this.config),
+        })
+      : null;
 
     // Stage 1: Route query to appropriate source(s)
     const route = this.routeQuery(query);
@@ -183,20 +227,34 @@ export class UnifiedRetriever {
 
     // Stage 4: Fuse memory results (vector + BM25 hybrid)
     const memoryFused = this.fuseMemoryResults(memoryRaw.vecResults, memoryRaw.bm25Results);
+    this._currentRec?.stage("memory-fusion", memoryFused.map(r => ({ id: r.entry.id, score: r.score, source: "conversation" })));
+    if (docResults.length) {
+      this._currentRec?.stage("document-search", docResults.map(d => {
+        const dd = d as { id?: string; docid?: string; score?: number };
+        return { id: dd.id ?? dd.docid ?? "", score: dd.score ?? 0, source: "document" };
+      }));
+    }
 
     // Stage 6: Z-score calibrate and merge both sources
     let pool = this.mergeAndCalibrate(memoryFused, docResults);
+    this._currentRec?.stage("merge", pool.map(toUnifiedTraceItem), { meta: { route } });
 
     // Stage 7: Confidence-gated reranking
-    if (this.config.reranker && this.shouldRerank(pool)) {
+    const didRerank = !!(this.config.reranker && this.shouldRerank(pool));
+    if (didRerank) {
       pool = await this.rerank(query, pool);
+      this._currentRec?.stage("rerank", pool.map(toUnifiedTraceItem), { meta: { reranker: this.config.reranker?.model } });
     }
 
     // Stage 8: Post-merge modifiers (time decay, importance, length norm, floor)
     pool = this.applyPostMergeModifiers(pool);
 
     // Stage 9: Source diversity + final selection
-    return this.applySourceDiversity(pool, limit);
+    const final = this.applySourceDiversity(pool, limit);
+    this._currentRec?.stage("diversity", final.map(r => ({ id: r.id, score: r.score, source: r.source })));
+    this._lastTrace = this._currentRec ? this._currentRec.finish(final.map(r => r.id)) : null;
+    this._currentRec = null;
+    return final;
   }
 
   /**

@@ -9,6 +9,8 @@ import { filterNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
 import { detectTemporalRange } from "./temporal.js";
 import { llmRerank } from "./rerankers/llm-reranker.js";
+import { TraceRecorder, type RetrievalTrace, type TraceItem } from "./retrieval-trace.js";
+import { randomUUID } from "node:crypto";
 import { extractEntities, entityOverlap } from "./entities.js";
 import { expandOneHop, LINK_SCORE_DISCOUNT_FACTOR } from "./graph.js";
 import { withTransientRetry } from "./transient-retry.js";
@@ -126,6 +128,13 @@ export interface RetrievalConfig {
    * Set 0 to disable. (default: 60)
    */
   timeDecayHalfLifeDays: number;
+  /**
+   * When true, `retrieve()` populates `lastTrace` with a per-stage ranking
+   * snapshot (candidate pool, scores, floor-filtered set). Off by default —
+   * zero overhead when off (no TraceRecorder is constructed). Gated at the
+   * call site by MEMEX_DEBUG_RECALL.
+   */
+  captureTrace?: boolean;
 }
 
 export interface RetrievalContext {
@@ -141,6 +150,13 @@ export interface RetrievalContext {
   category?: string;
   /** IDs recalled in recent turns — these get a diversity penalty */
   recentlyRecalled?: Set<string>;
+  /**
+   * Stable per-recall id (8-char hex). When `captureTrace` is on the retriever
+   * embeds this in the trace header; the caller uses the same id in the
+   * response + debug filename so a query is loadable by id. If absent, the
+   * retriever generates one for the trace.
+   */
+  debugId?: string;
 }
 
 export interface RetrievalResult extends MemorySearchResult {
@@ -186,6 +202,45 @@ function clampInt(value: number, min: number, max: number): number {
 function clamp01(value: number, fallback: number = 0): number {
   if (!Number.isFinite(value)) return Number.isFinite(fallback) ? fallback : 0;
   return Math.min(1, Math.max(0, value));
+}
+
+/** Curated config snapshot embedded in a trace so it is self-describing. */
+function traceConfigSnapshot(c: RetrievalConfig): Record<string, unknown> {
+  return {
+    mode: c.mode, fusionMethod: c.fusionMethod,
+    vectorWeight: c.vectorWeight, bm25Weight: c.bm25Weight,
+    minScore: c.minScore, hardMinScore: c.hardMinScore,
+    rerank: c.rerank, rerankBlendWeight: c.rerankBlendWeight,
+    candidatePoolSize: c.candidatePoolSize,
+    recencyWeight: c.recencyWeight, recencyHalfLifeDays: c.recencyHalfLifeDays,
+    timeDecayHalfLifeDays: c.timeDecayHalfLifeDays, lengthNormAnchor: c.lengthNormAnchor,
+  };
+}
+
+/** Derive a human-readable provenance label from a result's sources. */
+function sourceLabel(s?: RetrievalResult["sources"]): string | undefined {
+  if (!s) return undefined;
+  if (s.reranked) return "reranked";
+  if (s.vector && s.bm25) return "both";
+  if (s.vector) return "vector";
+  if (s.bm25) return "lexical";
+  if ((s as { graph?: boolean }).graph) return "graph";
+  return undefined;
+}
+
+/** Snapshot a MemoryRetriever result into a trace item with frozen per-stage scores. */
+function toMemoryTraceItem(r: RetrievalResult): TraceItem {
+  return {
+    id: r.entry.id,
+    score: r.score,
+    ...(r.sources ? { source: sourceLabel(r.sources) } : {}),
+    scores: {
+      ...(r.sources?.vector ? { vector: r.sources.vector.score } : {}),
+      ...(r.sources?.bm25 ? { bm25: r.sources.bm25.score } : {}),
+      ...(r.sources?.fused ? { fused: r.sources.fused.score } : {}),
+      ...(r.sources?.reranked ? { reranked: r.sources.reranked.score } : {}),
+    },
+  };
 }
 
 // ============================================================================
@@ -343,6 +398,9 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 export class MemoryRetriever {
   private _lastTimings: Record<string, number> = {};
+  private _lastTrace: RetrievalTrace | null = null;
+  /** Recorder active during the current retrieve() call; null when captureTrace is off. */
+  private _currentRec: TraceRecorder | null = null;
 
   constructor(
     private store: MemoryStore,
@@ -353,11 +411,24 @@ export class MemoryRetriever {
   /** Timing breakdown from the most recent retrieve() call. */
   get lastTimings(): Record<string, number> { return this._lastTimings; }
 
+  /** Per-stage ranking trace from the most recent call. Null unless captureTrace was on. */
+  get lastTrace(): RetrievalTrace | null { return this._lastTrace; }
+
   async retrieve(context: RetrievalContext): Promise<RetrievalResult[]> {
     const { query, limit, scopeFilter, scopes, category, recentlyRecalled } = context;
     const safeLimit = clampInt(limit, 1, 20);
     // Explicit `scopes` override takes precedence over the derived scopeFilter
     const effectiveScopeFilter = scopes ?? scopeFilter;
+
+    // Set up the per-call trace recorder (null when capture is off → no overhead).
+    this._currentRec = this.config.captureTrace
+      ? new TraceRecorder({
+          debugId: context.debugId ?? randomUUID().slice(0, 8),
+          query,
+          pipeline: this.config.mode === "vector" ? "memory-vector" : "memory-hybrid",
+          config: traceConfigSnapshot(this.config),
+        })
+      : null;
 
     if (this.config.mode === "vector" || !this.store.hasFtsSupport) {
       return this.vectorOnlyRetrieval(query, safeLimit, effectiveScopeFilter, category, recentlyRecalled);
@@ -390,12 +461,22 @@ export class MemoryRetriever {
         vector: { score: result.score, rank: index + 1 },
       },
     } as RetrievalResult));
+    this._currentRec?.stage("vector-search", mapped.map(toMemoryTraceItem));
 
     const boosted = this.applyRecencyBoost(mapped);
     const weighted = this.applyImportanceWeight(boosted);
     const lengthNormalized = this.applyLengthNormalization(weighted);
     const timeDecayed = this.applyTimeDecay(lengthNormalized);
     const hardFiltered = this.applyAdaptiveMinScore(timeDecayed);
+    if (this._currentRec) {
+      const keptIds = new Set(hardFiltered.map(r => r.entry.id));
+      const bestScore = timeDecayed[0]?.score ?? 0;
+      const effectiveFloor = Math.max(bestScore * 0.3, this.config.hardMinScore);
+      this._currentRec.stage("adaptive-floor", hardFiltered.map(toMemoryTraceItem), {
+        dropped: timeDecayed.filter(r => !keptIds.has(r.entry.id)).map(toMemoryTraceItem),
+        meta: { effectiveFloor, bestScore, hardMinScore: this.config.hardMinScore },
+      });
+    }
     const denoised = this.config.filterNoise
       ? filterNoise(hardFiltered, r => r.entry.text)
       : hardFiltered;
@@ -404,7 +485,10 @@ export class MemoryRetriever {
     sw.lap("score");
 
     this._lastTimings = sw.timings;
-    return deduplicated.slice(0, limit);
+    const final = deduplicated.slice(0, limit);
+    this._lastTrace = this._currentRec ? this._currentRec.finish(final.map(r => r.entry.id)) : null;
+    this._currentRec = null;
+    return final;
   }
 
   private async hybridRetrieval(
@@ -427,6 +511,7 @@ export class MemoryRetriever {
     sw.lap("search");
 
     const fusedResults = await this.fuseResults(vectorResults, bm25Results);
+    this._currentRec?.stage("fusion", fusedResults.map(toMemoryTraceItem));
 
     // Graph expansion: one-hop through entity links (disabled by default)
     if (this.config.entityGraph) {
@@ -461,10 +546,20 @@ export class MemoryRetriever {
     }
 
     const filtered = postEntityResults.filter(r => r.score >= this.config.minScore);
+    if (this._currentRec) {
+      const keptIds = new Set(filtered.map(r => r.entry.id));
+      this._currentRec.stage("minScore-filter", filtered.map(toMemoryTraceItem), {
+        dropped: postEntityResults.filter(r => !keptIds.has(r.entry.id)).map(toMemoryTraceItem),
+        meta: { threshold: this.config.minScore },
+      });
+    }
 
     const reranked = this.config.rerank !== "none"
       ? await this.rerankResults(query, queryVector, filtered.slice(0, limit * 2))
       : filtered;
+    if (this._currentRec && this.config.rerank !== "none") {
+      this._currentRec.stage("rerank", reranked.map(toMemoryTraceItem), { meta: { reranker: this.config.rerank, model: this.config.rerankModel } });
+    }
     sw.lap("rerank");
 
     const temporalReranked = this.applyRecencyBoost(reranked);
@@ -472,6 +567,15 @@ export class MemoryRetriever {
     const lengthNormalized = this.applyLengthNormalization(importanceWeighted);
     const timeDecayed = this.applyTimeDecay(lengthNormalized);
     const hardFiltered = this.applyAdaptiveMinScore(timeDecayed);
+    if (this._currentRec) {
+      const keptIds = new Set(hardFiltered.map(r => r.entry.id));
+      const bestScore = timeDecayed[0]?.score ?? 0;
+      const effectiveFloor = Math.max(bestScore * 0.3, this.config.hardMinScore);
+      this._currentRec.stage("adaptive-floor", hardFiltered.map(toMemoryTraceItem), {
+        dropped: timeDecayed.filter(r => !keptIds.has(r.entry.id)).map(toMemoryTraceItem),
+        meta: { effectiveFloor, bestScore, hardMinScore: this.config.hardMinScore },
+      });
+    }
     const denoised = this.config.filterNoise
       ? filterNoise(hardFiltered, r => r.entry.text)
       : hardFiltered;
@@ -480,7 +584,10 @@ export class MemoryRetriever {
     sw.lap("score");
 
     this._lastTimings = sw.timings;
-    return deduplicated.slice(0, limit);
+    const final = deduplicated.slice(0, limit);
+    this._lastTrace = this._currentRec ? this._currentRec.finish(final.map(r => r.entry.id)) : null;
+    this._currentRec = null;
+    return final;
   }
 
   private async runVectorSearch(

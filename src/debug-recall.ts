@@ -14,27 +14,34 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import type { RetrievalTrace } from "./retrieval-trace.js";
 
 export interface DebugRecallPayload {
+  /** Stable 8-char hex id for this recall — also in the filename, so a query
+   *  can be loaded by id (scripts/show-trace.ts). */
+  debugId?: string;
   /** ISO timestamp the snapshot was captured at. */
   ts: string;
   agentId: string;
   sessionId: string | null;
   query: string;
   /** Which retrieval path produced these results. */
-  source: "unified-recall" | "memory-only";
+  source: "unified-recall" | "memory-only" | "mcp-recall";
   /** Total result count (== results.length). */
   resultCount: number;
-  /** The exact text that was prepended to the prompt. */
+  /** The exact text that was prepended to the prompt (auto-recall paths). */
   injectedContext: string;
   /** Per-item details — text is truncated to 500 chars to keep payloads small. */
   results: Array<{
     id: string;
     score: number;
-    source?: "conversation" | "document";
+    source?: "conversation" | "document" | "vector" | "lexical" | "both" | "reranked";
     text: string;
     metadata?: unknown;
   }>;
+  /** Full per-stage ranking trace (only when captureTrace was on). Absent on
+   *  the legacy auto-recall path unless capture is enabled there. */
+  trace?: RetrievalTrace;
 }
 
 /**
@@ -67,7 +74,12 @@ export async function writeDebugRecall(
   const dir = resolveDebugDir(env);
   if (!dir) return null;
 
-  const filename = `${payload.ts.replace(/[:.]/g, "-")}-${payload.agentId}.json`;
+  // Addressable by debugId when present (preferred); fall back to ts+agentId
+  // for legacy callers that don't supply one.
+  const stem = payload.debugId
+    ? payload.debugId
+    : `${payload.ts.replace(/[:.]/g, "-")}-${payload.agentId}`;
+  const filename = `${stem}.json`;
   const path = join(dir, filename);
 
   try {
@@ -88,6 +100,8 @@ export function buildPayloadFromUnifiedRecall(args: {
   sessionId: string | null;
   query: string;
   injectedContext: string;
+  debugId?: string;
+  trace?: RetrievalTrace;
   results: Array<{
     id: string;
     score: number;
@@ -98,6 +112,7 @@ export function buildPayloadFromUnifiedRecall(args: {
 }): DebugRecallPayload {
   return {
     ts: new Date().toISOString(),
+    ...(args.debugId ? { debugId: args.debugId } : {}),
     agentId: args.agentId,
     sessionId: args.sessionId,
     query: args.query,
@@ -111,6 +126,7 @@ export function buildPayloadFromUnifiedRecall(args: {
       text: r.text.slice(0, 500),
       metadata: r.metadata,
     })),
+    ...(args.trace ? { trace: args.trace } : {}),
   };
 }
 
@@ -122,6 +138,8 @@ export function buildPayloadFromMemoryOnly(args: {
   sessionId: string | null;
   query: string;
   injectedContext: string;
+  debugId?: string;
+  trace?: RetrievalTrace;
   results: Array<{
     entry: { id: string; text: string; category?: string; scope?: string };
     score: number;
@@ -129,6 +147,7 @@ export function buildPayloadFromMemoryOnly(args: {
 }): DebugRecallPayload {
   return {
     ts: new Date().toISOString(),
+    ...(args.debugId ? { debugId: args.debugId } : {}),
     agentId: args.agentId,
     sessionId: args.sessionId,
     query: args.query,
@@ -141,5 +160,46 @@ export function buildPayloadFromMemoryOnly(args: {
       text: r.entry.text.slice(0, 500),
       metadata: { category: r.entry.category, scope: r.entry.scope },
     })),
+    ...(args.trace ? { trace: args.trace } : {}),
+  };
+}
+
+/**
+ * Helper: build a debug payload from the MCP memory_recall path (the daemon's
+ * explicit recall). The MCP path doesn't inject context into a prompt — it
+ * returns results to the client — so `injectedContext` is the empty string.
+ */
+export function buildPayloadFromMcpRecall(args: {
+  debugId: string;
+  agentId: string;
+  sessionId: string | null;
+  query: string;
+  trace?: RetrievalTrace;
+  results: Array<{
+    id: string;
+    score: number;
+    source?: "vector" | "lexical" | "both" | "reranked";
+    text: string;
+    category?: string;
+    scope?: string;
+  }>;
+}): DebugRecallPayload {
+  return {
+    ts: new Date().toISOString(),
+    debugId: args.debugId,
+    agentId: args.agentId,
+    sessionId: args.sessionId,
+    query: args.query,
+    source: "mcp-recall",
+    resultCount: args.results.length,
+    injectedContext: "",
+    results: args.results.map((r) => ({
+      id: r.id,
+      score: r.score,
+      ...(r.source ? { source: r.source } : {}),
+      text: r.text.slice(0, 500),
+      metadata: { category: r.category, scope: r.scope },
+    })),
+    ...(args.trace ? { trace: args.trace } : {}),
   };
 }
