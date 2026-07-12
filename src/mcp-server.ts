@@ -21,7 +21,7 @@ import { detectCategory } from "../index.js";
 import { deriveScopes } from "./scope-derive.js";
 
 /** memex version — keep in sync with package.json (consumed by /health + MCP handshake). */
-const VERSION = "0.7.2";
+const VERSION = "0.7.3";
 
 // ============================================================================
 // Scope tag validation (Bug 5 fix)
