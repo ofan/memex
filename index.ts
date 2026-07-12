@@ -5,6 +5,7 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, dirname, basename, resolve } from "node:path";
 import { readFile, readdir, writeFile, mkdir } from "node:fs/promises";
@@ -452,6 +453,7 @@ const memoryUnifiedPlugin = {
         retrievalConfig.rerankScoreMode = config.reranker.scoreMode;
       }
     }
+    if (resolveDebugDir()) retrievalConfig.captureTrace = true;
     const retriever = createRetriever(store, embedder, retrievalConfig);
     const scopeManager = createScopeManager(config.scopes);
     const pluginVersion = getPluginVersion();
@@ -941,6 +943,7 @@ const memoryUnifiedPlugin = {
     if (config.reranker?.scoreMode === "raw" || config.reranker?.scoreMode === "rank") {
       unifiedRetrieverConfig.rerankScoreMode = config.reranker.scoreMode;
     }
+    if (resolveDebugDir()) unifiedRetrieverConfig.captureTrace = true;
     const unifiedRetriever = new UnifiedRetriever(
       store,
       documentSearchFn,
@@ -1295,20 +1298,25 @@ const memoryUnifiedPlugin = {
 
             // Debug capture (issue #23) — fire-and-forget when MEMEX_DEBUG_RECALL is set
             if (resolveDebugDir()) {
+              const trace = retriever.lastTrace ?? undefined;
               writeDebugRecall(buildPayloadFromUnifiedRecall({
+                debugId: trace?.debugId,
                 agentId,
                 sessionId: sessionKeyForCache ?? null,
                 query: recallQuery,
                 injectedContext: memoryContext,
+                trace,
                 results: results as any,
               })).catch(() => { /* swallow — debug must not break recall */ });
             }
           } else {
+            const debugId = randomUUID().slice(0, 8);
             const results = await retriever.retrieve({
               query: recallQuery,
               limit: config.autoRecallLimit ?? 3,
               scopeFilter: accessibleScopes,
               recentlyRecalled,
+              debugId,
             });
 
             if (results.length === 0) {
@@ -1323,11 +1331,14 @@ const memoryUnifiedPlugin = {
 
             // Debug capture (issue #23) — memory-only fallback path
             if (resolveDebugDir()) {
+              const trace = retriever.lastTrace ?? undefined;
               writeDebugRecall(buildPayloadFromMemoryOnly({
+                debugId,
                 agentId,
                 sessionId: sessionKeyForCache ?? null,
                 query: recallQuery,
                 injectedContext: memoryContext,
+                trace,
                 results,
               })).catch(() => { /* swallow */ });
             }
