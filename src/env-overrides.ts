@@ -25,6 +25,7 @@ export interface EnvOverridableConfig {
   autoRecallLimit?: number;
   reranker?: RerankerConfigLike;
   retrieval?: { hardMinScore?: number };
+  documents?: { paths: Array<{ path: string; name: string }> };
 }
 
 const FALSY = new Set(["", "0", "false", "off", "no"]);
@@ -73,6 +74,18 @@ export function applyEnvOverrides<T extends EnvOverridableConfig>(config: T, env
     if (Number.isFinite(f) && f >= 0 && f <= 1) {
       config.retrieval = { ...(config.retrieval ?? {}), hardMinScore: f };
     }
+  }
+
+  // documents.paths ← MEMEX_DOC_PATHS (comma-separated <abs-path>:<name>)
+  if (present(env.MEMEX_DOC_PATHS)) {
+    config.documents = {
+      paths: env.MEMEX_DOC_PATHS.split(",").map((entry) => {
+        const idx = entry.lastIndexOf(":");
+        return idx > 0
+          ? { path: entry.slice(0, idx), name: entry.slice(idx + 1) }
+          : { path: entry, name: entry.split("/").pop() || entry };
+      }),
+    };
   }
 
   return config;
