@@ -2443,7 +2443,7 @@ export function buildFTS5Query(query: string): string | null {
   return terms.map(t => `"${t}"*`).join(' OR ');
 }
 
-export function searchFTS(db: Database, query: string, limit: number = 20, collectionName?: string): SearchResult[] {
+export function searchFTS(db: Database, query: string, limit: number = 20, collectionName?: string, collections?: string[]): SearchResult[] {
   const ftsQuery = buildFTS5Query(query);
   if (!ftsQuery) return [];
 
@@ -2466,6 +2466,9 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
   if (collectionName) {
     sql += ` AND d.collection = ?`;
     params.push(String(collectionName));
+  } else if (collections && collections.length) {
+    sql += ` AND d.collection IN (${collections.map(() => "?").join(",")})`;
+    params.push(...collections);
   }
 
   // bm25 lower is better; sort ascending.
@@ -2523,6 +2526,9 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
   if (collectionName) {
     sectionSql += ` AND d.collection = ?`;
     sectionParams.push(String(collectionName));
+  } else if (collections && collections.length) {
+    sectionSql += ` AND d.collection IN (${collections.map(() => "?").join(",")})`;
+    sectionParams.push(...collections);
   }
 
   sectionSql += ` ORDER BY bm25_score ASC LIMIT ?`;
@@ -2568,7 +2574,7 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
 // Vector Search
 // =============================================================================
 
-export async function searchVec(db: Database, query: string, model: string, limit: number = 20, collectionName?: string, session?: ILLMSession, precomputedEmbedding?: number[]): Promise<SearchResult[]> {
+export async function searchVec(db: Database, query: string, model: string, limit: number = 20, collectionName?: string, session?: ILLMSession, precomputedEmbedding?: number[], collections?: string[]): Promise<SearchResult[]> {
   const tableExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
   if (!tableExists) return [];
 
@@ -2614,6 +2620,9 @@ export async function searchVec(db: Database, query: string, model: string, limi
   if (collectionName) {
     docSql += ` AND d.collection = ?`;
     params.push(collectionName);
+  } else if (collections && collections.length) {
+    docSql += ` AND d.collection IN (${collections.map(() => "?").join(",")})`;
+    params.push(...collections);
   }
 
   const docRows = db.prepare(docSql).all(...params) as {

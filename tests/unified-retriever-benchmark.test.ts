@@ -455,7 +455,7 @@ describe("UnifiedRetriever Benchmark — source diversity", () => {
     assert.ok(!sources.has("document"), "should NOT include document results for memory-routed query");
   });
 
-  it("document-only queries return only document results", async () => {
+  it("document-only queries return document results (B2: memory also runs, not skipped)", async () => {
     const { embedder } = createCountingEmbedder();
 
     const docSearch = async (_q: string, _vec: number[], limit: number) => {
@@ -469,12 +469,10 @@ describe("UnifiedRetriever Benchmark — source diversity", () => {
       reranker: null,
     });
 
-    // "in the file" routes to document-only
+    // "in the file" routes to document. B2: memory search always runs too
+    // (it's not skipped on document routes). Document results are always present.
     const results = await retriever.retrieve("what does it say in the file");
-    const sources = new Set(results.map(r => r.source));
-
-    assert.ok(sources.has("document"), "should include document results");
-    assert.ok(!sources.has("conversation"), "should NOT include conversation results for doc-routed query");
+    assert.ok(results.some(r => r.source === "document"), "document results present");
   });
 
   it("results are sorted by score descending", async () => {

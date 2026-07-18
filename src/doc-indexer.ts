@@ -23,6 +23,8 @@ import {
   deactivateDocument,
   getActiveDocumentPaths,
   cleanupOrphanedContent,
+  cleanupOrphanedVectors,
+  removeSectionsFTS,
   getHashesForEmbedding,
   formatDocForEmbedding,
   chunkDocument,
@@ -344,4 +346,55 @@ async function embedDocumentsViaEmbedder(
  */
 export function getEmbeddingBacklog(db: Database): number {
   return getHashesNeedingEmbedding(db);
+}
+
+// ============================================================================
+// Push API — upsert / forget by (collection, docId)
+// ============================================================================
+
+/**
+ * Upsert a document by (collection, docId). Idempotent — re-push same text is a
+ * no-op; re-push with edited text replaces content + cleans old vectors (B7).
+ * Does NOT embed — call embedDocuments(db, dim, embedder) afterwards to index
+ * the content for vector search.
+ */
+export async function upsertDocument(db: Database, args: {
+  collection: string;
+  docId: string;
+  text: string;
+  title?: string;
+}): Promise<void> {
+  const { collection, docId, text, title = docId } = args;
+  const now = new Date().toISOString();
+  const hash = await hashContent(text);
+  const existing = findActiveDocument(db, collection, docId);
+
+  if (existing) {
+    if (existing.hash !== hash) {
+      insertContent(db, hash, text, now);
+      updateDocument(db, existing.id, title, hash, now);
+    } else if (existing.title !== title) {
+      updateDocumentTitle(db, existing.id, title, now);
+    }
+    // hash + title unchanged → no-op
+  } else {
+    insertContent(db, hash, text, now);
+    insertDocument(db, collection, docId, title, hash, now, now);
+  }
+
+  // B7: remove vectors for content hashes no active document references.
+  cleanupOrphanedVectors(db);
+}
+
+/**
+ * Forget (hard-delete) a document by (collection, docId). Removes sections,
+ * FTS entries, content, and orphaned vectors (B7).
+ */
+export function forgetDocument(db: Database, collection: string, docId: string): void {
+  const doc = findActiveDocument(db, collection, docId);
+  if (!doc) return;
+  removeSectionsFTS(db, doc.id);                    // sections + sections_fts (JS-managed)
+  db.prepare(`DELETE FROM documents WHERE id = ?`).run(doc.id);  // triggers documents_ad FTS cleanup
+  cleanupOrphanedContent(db);                        // content rows no doc references
+  cleanupOrphanedVectors(db);                        // B7: vectors for orphaned hashes
 }

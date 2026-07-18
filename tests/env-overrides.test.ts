@@ -89,3 +89,24 @@ describe("syncDebugEnvFromConfig", () => {
     assert.equal(env.MEMEX_DEBUG_RECALL, "env-wins");
   });
 });
+
+describe("applyEnvOverrides — MEMEX_DOC_PATHS", () => {
+  it("parses comma-separated path:name entries", () => {
+    const cfg: any = {};
+    applyEnvOverrides(cfg, { MEMEX_DOC_PATHS: "/srv/a:alpha,/opt/b:beta" });
+    assert.deepEqual(cfg.documents?.paths, [
+      { path: "/srv/a", name: "alpha" },
+      { path: "/opt/b", name: "beta" },
+    ]);
+  });
+  it("splits on the LAST colon (paths may contain colons; documented limitation)", () => {
+    const cfg: any = {};
+    applyEnvOverrides(cfg, { MEMEX_DOC_PATHS: "/foo:bar:baz" });
+    assert.deepEqual(cfg.documents?.paths, [{ path: "/foo:bar", name: "baz" }]);
+  });
+  it("omitting leaves config untouched", () => {
+    const cfg: any = { documents: { paths: [{ path: "/x", name: "x" }] } };
+    applyEnvOverrides(cfg, {});
+    assert.equal(cfg.documents.paths.length, 1, "existing config preserved");
+  });
+});
