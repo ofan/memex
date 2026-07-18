@@ -600,13 +600,17 @@ export function createMemexMcpServer(options: McpServerOptions) {
         try {
           await indexAllPaths(docStore!.db, indexPaths);
           await embedDocuments(docStore!.db, dim, embedder!);
-          // Upsert collection metadata as public
+          // Upsert collection metadata for ALL active collections (they're the shared corpus)
           const now = new Date().toISOString();
-          for (const p of documents!.paths) {
-            docStore!.db.prepare(
-              `INSERT INTO document_collections (name, visibility, source, created_at) VALUES (?,?,?,?)
-               ON CONFLICT(name) DO NOTHING`
-            ).run(p.name, "public", "configured", now);
+          const activeColls = docStore!.db.prepare(
+            `SELECT DISTINCT collection FROM documents WHERE active = 1`
+          ).all() as { collection: string }[];
+          const stmt = docStore!.db.prepare(
+            `INSERT INTO document_collections (name, visibility, source, created_at) VALUES (?,?,?,?)
+             ON CONFLICT(name) DO NOTHING`
+          );
+          for (const { collection } of activeColls) {
+            stmt.run(collection, "public", "configured", now);
           }
         } catch { /* best effort — indexing must not crash the daemon */ }
       };
@@ -676,6 +680,17 @@ async function main() {
     apiKey: llmApiKey,
     ...(llmTimeout ? { timeout: llmTimeout } : {}),
   } : undefined;
+
+  // Documents: MEMEX_DOC_PATHS (comma-separated <abs-path>:<name>) → documents.paths
+  const docPathsRaw = process.env.MEMEX_DOC_PATHS;
+  const documents = docPathsRaw ? {
+    paths: docPathsRaw.split(",").map((entry) => {
+      const idx = entry.lastIndexOf(":");
+      return idx > 0
+        ? { path: entry.slice(0, idx), name: entry.slice(idx + 1) }
+        : { path: entry, name: entry.split("/").pop() || entry };
+    }),
+  } : undefined;
   if (reflectionLLM) {
     console.error(`memex-mcp: reflection enabled (model: ${llmModel}${llmTimeout ? `, timeout: ${llmTimeout}ms` : ""})`);
   }
@@ -687,6 +702,7 @@ async function main() {
     reflectionLLM,
     dreamIntervalMs: dreamInterval,
     noDream,
+    documents,
   };
   const { server, store } = createMemexMcpServer(sharedOptions);
 
