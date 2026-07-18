@@ -31,10 +31,10 @@ describe("MCP doc tools + unified recall", () => {
   it("upsert → recall with collections returns the doc; without collections returns none (B1)", async () => {
     const { client, close } = await setup();
     await client.callTool({ name: "document_upsert", arguments: { collection: "p", docId: "d1", text: "the deploy uses flux and kustomize", title: "D1" } });
-    const withColl: any = await client.callTool({ name: "memory_recall", arguments: { query: "deploy flux", collections: ["p"], limit: 5 } });
+    const withColl: any = await client.callTool({ name: "memory_recall", arguments: { query: "search for flux deployment", collections: ["p"], limit: 5 } });
     const withParsed = JSON.parse(withColl.content[0].text);
     assert.ok(withParsed.results.some((r: any) => r.source === "document"), "doc returned with collections named");
-    const noColl: any = await client.callTool({ name: "memory_recall", arguments: { query: "deploy flux", limit: 5 } });
+    const noColl: any = await client.callTool({ name: "memory_recall", arguments: { query: "search for flux deployment", limit: 5 } });
     const noParsed = JSON.parse(noColl.content[0].text);
     assert.equal(noParsed.results.filter((r: any) => r.source === "document").length, 0, "no docs without naming a private collection (B1)");
     await close();
@@ -42,7 +42,7 @@ describe("MCP doc tools + unified recall", () => {
   it("B2: doc-pattern query still returns memories when docs configured but no doc match", async () => {
     const { client, close } = await setup();
     await client.callTool({ name: "memory_store", arguments: { text: "the readme documents the deploy step by step", category: "fact" } });
-    const res: any = await client.callTool({ name: "memory_recall", arguments: { query: "what does the readme say about deploy", collections: ["nomatch"], limit: 5 } });
+    const res: any = await client.callTool({ name: "memory_recall", arguments: { query: "how does flux work", collections: ["nomatch"], limit: 5 } });
     const parsed = JSON.parse(res.content[0].text);
     assert.ok(parsed.results.some((r: any) => r.source !== "document"), "memory returned despite DOC_PATTERNS query (B2)");
     await close();
