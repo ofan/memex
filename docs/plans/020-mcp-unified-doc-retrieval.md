@@ -10,6 +10,15 @@
 
 **Spec:** `docs/design/mcp-unified-doc-retrieval.md`. Boundary contracts B1–B7 referenced below.
 
+> **⚠️ Amendment — collection visibility (supersedes the "omit → no docs" wording in Tasks 1/3/5 below).**
+> Collections have **visibility** (`public` | `private`) in a new `document_collections(name, visibility, source, created_at)` table.
+> - **Omit `collections` on recall → resolve to all `public` collections** (`SELECT name FROM document_collections WHERE visibility='public'`), not `[]`. Only if that set is also empty do we return no docs.
+> - **Name `collections` → search exactly those** (public OR private).
+> - **The gate moves INTO the daemon's `documentSearchFn`** (Task 5), which does the public-resolution. **UnifiedRetriever (Task 3) just forwards `collections` as-is** (undefined when omitted, or the named list) — it no longer skips the docSearch call. Update Task 3's gate test accordingly: omit → `documentSearchFn` IS called with `collections=undefined`; named → called with the list.
+> - `document_upsert` gains `public?: boolean` (default false → private); configured-dir collections are `public`. `document_upsert`/`indexAllPaths` upsert a `document_collections` row. `document_collections` tool lists name+visibility+count.
+> - No ACL yet — schema is shaped so a nullable `owner` column + `OR owner=?` clause add hard ACL later.
+
+
 **Project conventions:** main is squash-only via PR; patch version bumps only; never commit secrets/infra — use placeholders; tests via `node --import jiti/register --test tests/<file>.test.ts`; full suite `npm test`.
 
 **Key helper signatures (verified against code — use these exactly):**
