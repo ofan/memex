@@ -1269,22 +1269,21 @@ const memoryUnifiedPlugin = {
             for (const id of turnIds) recentlyRecalled.add(id);
           }
 
-          // Use unified recall (memory + docs) when available, fallback to memory-only
+          // Use unified retrieval (memory + docs) when available, fallback to memory-only
           let memoryContext: string;
           let resultCount = 0;
           const recalledIds: string[] = [];
-          if (unifiedRecall.hasDocumentSearch) {
+          const hasDocSearch = !!(documentSearchFn);
+          if (hasDocSearch) {
             // Filter document to current agent's workspace collection to prevent cross-agent context pollution
             const docCollection = (config.autoRecallDocFilter !== false && ctx?.workspaceDir)
               ? workspaceToCollection.get(ctx.workspaceDir)
               : undefined;
 
-            const results = await unifiedRecall.recall(recallQuery, {
-              // Use only the latest user turn for retrieval. The full built prompt can
-              // exceed local embedding backend context limits and pollute recall intent.
+            const results = await unifiedRetriever.retrieve(recallQuery, {
               limit: config.autoRecallLimit ?? 3,
               scopeFilter: accessibleScopes,
-              collection: docCollection,
+              collections: docCollection ? [docCollection] : undefined,
               recentlyRecalled,
             });
             if (results.length === 0) {
