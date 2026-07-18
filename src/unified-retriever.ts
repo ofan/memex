@@ -171,7 +171,7 @@ export class UnifiedRetriever {
 
   constructor(
     private memoryStore: MemoryStore,
-    private documentSearchFn: ((query: string, queryVec: number[], limit: number, collection?: string) => Promise<DocumentCandidate[]>) | null,
+    private documentSearchFn: ((query: string, queryVec: number[], limit: number, collection?: string, collections?: string[]) => Promise<DocumentCandidate[]>) | null,
     private embedder: Embedder,
     config: Partial<UnifiedRetrieverConfig> = {},
   ) {
@@ -190,6 +190,8 @@ export class UnifiedRetriever {
     limit?: number;
     scopeFilter?: string[];
     collection?: string;
+    /** Collections to search (B4: takes precedence over single `collection`). */
+    collections?: string[];
     recentlyRecalled?: Set<string>;
     /** Stable per-recall id embedded in the trace header (caller-owned). */
     debugId?: string;
@@ -216,12 +218,12 @@ export class UnifiedRetriever {
     const queryVec = await this.embedder.embedQuery(query);
 
     // Stage 3: Parallel retrieval based on route
+    const colls = options?.collections ?? (options?.collection ? [options.collection] : undefined);
     const [memoryRaw, docResults] = await Promise.all([
-      (route !== "document")
-        ? this.searchMemories(query, queryVec, options?.scopeFilter)
-        : Promise.resolve({ vecResults: [], bm25Results: [] }),
+      // B2: memory search ALWAYS runs (no route guard) — prevents regression on DOC_PATTERNS queries.
+      this.searchMemories(query, queryVec, options?.scopeFilter),
       (route !== "memory" && this.documentSearchFn)
-        ? this.documentSearchFn(query, queryVec, this.config.candidatePoolSize, options?.collection)
+        ? this.documentSearchFn(query, queryVec, this.config.candidatePoolSize, undefined, colls)
         : Promise.resolve([]),
     ]);
 

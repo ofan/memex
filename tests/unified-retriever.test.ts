@@ -358,7 +358,7 @@ describe("UnifiedRetriever — Task 2: Source Routing", () => {
       assert.equal(getEmbedCallCount(), 1, "should make exactly one embed call");
     });
 
-    it("only queries documents when route is document", async () => {
+    it("document route still runs memory search (B2: memory always runs)", async () => {
       const { embedder, getEmbedCallCount } = createTrackingEmbedder();
       let docSearchCalled = false;
       const docSearch = async () => {
@@ -366,7 +366,7 @@ describe("UnifiedRetriever — Task 2: Source Routing", () => {
         return [makeDocCandidate("doc-1", "Config Guide", 0.7)];
       };
 
-      // Seed a memory that should NOT be retrieved
+      // Seed a memory that SHOULD be retrieved even on a document-route query (B2)
       await store.store({
         text: "User prefers dark mode",
         vector: makeVector(42),
@@ -382,10 +382,10 @@ describe("UnifiedRetriever — Task 2: Source Routing", () => {
       assert.equal(docSearchCalled, true, "document search should be called for document route");
       assert.equal(getEmbedCallCount(), 1, "should make exactly one embed call");
 
-      // All results should be document source
-      for (const r of results) {
-        assert.equal(r.source, "document");
-      }
+      // B2: memory also runs — results include BOTH conversation and document sources
+      const sources = new Set(results.map(r => r.source));
+      assert.ok(sources.has("document"), "document results present");
+      assert.ok(sources.has("conversation"), "memory results present (B2: memory always runs)");
     });
 
     it("queries both sources for generic queries", async () => {
@@ -905,17 +905,17 @@ describe("UnifiedRetriever — Task 3: Fusion + Z-Score Calibration", () => {
       assert.deepEqual(results, []);
     });
 
-    it("passes collection option to document search", async () => {
+    it("passes collection option to document search (B4: forwarded as collections[])", async () => {
       const { embedder } = createTrackingEmbedder();
-      let capturedCollection: string | undefined;
-      const docSearch = async (_q: string, _v: number[], _l: number, collection?: string) => {
-        capturedCollection = collection;
+      let capturedColls: string[] | undefined;
+      const docSearch = async (_q: string, _v: number[], _l: number, _c?: string, colls?: string[]) => {
+        capturedColls = colls;
         return [] as DocumentCandidate[];
       };
 
       const retriever = new UnifiedRetriever(store, docSearch, embedder);
       await retriever.retrieve("search for documents about the system", { collection: "my-workspace" });
-      assert.equal(capturedCollection, "my-workspace");
+      assert.deepEqual(capturedColls, ["my-workspace"], "single collection forwarded as [collection] (B4)");
     });
 
     it("passes scopeFilter to memory search", async () => {
