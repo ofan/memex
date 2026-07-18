@@ -47,13 +47,39 @@ Two doc sources (decision: "both"):
 | Aspect | Rule |
 |---|---|
 | Identity | `documents.UNIQUE(collection, path)` — `path` = client `docId`; collection name used **verbatim** (no slug normalization — matches `doc-indexer`'s `pathConfig.name`) |
-| Push | `document_upsert({collection, docId, text, title})` — `collection` required |
-| Configured-dir | `MEMEX_DOC_PATHS` (grammar below) → named collections |
-| Recall | `memory_recall({..., collections: ["my-proj", "shared"]})` — hard gate |
-| Visibility | Omit `collections` → **no documents** (memory-only results) |
-| Discovery | new `document_collections` tool lists known collections (names + counts) |
+| Push | `document_upsert({collection, docId, text, title, public?})` — `collection` required; defaults **private**; `public:true` marks it default-searched |
+| Configured-dir | `MEMEX_DOC_PATHS` (grammar below) → named collections, **public** by default |
+| Recall | `memory_recall({..., collections?: [...]})` — gate resolves per §Collection visibility |
+| Discovery | `document_collections` tool lists collections (+ visibility, counts) |
 
-`MEMEX_DOC_PATHS` grammar: comma-separated `entries`, each `<abs-path>:<collection-name>`; the
+### Collection visibility (soft now, ACL-ready)
+Each collection has a `visibility`: **public** or **private** (stored in a `document_collections`
+metadata table — see schema below). There is **no ACL yet** (no identity system); "private" means
+soft isolation — must be named to be searched. The schema is shaped so a future nullable `owner`
+column + one gate clause add hard ACL without rework.
+
+| Caller passes | What gets searched |
+|---|---|
+| `collections` **omitted** | all **public** collections (shared corpus surfaces by default) |
+| `collections: ["a","b"]` **named** | exactly `a` and `b` (public OR private) |
+
+So a fresh client that knows nothing immediately hits the shared corpus (configured-dir); pushed
+docs stay hidden until their owner names them (the owner created the collection, so it knows the
+name) or marks them public.
+
+`document_collections` schema:
+```sql
+CREATE TABLE document_collections (
+  name       TEXT PRIMARY KEY,
+  visibility TEXT NOT NULL DEFAULT 'private',   -- 'public' | 'private'
+  source     TEXT NOT NULL,                      -- 'configured' | 'push'
+  created_at TEXT NOT NULL
+  -- ACL-ready: add  owner TEXT  (nullable) later; gate becomes  visibility='public' OR owner=?
+);
+```
+`document_upsert` / `indexAllPaths` upsert a row here when they touch a collection.
+
+`MEMEX_DOC_PATHS` grammar: comma-separated entries, each `<abs-path>:<collection-name>`; the
 `:name` suffix is required (no default). Example: `/srv/team-docs:team,/opt/runbooks:ops`. Paths
 containing `:` are not supported (documented limitation; use a symlink if needed).
 
@@ -61,10 +87,11 @@ containing `:` are not supported (documented limitation; use a symlink if needed
 
 ### B1. The collection gate lives at the `documentSearchFn` boundary, NOT in searchFTS/searchVec
 `searchFTS`/`searchVec` keep their **existing** no-filter-means-all semantics (the plugin path
-depends on it). The hard gate is enforced by `documentSearchFn` (and/or `UnifiedRetriever.retrieve`
-before calling it): **if `collections` is omitted/empty → return `[]` without invoking
-searchFTS/searchVec.** This is non-negotiable — it's what makes "omit collections → no docs" true.
-(P0-2)
+depends on it). The gate is enforced by `documentSearchFn` (and/or `UnifiedRetriever.retrieve`
+before calling it): **if `collections` is omitted/empty → resolve to the set of public collections**
+(`SELECT name FROM document_collections WHERE visibility='public'`); if that set is also empty,
+return `[]`. When `collections` is named, search exactly those (public or private). Either way the
+low-level functions are only called with a concrete collection list — never unrestricted. (P0-2)
 
 ### B2. Memory always runs; routing never starves memory
 `UnifiedRetriever.routeQuery` can return `"document"` for queries matching `DOC_PATTERNS`
