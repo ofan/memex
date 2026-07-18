@@ -21,6 +21,9 @@ import { detectCategory } from "../index.js";
 import { deriveScopes } from "./scope-derive.js";
 import { resolveDebugDir, writeDebugRecall, buildPayloadFromMcpRecall } from "./debug-recall.js";
 import { randomUUID } from "node:crypto";
+import { createStore, searchFTS, searchVec } from "./search.js";
+import { UnifiedRetriever } from "./unified-retriever.js";
+import { upsertDocument, forgetDocument, indexAllPaths, embedDocuments } from "./doc-indexer.js";
 
 /** memex version — keep in sync with package.json (consumed by /health + MCP handshake). */
 const VERSION = "0.7.3";
@@ -51,43 +54,86 @@ export interface McpServerOptions {
   reflectionLLM?: ReflectionLLMConfig;
   dreamIntervalMs?: number;
   noDream?: boolean;
+  /** Document collections to index (configured-dir). Enables unified memory+doc retrieval. */
+  documents?: { paths: Array<{ path: string; name: string }> };
 }
 
 export function createMemexMcpServer(options: McpServerOptions) {
-  const { dbPath, vectorDim, embedder, reflectionLLM, dreamIntervalMs, noDream } = options;
+  const { dbPath, vectorDim, embedder, reflectionLLM, dreamIntervalMs, noDream, documents } = options;
 
   const dim = vectorDim ?? embedder?.dimensions ?? 8;
-  const store = new MemoryStore({ dbPath, vectorDim: dim });
-  // Reranker on the MCP path: OFF by default (preserves prior behavior). Enabled only when
-  // MEMEX_RERANK_* env vars are set — flipping the flag alone is a no-op because rerankResults
-  // also guards on rerankApiKey (spec-review round-2 critical). Default model stays the safe
-  // Jina fallback unless MEMEX_RERANK_MODEL overrides it (e.g. Qwen3-Reranker-0.6B).
+  const docsConfigured = !!(documents?.paths?.length);
+
+  // B5: dimension agreement (shared vectors_vec drop+rebuilds on mismatch).
+  if (docsConfigured && embedder && embedder.dimensions !== dim) {
+    throw new Error(`dimension mismatch: embedder ${embedder.dimensions} != vectorDim ${dim} (B5)`);
+  }
+
+  // B6: bootstrap — createStore (doc tables + shared vectors_vec) when docs configured.
+  let docStore: ReturnType<typeof createStore> | undefined;
+  let store: MemoryStore;
+  if (docsConfigured) {
+    docStore = createStore(dbPath);
+    docStore.ensureVecTable(dim);
+    store = new MemoryStore({ dbPath, vectorDim: dim, db: docStore.db });
+    // document_collections table (visibility model)
+    docStore.db.prepare(`CREATE TABLE IF NOT EXISTS document_collections (
+      name TEXT PRIMARY KEY, visibility TEXT NOT NULL DEFAULT 'private',
+      source TEXT NOT NULL, created_at TEXT NOT NULL)`).run();
+  } else {
+    store = new MemoryStore({ dbPath, vectorDim: dim });
+  }
+
+  // Reranker config (shared between both retriever paths).
   const rerankEndpoint = process.env.MEMEX_RERANK_ENDPOINT;
   const rerankApiKey = process.env.MEMEX_RERANK_API_KEY;
   const rerankModel = process.env.MEMEX_RERANK_MODEL;
   const enableRerank = !!(rerankEndpoint && rerankApiKey);
-
-  // LLM-based reranker: opt-in via MEMEX_RERANK_LLM_MODEL. When set, uses the
-  // chat model as a relevance judge instead of the local cross-encoder.
-  // Requires MEMEX_LLM_ENDPOINT to be configured (shared with reflection).
   const rerankLlmModel = process.env.MEMEX_RERANK_LLM_MODEL;
   const rerankLlmEndpoint = reflectionLLM?.endpoint;
   const rerankLlmApiKey = reflectionLLM?.apiKey ?? "";
   const enableLlmRerank = !!(rerankLlmEndpoint && rerankLlmModel);
-
-  // Trace capture is on only when MEMEX_DEBUG_RECALL is set (zero overhead otherwise).
   const captureTrace = !!resolveDebugDir();
 
-  const retriever = embedder
-    ? createRetriever(store, embedder, {
-        mode: "hybrid",
-        rerank: enableLlmRerank ? "llm" : enableRerank ? "cross-encoder" : "none",
-        ...(enableRerank ? { rerankEndpoint, rerankApiKey } : {}),
-        ...(enableRerank && rerankModel ? { rerankModel } : {}),
-        ...(enableLlmRerank ? { rerankLlmEndpoint, rerankLlmApiKey, rerankLlmModel } : {}),
-        captureTrace,
-      })
-    : null;
+  // B2: UnifiedRetriever when docs configured; MemoryRetriever otherwise.
+  let retriever: any;
+  let retrieverKind: "memory" | "unified" = "memory";
+  if (docsConfigured && embedder) {
+    const embeddingModel = process.env.MEMEX_EMBED_MODEL || "default";
+    // B1: documentSearchFn — the collection gate.
+    const documentSearchFn = async (query: string, queryVec: number[], limit: number, _coll?: string, collections?: string[]) => {
+      const ss = docStore!;
+      let effective = collections;
+      if (!effective || effective.length === 0) {
+        effective = (ss.db.prepare(`SELECT name FROM document_collections WHERE visibility = 'public'`).all() as { name: string }[]).map(r => r.name);
+      }
+      if (!effective || effective.length === 0) return []; // B1 gate
+      const fts = searchFTS(ss.db, query, limit, undefined, effective);
+      const vecRes = await searchVec(ss.db, query, embeddingModel, limit, undefined, undefined, queryVec, effective);
+      const merged = new Map<string, any>();
+      for (const r of fts) merged.set(r.filepath, r);
+      for (const r of vecRes) { const ex = merged.get(r.filepath); if (!ex || (r as any).score > (ex as any).score) merged.set(r.filepath, r); }
+      return Array.from(merged.values()).sort((a: any, b: any) => b.score - a.score).slice(0, limit)
+        .map((r: any) => ({
+          filepath: r.filepath, displayPath: r.display_path || r.filepath,
+          title: r.title, body: r.body || "", bestChunk: r.body || "",
+          bestChunkPos: 0, score: r.score, docid: r.hash || r.filepath, context: null,
+        }));
+    };
+    retriever = new UnifiedRetriever(store, documentSearchFn, embedder, { captureTrace });
+    retrieverKind = "unified";
+  } else if (embedder) {
+    retriever = createRetriever(store, embedder, {
+      mode: "hybrid",
+      rerank: enableLlmRerank ? "llm" : enableRerank ? "cross-encoder" : "none",
+      ...(enableRerank ? { rerankEndpoint, rerankApiKey } : {}),
+      ...(enableRerank && rerankModel ? { rerankModel } : {}),
+      ...(enableLlmRerank ? { rerankLlmEndpoint, rerankLlmApiKey, rerankLlmModel } : {}),
+      captureTrace,
+    });
+  } else {
+    retriever = null;
+  }
 
   const server = new McpServer(
     { name: "memex", version: VERSION },
@@ -237,14 +283,17 @@ export function createMemexMcpServer(options: McpServerOptions) {
       scopes: z.array(z.string()).optional().describe(
         "Explicit scope tags to filter by (replaces the default active-context set). A memory matches if it has ANY of these tags. Omit to recall all memories unfiltered."
       ),
+      collections: z.array(z.string()).optional().describe(
+        "Document collections to search (when docs are configured). Omit to search public collections only; name specific collections to include private ones."
+      ),
       agent_id: z.string().optional()
         .describe("Agent identifier (optional, scopes recall to agent-specific memories)"),
       session_id: z.string().optional()
         .describe("Session identifier (optional, scopes recall to session-specific memories)"),
     },
   }, async (_params, _extra) => {
-    const { query, limit = 5, scopes, agent_id, session_id } = _params as {
-      query: string; limit?: number; scopes?: string[];
+    const { query, limit = 5, scopes, collections, agent_id, session_id } = _params as {
+      query: string; limit?: number; scopes?: string[]; collections?: string[];
       agent_id?: string; session_id?: string;
     };
 
@@ -276,10 +325,25 @@ export function createMemexMcpServer(options: McpServerOptions) {
 
     if (retriever) {
       const debugId = randomUUID().slice(0, 8);
-      const results = await retriever.retrieve({ query, limit, scopes: effectiveScopes, debugId });
-      // Record persistent recall signal so dreaming doesn't evict actively-used memories
-      // (the MCP recall path previously never bumped recall_count).
-      const recalledIds = results.map(r => r.entry.id);
+      // B3: call-shape branches on retriever kind (object for memory, positional for unified).
+      let results: Array<{ id: string; text: string; score: number; source: string; category?: string; scope?: string; sources?: any; entry?: any }>;
+      if (retrieverKind === "unified") {
+        const ur = await retriever.retrieve(query, { limit, scopeFilter: effectiveScopes, collections, debugId });
+        results = ur.map((r: any) => ({
+          id: r.id, text: r.text, score: r.score,
+          source: r.source === "conversation" ? "conversation" : "document",
+          category: r.metadata?.category, scope: r.metadata?.scope,
+        }));
+      } else {
+        const mr = await retriever.retrieve({ query, limit, scopes: effectiveScopes, debugId });
+        results = mr.map((r: any) => ({
+          id: r.entry.id, text: r.entry.text, score: r.score,
+          source: r.sources?.reranked ? "reranked" : (r.sources?.vector && r.sources?.bm25) ? "both" : r.sources?.vector ? "vector" : "lexical",
+          category: r.entry.category, scope: r.entry.scope, sources: r.sources, entry: r.entry,
+        }));
+      }
+      // Record persistent recall signal (memories only — docs don't have recall_count).
+      const recalledIds = results.filter(r => r.source !== "document").map(r => r.id);
       if (recalledIds.length > 0) {
         try { store.recordRecalls(recalledIds); } catch { /* best effort */ }
       }
@@ -293,11 +357,8 @@ export function createMemexMcpServer(options: McpServerOptions) {
           query,
           trace: retriever.lastTrace ?? undefined,
           results: results.map(r => ({
-            id: r.entry.id, score: r.score,
-            source: r.sources?.reranked ? "reranked"
-              : (r.sources?.vector && r.sources?.bm25) ? "both"
-              : r.sources?.vector ? "vector" as const : "lexical" as const,
-            text: r.entry.text, category: r.entry.category, scope: r.entry.scope,
+            id: r.id, score: r.score,
+            source: r.source as any, text: r.text, category: r.category, scope: r.scope,
           })),
         })).catch(() => { /* best effort — debug must never break recall */ });
       }
@@ -308,15 +369,13 @@ export function createMemexMcpServer(options: McpServerOptions) {
             debugId,
             captured,
             results: results.map(r => ({
-              id: r.entry.id,
-              anchor: anchor(r.entry.id),
-              text: r.entry.text,
-              category: r.entry.category,
-              scope: r.entry.scope,
+              id: r.id,
+              anchor: anchor(r.id),
+              text: r.text,
+              category: r.category,
+              scope: r.scope,
               score: Math.round(r.score * 1000) / 1000,
-              source: r.sources?.reranked ? "reranked"
-                : (r.sources?.vector && r.sources?.bm25) ? "both"
-                : r.sources?.vector ? "vector" : "lexical",
+              source: r.source,
             })),
             note: "Cite recalled memories by anchor (e.g. [mem:abc12345]) when relying on them. Pass the anchor (or any longer prefix) to memory_forget to delete a stale entry.",
           }),
@@ -480,6 +539,82 @@ export function createMemexMcpServer(options: McpServerOptions) {
       }],
     };
   });
+
+  // ── Document tools (only when docs configured) ─────────────────────────────
+  if (docsConfigured && docStore) {
+    const embeddingModel = process.env.MEMEX_EMBED_MODEL || "default";
+
+    server.registerTool("document_upsert", {
+      title: "Upsert Document",
+      description: "Push a document into a collection. Idempotent by (collection, docId). Defaults to private visibility.",
+      inputSchema: {
+        collection: z.string().describe("Collection name (the document's namespace)"),
+        docId: z.string().describe("Unique document id within the collection"),
+        text: z.string().describe("Document text content"),
+        title: z.string().optional().describe("Document title (defaults to docId)"),
+        public: z.boolean().optional().describe("Mark collection as public (default-searched). Defaults to false (private)."),
+      },
+    }, async (_params) => {
+      const { collection, docId, text, title, public: isPublic } = _params as any;
+      await upsertDocument(docStore!.db, { collection, docId, text, title });
+      // Embed the new/updated content
+      await embedDocuments(docStore!.db, dim, embedder!);
+      // Upsert collection metadata (visibility)
+      docStore!.db.prepare(
+        `INSERT INTO document_collections (name, visibility, source, created_at) VALUES (?,?,?,?)
+         ON CONFLICT(name) DO UPDATE SET visibility = excluded.visibility`
+      ).run(collection, isPublic ? "public" : "private", "push", new Date().toISOString());
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, collection, docId }) }] };
+    });
+
+    server.registerTool("document_forget", {
+      title: "Forget Document",
+      description: "Delete a document by (collection, docId).",
+      inputSchema: {
+        collection: z.string(),
+        docId: z.string(),
+      },
+    }, async (_params) => {
+      const { collection, docId } = _params as any;
+      forgetDocument(docStore!.db, collection, docId);
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, collection, docId }) }] };
+    });
+
+    server.registerTool("document_collections", {
+      title: "List Document Collections",
+      description: "List all document collections with visibility + document counts.",
+      inputSchema: {},
+    }, async () => {
+      const rows = docStore!.db.prepare(
+        `SELECT dc.name, dc.visibility, dc.source, COUNT(d.id) as docs
+         FROM document_collections dc LEFT JOIN documents d ON d.collection = dc.name AND d.active = 1
+         GROUP BY dc.name ORDER BY dc.name`
+      ).all();
+      return { content: [{ type: "text", text: JSON.stringify({ collections: rows }) }] };
+    });
+
+    // Configured-dir indexing (fire-and-forget on startup, interval for refresh)
+    if (documents!.paths.length > 0) {
+      const indexPaths = documents!.paths.map(p => ({ path: p.path, name: p.name, pattern: "**/*.md" }));
+      const doIndex = async () => {
+        try {
+          await indexAllPaths(docStore!.db, indexPaths);
+          await embedDocuments(docStore!.db, dim, embedder!);
+          // Upsert collection metadata as public
+          const now = new Date().toISOString();
+          for (const p of documents!.paths) {
+            docStore!.db.prepare(
+              `INSERT INTO document_collections (name, visibility, source, created_at) VALUES (?,?,?,?)
+               ON CONFLICT(name) DO NOTHING`
+            ).run(p.name, "public", "configured", now);
+          }
+        } catch { /* best effort — indexing must not crash the daemon */ }
+      };
+      doIndex(); // fire-and-forget at startup
+      const interval = setInterval(doIndex, 30 * 60 * 1000); // every 30 min
+      interval.unref();
+    }
+  }
 
   return { server, store, retriever };
 }
