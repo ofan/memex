@@ -17,6 +17,8 @@ export interface RerankerConfigLike {
   apiKey?: string;
   model?: string;
   provider?: string;
+  blendWeight?: number;
+  scoreMode?: string;
 }
 
 export interface EnvOverridableConfig {
@@ -25,7 +27,9 @@ export interface EnvOverridableConfig {
   autoRecallLimit?: number;
   reranker?: RerankerConfigLike;
   retrieval?: { hardMinScore?: number };
-  documents?: { paths: Array<{ path: string; name: string }> };
+  documents?: {
+    paths?: Array<{ path: string; name: string; pattern?: string }>;
+  };
 }
 
 const FALSY = new Set(["", "0", "false", "off", "no"]);
