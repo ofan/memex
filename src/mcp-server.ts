@@ -824,6 +824,15 @@ export interface MemexHttpServer extends ReturnType<typeof createHttpServer> {
 const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 const DEFAULT_MAX_SESSIONS = 128;
+/** Maximum JSON request body accepted by the HTTP transport. */
+const MAX_HTTP_BODY_BYTES = 8 * 1024 * 1024;
+
+class HttpRequestError extends Error {
+  constructor(public readonly statusCode: 400 | 413, message: string) {
+    super(message);
+    this.name = "HttpRequestError";
+  }
+}
 
 /** Read a strictly positive integer env var, or undefined. */
 function positiveIntEnv(name: string): number | undefined {
@@ -992,8 +1001,9 @@ export async function startHttpServer(
       } catch (err) {
         console.error("memex-mcp: HTTP request error:", err);
         if (!res.writableEnded) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err instanceof Error ? err.message : "internal error" }));
+          const statusCode = err instanceof HttpRequestError ? err.statusCode : 500;
+          res.writeHead(statusCode, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof HttpRequestError ? err.message : "internal error" }));
         }
       }
       return;
@@ -1039,18 +1049,55 @@ function isInitializeRequest(body: unknown): boolean {
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const contentLength = req.headers["content-length"];
+  if (contentLength !== undefined) {
+    const declaredLength = Number(contentLength);
+    if (!Number.isFinite(declaredLength) || declaredLength < 0) {
+      throw new HttpRequestError(400, "invalid content-length");
+    }
+    if (declaredLength > MAX_HTTP_BODY_BYTES) {
+      // Drain the request so the keep-alive connection can be reused safely.
+      req.resume();
+      throw new HttpRequestError(413, "request body too large");
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk as Buffer));
+    let totalBytes = 0;
+    let settled = false;
+
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      // Continue reading and discard the remainder rather than leaving a
+      // partially-read request on a keep-alive socket.
+      req.resume();
+      reject(error);
+    };
+
+    req.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > MAX_HTTP_BODY_BYTES) {
+        fail(new HttpRequestError(413, "request body too large"));
+        return;
+      }
+      chunks.push(buffer);
+    });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       try {
         const body = Buffer.concat(chunks).toString("utf-8");
         resolve(body.length > 0 ? JSON.parse(body) : undefined);
-      } catch (err) {
-        reject(err);
+      } catch {
+        reject(new HttpRequestError(400, "invalid JSON body"));
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => fail(error));
+    req.on("aborted", () => fail(new HttpRequestError(400, "request aborted")));
   });
 }
 

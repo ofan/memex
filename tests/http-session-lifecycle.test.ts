@@ -175,6 +175,25 @@ describe("HTTP MCP session lifecycle", () => {
     assert.equal((await toolsList(base, s3)).status, 200, "new session must be routable");
   });
 
+  it("bounds JSON request bodies before parsing", async () => {
+    const base = await start({ idleTtlMs: 60_000, sweepIntervalMs: 60_000, maxSessions: 8 });
+    const oversized = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: Buffer.alloc(8 * 1024 * 1024 + 1, "x"),
+    });
+    assert.equal(oversized.status, 413, "oversized bodies must be rejected before JSON parsing");
+    assert.deepEqual(await oversized.json(), { error: "request body too large" });
+
+    const malformed = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: "{not-json",
+    });
+    assert.equal(malformed.status, 400, "malformed JSON must be a client error");
+    assert.deepEqual(await malformed.json(), { error: "invalid JSON body" });
+  });
+
   it("closeMcpSessions tears down every live session", async () => {
     const base = await start({ idleTtlMs: 60_000, sweepIntervalMs: 60_000, maxSessions: 8 });
     await initSession(base);
