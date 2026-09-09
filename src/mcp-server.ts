@@ -714,7 +714,7 @@ async function main() {
   // and httpServer are assigned further down and guarded here.
   let dreamStartupTimer: NodeJS.Timeout | undefined;
   let dreamTimer: NodeJS.Timeout | undefined;
-  let httpServer: ReturnType<typeof createHttpServer> | undefined;
+  let httpServer: MemexHttpServer | undefined;
   let shuttingDown = false;
   const shutdown = (reason: string): void => {
     if (shuttingDown) return;
@@ -722,6 +722,7 @@ async function main() {
     console.error(`memex-mcp: shutting down (${reason})`);
     if (dreamStartupTimer) clearTimeout(dreamStartupTimer);
     if (dreamTimer) clearInterval(dreamTimer);
+    httpServer?.closeMcpSessions();
     httpServer?.close();
     // Safety net: force exit if the DB close stalls (e.g. an in-flight transaction).
     setTimeout(() => process.exit(0), 2000).unref();
@@ -767,8 +768,17 @@ async function main() {
   if (httpPort > 0) {
     // For HTTP, each session gets its own McpServer instance (stateful sessions).
     // The first one constructed above is used for the dreaming timer; HTTP creates fresh.
-    const factory = () => createMemexMcpServer(sharedOptions).server;
-    httpServer = await startHttpServer(factory, { port: httpPort, host: httpHost, authToken });
+    const factory = () => createMemexMcpServer(sharedOptions);
+    httpServer = await startHttpServer(factory, {
+      port: httpPort,
+      host: httpHost,
+      authToken,
+      // Bounded session hygiene. Env-overridable so operators can tune
+      // freshness-vs-churn without a code change.
+      idleTtlMs: positiveIntEnv("MEMEX_HTTP_SESSION_TTL_MS"),
+      sweepIntervalMs: positiveIntEnv("MEMEX_HTTP_SWEEP_INTERVAL_MS"),
+      maxSessions: positiveIntEnv("MEMEX_HTTP_MAX_SESSIONS"),
+    });
     console.error(`memex-mcp: ready (http ${httpHost}:${httpPort})`);
   } else {
     const transport = new StdioServerTransport();
@@ -785,15 +795,127 @@ async function main() {
   }
 }
 
-async function startHttpServer(
-  serverFactory: () => McpServer,
-  opts: { port: number; host: string; authToken: string },
-): Promise<ReturnType<typeof createHttpServer>> {
+// ============================================================================
+// HTTP transport — bounded session lifecycle
+// ============================================================================
+
+/** Per-session resources startHttpServer needs to be able to reap. */
+export interface HttpSessionFactoryResult {
+  server: McpServer;
+  store: { close(): Promise<void> };
+}
+
+/** Session-hygiene tunables (all optional; conservative defaults apply). */
+export interface HttpSessionLimits {
+  /** Close a session after this much inactivity. */
+  idleTtlMs?: number;
+  /** How often to scan for idle sessions. */
+  sweepIntervalMs?: number;
+  /** Hard cap on live sessions; least-recently-active is evicted first. */
+  maxSessions?: number;
+}
+
+/** HTTP server with MCP-session lifecycle controls attached. */
+export interface MemexHttpServer extends ReturnType<typeof createHttpServer> {
+  closeMcpSessions(): void;
+  mcpSessionCount(): number;
+}
+
+const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
+const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
+const DEFAULT_MAX_SESSIONS = 128;
+/** Maximum JSON request body accepted by the HTTP transport. */
+const MAX_HTTP_BODY_BYTES = 8 * 1024 * 1024;
+
+class HttpRequestError extends Error {
+  constructor(public readonly statusCode: 400 | 413, message: string) {
+    super(message);
+    this.name = "HttpRequestError";
+  }
+}
+
+/** Read a strictly positive integer env var, or undefined. */
+function positiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Streamable-HTTP MCP host with bounded sessions.
+ *
+ * 0.7.3 leaked: every initialize created a transport + McpServer + SQLite
+ * handle that was only released if the client sent DELETE. Abandoned clients
+ * (crashed restarts, dropped TCP, proxies that never terminate) accumulated
+ * indefinitely — 186 sessions / 398 FDs / 3.9GB RSS over 9d20h in production.
+ *
+ * Now every session carries lastActivity; a sweeper closes anything idle past
+ * idleTtlMs, initialize enforces maxSessions (LRU eviction), and closeSession
+ * tears down transport + server + store together so FDs and RSS are actually
+ * reclaimed.
+ */
+export async function startHttpServer(
+  serverFactory: () => HttpSessionFactoryResult,
+  opts: { port: number; host: string; authToken: string } & HttpSessionLimits,
+): Promise<MemexHttpServer> {
   const { port, host, authToken } = opts;
+  const idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+  // Never sweep less often than the TTL itself.
+  const sweepIntervalMs = Math.min(opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS, idleTtlMs);
+  const maxSessions = opts.maxSessions ?? DEFAULT_MAX_SESSIONS;
   const { randomUUID } = await import("node:crypto");
 
-  // Per-session transports. Each MCP client gets its own session and transport.
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
+  interface Session {
+    transport: StreamableHTTPServerTransport;
+    server: McpServer;
+    store: HttpSessionFactoryResult["store"];
+    lastActivity: number;
+  }
+  const sessions = new Map<string, Session>();
+
+  /** Tear down one session's transport, server, and SQLite handle. Idempotent. */
+  const closeSession = (id: string, reason: string): void => {
+    const session = sessions.get(id);
+    if (!session) return;
+    sessions.delete(id);
+    console.error(`memex-mcp: HTTP session ${id} closed (${reason}; ${sessions.size} remaining)`);
+    // The per-session store is the FD/RSS leak: createMemexMcpServer opens a
+    // dedicated SQLite connection per session. Close it with the transport.
+    session.transport.onclose = undefined;
+    void session.transport.close().catch(() => {});
+    void session.server.close().catch(() => {});
+    void session.store.close().catch((err) => {
+      console.error(`memex-mcp: session store close failed (${id}):`,
+        err instanceof Error ? err.message : err);
+    });
+  };
+
+  /** Enforce the hard session cap before admitting a new session. */
+  const evictUntilUnderCap = (): void => {
+    while (sessions.size >= maxSessions) {
+      let oldestId: string | undefined;
+      let oldestAt = Infinity;
+      for (const [id, session] of sessions) {
+        if (session.lastActivity < oldestAt) {
+          oldestAt = session.lastActivity;
+          oldestId = id;
+        }
+      }
+      if (!oldestId) break;
+      closeSession(oldestId, `session cap ${maxSessions}, evicted least-recently-active`);
+    }
+  };
+
+  const sweepIdleSessions = (): void => {
+    const now = Date.now();
+    for (const [id, session] of sessions) {
+      const idleMs = now - session.lastActivity;
+      if (idleMs > idleTtlMs) {
+        closeSession(id, `idle ${Math.round(idleMs / 1000)}s > ttl ${Math.round(idleTtlMs / 1000)}s`);
+      }
+    }
+  };
 
   const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     // Auth: bearer token via Authorization header. /health is exempt so Docker/k8s
@@ -811,7 +933,12 @@ async function startHttpServer(
     // Health endpoint
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, version: VERSION, sessions: sessions.size }));
+      res.end(JSON.stringify({
+        ok: true,
+        version: VERSION,
+        sessions: sessions.size,
+        sessionLimits: { idleTtlMs, maxSessions },
+      }));
       return;
     }
 
@@ -827,21 +954,32 @@ async function startHttpServer(
         let transport: StreamableHTTPServerTransport | undefined;
 
         if (sessionId && sessions.has(sessionId)) {
-          // Existing session — route to its transport
-          transport = sessions.get(sessionId);
+          // Existing session — route to its transport and refresh its idle clock.
+          const session = sessions.get(sessionId)!;
+          session.lastActivity = Date.now();
+          transport = session.transport;
         } else if (!sessionId && isInitializeRequest(parsedBody)) {
-          // New session — create transport + dedicated server instance
+          // New session — create transport + dedicated server instance, under the cap.
+          evictUntilUnderCap();
           const newId = randomUUID();
-          transport = new StreamableHTTPServerTransport({
+          const created = serverFactory();
+          const newTransport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => newId,
             enableJsonResponse: true,
-            onsessioninitialized: (id: string) => { sessions.set(id, transport!); },
+            onsessioninitialized: (id: string) => {
+              sessions.set(id, {
+                transport: newTransport,
+                server: created.server,
+                store: created.store,
+                lastActivity: Date.now(),
+              });
+            },
           });
-          transport.onclose = () => {
-            if (transport!.sessionId) sessions.delete(transport!.sessionId);
+          newTransport.onclose = () => {
+            closeSession(newTransport.sessionId ?? newId, "transport close");
           };
-          const sessionServer = serverFactory();
-          await sessionServer.connect(transport);
+          transport = newTransport;
+          await created.server.connect(transport);
         } else {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({
@@ -853,11 +991,19 @@ async function startHttpServer(
         }
 
         await transport!.handleRequest(req, res, parsedBody);
+
+        // DELETE is MCP's session-termination verb. The SDK closes the transport
+        // (which fires our onclose hook), but make removal explicit and
+        // idempotent so a missed hook can never retain the session.
+        if (req.method === "DELETE" && sessionId) {
+          closeSession(sessionId, "DELETE");
+        }
       } catch (err) {
         console.error("memex-mcp: HTTP request error:", err);
         if (!res.writableEnded) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err instanceof Error ? err.message : "internal error" }));
+          const statusCode = err instanceof HttpRequestError ? err.statusCode : 500;
+          res.writeHead(statusCode, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof HttpRequestError ? err.message : "internal error" }));
         }
       }
       return;
@@ -867,15 +1013,33 @@ async function startHttpServer(
     res.end(JSON.stringify({ error: "not found" }));
   });
 
+  const sweeper = setInterval(sweepIdleSessions, sweepIntervalMs);
+  sweeper.unref?.();
+
+  const memexServer: MemexHttpServer = Object.assign(httpServer, {
+    closeMcpSessions(): void {
+      clearInterval(sweeper);
+      for (const id of [...sessions.keys()]) closeSession(id, "server shutdown");
+    },
+    mcpSessionCount(): number {
+      return sessions.size;
+    },
+  });
+  // Direct .close() callers (tests, shutdown paths) still get full reaping.
+  memexServer.on("close", () => memexServer.closeMcpSessions());
+
   await new Promise<void>((resolve) => {
     httpServer.listen(port, host, () => resolve());
   });
 
-  console.error(`memex-mcp: HTTP transport listening on http://${host}:${port}/mcp`);
+  const addr = httpServer.address();
+  const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
+  console.error(`memex-mcp: HTTP transport listening on http://${host}:${actualPort}/mcp`);
+  console.error(`memex-mcp: HTTP sessions bounded (max=${maxSessions}, idleTtl=${Math.round(idleTtlMs / 1000)}s, sweep=${Math.round(sweepIntervalMs / 1000)}s)`);
   if (!authToken) {
     console.error(`memex-mcp: WARNING — no --auth-token set, daemon is open to anyone on ${host}`);
   }
-  return httpServer;
+  return memexServer;
 }
 
 function isInitializeRequest(body: unknown): boolean {
@@ -885,18 +1049,55 @@ function isInitializeRequest(body: unknown): boolean {
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const contentLength = req.headers["content-length"];
+  if (contentLength !== undefined) {
+    const declaredLength = Number(contentLength);
+    if (!Number.isFinite(declaredLength) || declaredLength < 0) {
+      throw new HttpRequestError(400, "invalid content-length");
+    }
+    if (declaredLength > MAX_HTTP_BODY_BYTES) {
+      // Drain the request so the keep-alive connection can be reused safely.
+      req.resume();
+      throw new HttpRequestError(413, "request body too large");
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk as Buffer));
+    let totalBytes = 0;
+    let settled = false;
+
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      // Continue reading and discard the remainder rather than leaving a
+      // partially-read request on a keep-alive socket.
+      req.resume();
+      reject(error);
+    };
+
+    req.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > MAX_HTTP_BODY_BYTES) {
+        fail(new HttpRequestError(413, "request body too large"));
+        return;
+      }
+      chunks.push(buffer);
+    });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       try {
         const body = Buffer.concat(chunks).toString("utf-8");
         resolve(body.length > 0 ? JSON.parse(body) : undefined);
-      } catch (err) {
-        reject(err);
+      } catch {
+        reject(new HttpRequestError(400, "invalid JSON body"));
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => fail(error));
+    req.on("aborted", () => fail(new HttpRequestError(400, "request aborted")));
   });
 }
 

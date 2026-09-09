@@ -12,6 +12,7 @@
  */
 
 import { openDatabase, loadSqliteVec } from "./db.js";
+import { ensureVecTableOnOpen } from "./vec-table.js";
 import type { Database } from "./db.js";
 // @ts-expect-error - picomatch ships no types
 import picomatch from "picomatch";
@@ -854,17 +855,10 @@ function ensureVecTableInternal(db: Database, dimensions: number): void {
   if (!_sqliteVecAvailable) {
     throw new Error("sqlite-vec is not available. Vector operations require a SQLite build with extension loading support.");
   }
-  const tableInfo = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get() as { sql: string } | null;
-  if (tableInfo) {
-    const match = tableInfo.sql.match(/float\[(\d+)\]/);
-    const hasHashSeq = tableInfo.sql.includes('hash_seq');
-    const hasCosine = tableInfo.sql.includes('distance_metric=cosine');
-    const existingDims = match?.[1] ? parseInt(match[1], 10) : null;
-    if (existingDims === dimensions && hasHashSeq && hasCosine) return;
-    // Table exists but wrong schema - need to rebuild
-    db.exec("DROP TABLE IF EXISTS vectors_vec");
-  }
-  db.exec(`CREATE VIRTUAL TABLE vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`);
+  // Non-destructive: create-if-absent, no-op when compatible, throw on mismatch.
+  // This table holds every stored embedding; dropping it on open destroyed the
+  // index in the 2026-09-07 incident. Repair is the rebuild-vector-index command.
+  ensureVecTableOnOpen(db, dimensions);
 }
 
 // =============================================================================

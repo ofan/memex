@@ -93,6 +93,15 @@ Validation plan + TDD tests + sequencing (5 waves + 5 gates) are in the same doc
 4. All logging uses `console.warn` (stderr) — `console.log` corrupts the stdio protocol
 5. Embedding model changes are detected and user is warned (see docs/RESILIENCY.md)
 6. Lazy DB init — database opens on first use, not at plugin registration
+7. **Never drop `vectors_vec` on open** — it is a vec0 table shared by memory
+   (`mem_<uuid>` / `mem_<uuid>_cN`) and document (`<hash>_<seq>`) vectors, and its only
+   copy of the embeddings lives in its shadow tables. `ensureVecTableOnOpen()` (see
+   `src/vec-table.ts`) creates-if-absent, no-ops when compatible, and **throws
+   `VectorSchemaMismatchError` on a dimension mismatch** rather than dropping. A mis-set
+   `vectorDim`/`MEMEX_EMBED_DIM` destroyed every stored embedding on open (2026-09-07).
+   The only supported drop path is the explicit, confirmation-gated
+   `memex memex rebuild-vector-index`, which backs up (`VACUUM INTO`) and writes a
+   rebuild manifest first.
 
 ## Conventions
 
