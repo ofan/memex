@@ -11,6 +11,12 @@ import type { MemoryRetriever } from "./retriever.js";
 import type { MemoryScopeManager } from "./scopes.js";
 import { identifyNoiseEntries } from "./noise-filter.js";
 import { indexAllPaths, embedDocuments, getEmbeddingBacklog } from "./doc-indexer.js";
+import { clearAllEmbeddings as clearDocEmbeddings } from "./search.js";
+import {
+  inspectVecTable, assertVecShadowIntegrity, needsMaintenance,
+  populateManifestFromCurrentState, dropAndRecreateVecTable, readManifestSummary,
+  reconcileManifestWithVecTable, VEC_TABLE, type PopulateResult,
+} from "./vec-table.js";
 
 // ============================================================================
 // Types
@@ -270,6 +276,150 @@ export function registerMemoryCLI(program: Command, context: CLIContext): void {
         console.log("\nRebuild complete.");
       } catch (error) {
         console.error("Rebuild failed:", error);
+        process.exit(1);
+      }
+    });
+
+  // Explicit, confirmation-gated ANN index rebuild.
+  // This is the ONLY supported way to drop vectors_vec; no open path may do it.
+  memory
+    .command("rebuild-vector-index")
+    .description(
+      `DESTRUCTIVE maintenance: replace the ${VEC_TABLE} ANN index with one sized for ` +
+      `the configured embedding dimension, then re-embed from scratch. Requires confirmation.`,
+    )
+    .option("--yes", "Skip the interactive confirmation prompt (for scripted use)")
+    .option("--dims <n>", "Target vector dimension (default: probe the configured embedder)")
+    .option("--memories-only", "Rebuild memory vectors only, skip documents")
+    .option("--docs-only", "Rebuild document vectors only, skip memories")
+    .option("--status", "Report index/manifest state and exit without modifying anything")
+    .action(async (options) => {
+      try {
+        const db: any = context.store.db;
+        const docDb: any = context.searchDb ?? context.store.db;
+        const embedder = context.embedder;
+        if (!embedder) {
+          console.error("rebuild-vector-index requires a configured embedder.");
+          process.exit(1);
+        }
+
+        const probed = await embedder.embedPassage("dimension probe");
+        const targetDims = options.dims ? parseInt(options.dims, 10) : probed.length;
+        if (!Number.isFinite(targetDims) || targetDims <= 0) {
+          console.error(`invalid --dims value: ${options.dims}`);
+          process.exit(1);
+        }
+        if (options.dims && probed.length !== targetDims) {
+          console.error(`refusing: configured embedder returns ${probed.length}d but --dims=${targetDims}`);
+          process.exit(1);
+        }
+
+        const status = inspectVecTable(db, targetDims);
+        const integrity = assertVecShadowIntegrity(db);
+        const summary = readManifestSummary(db);
+        console.log(`current index : ${status.exists ? `float[${status.dims}]` : "absent"}`);
+        console.log(`target        : float[${targetDims}] (model ${embedder.model})`);
+        console.log(`compatible    : ${status.compatible}`);
+        console.log(`shadow tables : ${integrity.ok ? "ok" : `PROBLEM — ${integrity.detail}`}`);
+        if (summary) {
+          console.log(`manifest      : ${summary.total} keys ` +
+            `(mem=${summary.mem} doc=${summary.doc}) pending=${summary.pending} ` +
+            `embedded=${summary.embedded} failed=${summary.failed}`);
+        }
+
+        if (options.status) return;
+
+        if (status.exists && status.compatible && integrity.ok && !needsMaintenance(db, targetDims)) {
+          console.log(`\n${VEC_TABLE} already matches the configured dimension — nothing to do.`);
+          console.log("Use `memex memex rebuild` to re-embed documents/memories without dropping the index.");
+          return;
+        }
+        if (!status.exists) {
+          console.log(`\n${VEC_TABLE} is absent; creating it is non-destructive — proceeding.`);
+        } else {
+          console.log("");
+          console.log("WARNING: this DROPS the shared ANN index. Every stored embedding for");
+          console.log("         memories AND documents is destroyed and must be recomputed by");
+          console.log("         re-embedding, which is slow and costs one embedding call per chunk.");
+          console.log("         Document text, memory text, FTS indexes and scopes are NOT touched.");
+          console.log("         A `VACUUM INTO` backup of the whole database is taken first.");
+
+          if (!options.yes) {
+            if (!process.stdin.isTTY) {
+              console.error("\nRefusing to run destructively without a TTY. Re-run with --yes to confirm.");
+              process.exit(1);
+            }
+            const { createInterface } = await import("node:readline/promises");
+            const rl = createInterface({ input: process.stdin, output: process.stdout });
+            const answer = await rl.question("\nType REBUILD to continue: ");
+            rl.close();
+            if (answer.trim() !== "REBUILD") {
+              console.log("Aborted — nothing was modified.");
+              return;
+            }
+          }
+        }
+
+        const doMemories = !options.docsOnly;
+        const doDocs = !options.memoriesOnly;
+        const dbPath = context.store.dbPath;
+
+        // Order matters: snapshot what exists BEFORE anything is destroyed, so
+        // the rebuild is resumable and its completion is verifiable.
+        let populated: PopulateResult | null = null;
+        if (status.exists) {
+          populated = populateManifestFromCurrentState(db);
+          console.log(`\nmanifest written: ${populated.total} keys ` +
+            `(mem=${populated.mem} doc=${populated.doc} newly-seen-from-store=${populated.memFromStore})`);
+          const res = dropAndRecreateVecTable(db, targetDims, true);
+          console.log(`backed up to   : ${res.backedUpTo}`);
+          console.log(`recreated      : float[${res.droppedDims}] -> float[${res.createdDims}]`);
+        } else {
+          const { ensureVecTableOnOpen } = await import("./vec-table.js");
+          ensureVecTableOnOpen(db, targetDims);
+          populateManifestFromCurrentState(db);
+          console.log("\ncreated index (nothing was dropped)");
+        }
+
+        // content_vectors is the document re-embed backlog. After a drop its
+        // rows claim vectors that no longer exist, so clear it to force a full
+        // document re-embed (it is derived data, rebuilt from `content`).
+        if (doDocs && status.exists) clearDocEmbeddings(docDb);
+
+        if (doMemories) {
+          console.log("\n── memories ──");
+          const n = await context.store.reEmbedMemories(
+            embedder.model,
+            async (texts) => embedder.embedBatchPassage(texts),
+            16,
+            (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total}`); },
+          );
+          console.log(`  re-embedded ${n} memories`);
+        }
+
+        if (doDocs && context.searchDb) {
+          console.log("\n── documents ──");
+          const backlog = getEmbeddingBacklog(docDb);
+          console.log(`  ${backlog} documents need embedding (this is the slow part)`);
+          const result = await embedDocuments(docDb, targetDims, embedder);
+          console.log(`  embedded ${result.embedded} docs / ${result.chunks} chunks, ${result.errors.length} errors`);
+          for (const e of result.errors.slice(0, 5)) console.error(`    ${e}`);
+        } else if (doDocs) {
+          console.log("\nDocument search not configured — skipping docs.");
+        }
+
+        const rec = reconcileManifestWithVecTable(db);
+        const final = readManifestSummary(db);
+        console.log(`\nmanifest: ${rec.embedded} embedded, ${rec.missing} still pending ` +
+          `(failed=${final?.failed ?? 0})`);
+        if (rec.missing > 0) {
+          console.error(`\nIncomplete: ${rec.missing} vector keys are still missing. Re-run this command to resume.`);
+          console.error(`Database: ${dbPath}`);
+          process.exit(2);
+        }
+        console.log("Vector index rebuild complete.");
+      } catch (error) {
+        console.error("rebuild-vector-index failed:", error instanceof Error ? error.message : error);
         process.exit(1);
       }
     });
