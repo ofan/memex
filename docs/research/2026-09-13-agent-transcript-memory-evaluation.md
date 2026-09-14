@@ -279,6 +279,25 @@ The next measured validation step is to restart the daemon (with explicit
 operator approval) and re-run the 23-case transcript sample plus negative controls
 against live traces.
 
+## Deployment verification completed
+
+v0.7.4 and llm-proxy v0.7.238 shipped four related fixes:
+
+1. memex #136 — wire `MEMEX_RERANK_*` into the document-aware `UnifiedRetriever`.
+2. memex #137 — truncate every reranker input to 1,500 characters; production rerank calls were otherwise failing with HTTP 400.
+3. memex #138 — add `MEMEX_RERANK_MIN_SCORE` and use it as a strict post-rerank relevance floor. The daemon is configured at `0.5`.
+4. memex #139 — apply the same shared cross-rerank/cutoff behavior to the OpenClaw auto-recall pipeline. This code is shipped, but gateway reload is intentionally pending.
+5. llm-proxy #93 — treat an upstream MCP HTTP 400 as a recoverable expired-session state, reinitialize once, and replay. Without it, a memex daemon restart could leave the gateway exposing zero memex tools.
+
+Live evidence after deploying:
+
+- `memory_recall` on the known Pair-B query now includes a `rerank` trace stage and returns high-confidence relevant documents.
+- The deliberately nonsensical negative query returns zero results rather than five plausible public documents.
+- A subsequent memex daemon restart self-healed through the llm-proxy gateway without manually disabling/re-enabling the backend.
+- Full test counts at merge: memex 970/970 and llm-proxy MCP gateway regression suite 136/136.
+
+The next highest-value work is boundary control, not model quality: give every client a safe default collection set, prevent OpenClaw corpora from answering unrelated coding-agent queries, and make response payloads compact enough for agent context budgets.
+
 ## Recommended next iteration
 
 1. **Fix unified reranker wiring**
