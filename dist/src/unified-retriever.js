@@ -495,8 +495,9 @@ export class UnifiedRetriever {
         const topDoc = pool.find(r => r.source === "document");
         const selected = [];
         const selectedIds = new Set();
+        const normalFloor = this.config.minScore;
         const relevanceFloor = enforceRelevanceFloor
-            ? (this.config.rerankMinScore ?? this.config.minScore)
+            ? (this.config.rerankMinScore ?? normalFloor)
             : -Infinity;
         const pushUnique = (result) => {
             if (!result || result.score < relevanceFloor || selectedIds.has(result.id) || selected.length >= limit)
@@ -514,13 +515,13 @@ export class UnifiedRetriever {
                 break;
             if (selectedIds.has(result.id))
                 continue;
-            if (result.score < relevanceFloor)
+            if (result.score < normalFloor || (enforceRelevanceFloor && result.score < relevanceFloor))
                 continue;
             selected.push(result);
             selectedIds.add(result.id);
         }
+        // Both protected and ordinary selections have already been gated above.
         return selected
-            .filter(r => r.score >= relevanceFloor)
             .sort((a, b) => b.score - a.score)
             .map(r => ({
             id: r.id,

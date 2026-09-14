@@ -74,6 +74,8 @@
           "vectorWeight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.7 },
           "bm25Weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
           "minScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
+          "rerankMinScore": { "type": "number", "minimum": 0, "maximum": 1, "description": "Stricter auto-recall cutoff used only after the shared cross-encoder succeeds." },
+          "crossRerank": { "type": "boolean", "default": true, "description": "Apply one rerank pass to the fused conversation+document result set when a reranker is configured." },
           "hardMinScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15 },
           "candidatePoolSize": { "type": "integer", "minimum": 10, "maximum": 100, "default": 20 },
           "timeDecayHalfLifeDays": { "type": "number", "minimum": 0, "maximum": 365, "default": 60 },

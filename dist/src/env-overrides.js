@@ -45,6 +45,21 @@ export function applyEnvOverrides(config, env = process.env) {
             provider: present(env.MEMEX_RERANK_PROVIDER) ? env.MEMEX_RERANK_PROVIDER : config.reranker?.provider,
         };
     }
+    // Shared-auto-recall reranking controls (env > config).
+    if (present(env.MEMEX_CROSS_RERANK)) {
+        config.retrieval = {
+            ...(config.retrieval ?? {}),
+            crossRerank: !FALSY.has(env.MEMEX_CROSS_RERANK.trim().toLowerCase()),
+        };
+    }
+    const retrievalRerankMin = clampNumber(env.MEMEX_RERANK_MIN_SCORE, 0, 1, NaN);
+    if (retrievalRerankMin !== undefined) {
+        config.retrieval = { ...(config.retrieval ?? {}), rerankMinScore: retrievalRerankMin };
+    }
+    const retrievalMin = clampNumber(env.MEMEX_MIN_SCORE, 0, 1, NaN);
+    if (retrievalMin !== undefined) {
+        config.retrieval = { ...(config.retrieval ?? {}), minScore: retrievalMin };
+    }
     // hardMinScore ← MEMEX_HARD_MIN_SCORE_OVERRIDE (float in [0,1])
     if (present(env.MEMEX_HARD_MIN_SCORE_OVERRIDE)) {
         const f = parseFloat(env.MEMEX_HARD_MIN_SCORE_OVERRIDE);

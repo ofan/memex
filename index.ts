@@ -118,6 +118,8 @@ interface PluginConfig {
    */
   debugRecall?: boolean | string;
   retrieval?: {
+    rerankMinScore?: number;
+    crossRerank?: boolean;
     mode?: "hybrid" | "vector";
     vectorWeight?: number;
     bm25Weight?: number;
@@ -721,7 +723,33 @@ const memoryUnifiedPlugin = {
     let activeHybridQuery: any = null;
     let reindexTimer: ReturnType<typeof setInterval> | null = null;
     // TODO: replace dual-pipeline with unified search (see memory/project-recall-fusion.md)
-    const unifiedRecall = new UnifiedRecall(retriever, embedder, {}, { warn: (msg) => api.logger.warn(msg) });
+    const sharedReranker = config.reranker?.enabled && retrievalConfig.rerankEndpoint && retrievalConfig.rerankApiKey
+      ? {
+          endpoint: retrievalConfig.rerankEndpoint,
+          apiKey: retrievalConfig.rerankApiKey,
+          model: retrievalConfig.rerankModel,
+          provider: retrievalConfig.rerankProvider,
+        }
+      : undefined;
+    const unifiedRetrievalConfig = retrievalConfig as typeof retrievalConfig & {
+      rerankMinScore?: number;
+      crossRerank?: boolean;
+    };
+    const unifiedRecall = new UnifiedRecall(retriever, embedder, {
+      ...(sharedReranker ? {
+        // Operator explicitly configured a reranker; apply it to the fused
+        // conversation+document set unless retrieval.crossRerank=false opts out.
+        crossRerank: unifiedRetrievalConfig.crossRerank ?? true,
+        rerankConfig: {
+          endpoint: sharedReranker.endpoint!,
+          apiKey: sharedReranker.apiKey!,
+          model: sharedReranker.model || "jina-reranker-v3",
+          provider: (sharedReranker.provider as any) || "jina",
+        },
+      } : {}),
+      ...(typeof retrievalConfig.minScore === "number" ? { minScore: retrievalConfig.minScore } : {}),
+      ...(typeof unifiedRetrievalConfig.rerankMinScore === "number" ? { rerankMinScore: unifiedRetrievalConfig.rerankMinScore } : {}),
+    }, { warn: (msg) => api.logger.warn(msg) });
 
     // Initialize document search (needed for both CLI and gateway)
     // Build per-agent collections + workspace→collection lookup for auto-recall filtering

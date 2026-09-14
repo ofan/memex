@@ -26,7 +26,12 @@ export interface EnvOverridableConfig {
   autoRecall?: boolean;
   autoRecallLimit?: number;
   reranker?: RerankerConfigLike;
-  retrieval?: { hardMinScore?: number };
+  retrieval?: {
+    hardMinScore?: number;
+    minScore?: number;
+    rerankMinScore?: number;
+    crossRerank?: boolean;
+  };
   documents?: {
     paths?: Array<{ path: string; name: string; pattern?: string }>;
   };
@@ -70,6 +75,22 @@ export function applyEnvOverrides<T extends EnvOverridableConfig>(config: T, env
       model: present(env.MEMEX_RERANK_MODEL) ? env.MEMEX_RERANK_MODEL : config.reranker?.model,
       provider: present(env.MEMEX_RERANK_PROVIDER) ? env.MEMEX_RERANK_PROVIDER : config.reranker?.provider,
     };
+  }
+
+  // Shared-auto-recall reranking controls (env > config).
+  if (present(env.MEMEX_CROSS_RERANK)) {
+    config.retrieval = {
+      ...(config.retrieval ?? {}),
+      crossRerank: !FALSY.has(env.MEMEX_CROSS_RERANK.trim().toLowerCase()),
+    };
+  }
+  const retrievalRerankMin = clampNumber(env.MEMEX_RERANK_MIN_SCORE, 0, 1, NaN);
+  if (retrievalRerankMin !== undefined) {
+    config.retrieval = { ...(config.retrieval ?? {}), rerankMinScore: retrievalRerankMin };
+  }
+  const retrievalMin = clampNumber(env.MEMEX_MIN_SCORE, 0, 1, NaN);
+  if (retrievalMin !== undefined) {
+    config.retrieval = { ...(config.retrieval ?? {}), minScore: retrievalMin };
   }
 
   // hardMinScore ← MEMEX_HARD_MIN_SCORE_OVERRIDE (float in [0,1])
