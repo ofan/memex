@@ -150,6 +150,7 @@ Additional env vars (not CLI flags):
 - `MEMEX_RERANK_ENDPOINT`, `MEMEX_RERANK_API_KEY`, `MEMEX_RERANK_MODEL` — cross-encoder reranker (both endpoint and key required)
 - `MEMEX_RERANK_PROVIDER` — request/response shape: `jina` (default), `siliconflow`, `voyage`, or `pinecone`
 - `MEMEX_RERANK_SCORE_MODE` — `raw` (default) or `rank`
+- `MEMEX_RERANK_MIN_SCORE` — optional stricter cutoff applied only after a successful rerank
 - `MEMEX_RERANK_BLEND_WEIGHT` — optional 0–1 override; omit to use the pipeline default
 - `MEMEX_RERANK_CONFIDENCE_THRESHOLD` / `MEMEX_RERANK_CONFIDENCE_GAP` — MCP unified rerank gate (defaults `0.995` / `0.20`)
 - `MEMEX_RERANK_LLM_MODEL` — opt-in LLM reranker (requires MEMEX_LLM_ENDPOINT)
