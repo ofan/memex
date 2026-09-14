@@ -107,3 +107,69 @@ export function syncDebugEnvFromConfig(config: EnvOverridableConfig, env: NodeJS
   if (d === undefined) return;
   env.MEMEX_DEBUG_RECALL = d === true ? "1" : d === false ? "0" : d;
 }
+
+export type RerankerProviderName = "jina" | "siliconflow" | "voyage" | "pinecone";
+export type RerankerScoreMode = "raw" | "rank";
+
+/** Cross-encoder settings resolved from environment variables. */
+export interface ResolvedCrossRerankerConfig {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  provider: RerankerProviderName;
+  /** Optional override; omitted callers keep their pipeline-specific default. */
+  blendWeight?: number;
+  scoreMode: RerankerScoreMode;
+  /** Unified reranking confidence gate; defaults favor reranking ambiguous pools. */
+  confidenceThreshold: number;
+  confidenceGap: number;
+}
+
+const VALID_RERANK_PROVIDERS = new Set<RerankerProviderName>([
+  "jina", "siliconflow", "voyage", "pinecone",
+]);
+
+function clampNumber(value: string | undefined, min: number, max: number, fallback: number): number | undefined {
+  if (!present(value)) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+/**
+ * Resolve the cross-encoder configuration used by the standalone MCP server.
+ *
+ * Endpoint and key are both required. This deliberately keeps an explicit
+ * operator opt-in, while provider/blend/score-mode/confidence settings can be
+ * tuned without code changes.
+ */
+export function resolveCrossRerankerFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedCrossRerankerConfig | null {
+  const endpoint = env.MEMEX_RERANK_ENDPOINT?.trim();
+  const apiKey = env.MEMEX_RERANK_API_KEY?.trim();
+  if (!endpoint || !apiKey) return null;
+
+  const requestedProvider = env.MEMEX_RERANK_PROVIDER?.trim().toLowerCase();
+  const provider: RerankerProviderName = requestedProvider === "jina"
+    ? "jina"
+    : requestedProvider && VALID_RERANK_PROVIDERS.has(requestedProvider as RerankerProviderName)
+      ? requestedProvider as RerankerProviderName
+      : "jina";
+  const blendWeight = clampNumber(env.MEMEX_RERANK_BLEND_WEIGHT, 0, 1, NaN);
+
+  return {
+    endpoint,
+    apiKey,
+    model: env.MEMEX_RERANK_MODEL?.trim() || "jina-reranker-v3",
+    provider,
+    ...(blendWeight !== undefined ? { blendWeight } : {}),
+    scoreMode: env.MEMEX_RERANK_SCORE_MODE?.trim().toLowerCase() === "rank" ? "rank" : "raw",
+    // Fusion raw scores cluster near 1.0, so the old 0.88 gate frequently
+    // skipped the reranker even when several plausible-but-wrong candidates were
+    // competing. Keep a tiny explicit escape hatch for operators who want more
+    // latency savings.
+    confidenceThreshold: clampNumber(env.MEMEX_RERANK_CONFIDENCE_THRESHOLD, 0, 2, 0.995) ?? 0.995,
+    confidenceGap: clampNumber(env.MEMEX_RERANK_CONFIDENCE_GAP, 0, 1, 0.20) ?? 0.20,
+  };
+}

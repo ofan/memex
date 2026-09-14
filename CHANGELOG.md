@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.4] — 2026-09-13
+
+**Theme: make unified reranking actually apply in the MCP daemon.** The document-aware production path selected `UnifiedRetriever` but constructed it without the configured cross-encoder, so live traces still showed `reranker: null`. This release completes that wiring and adds a post-rerank relevance floor.
+
+### Fixed
+- **Unified MCP reranker wiring** (`src/mcp-server.ts`) — when document collections are configured, `MEMEX_RERANK_*` is now passed into `UnifiedRetriever`. The previous v0.7.3 fix applied only to the legacy `MemoryRetriever` branch, leaving the actual daemon path unranked.
+- **Post-rerank cutoff** (`src/unified-retriever.ts`) — an actually-applied cross-encoder result is treated as authoritative. Below-floor candidates no longer survive through the calibrated-score floor or forced source-diversity slots.
+- **Safe fallback behavior** — a reranker timeout/error now returns `applied: false`, preserving the prior calibrated scoring path rather than applying the stricter post-rerank floor.
+
+### Added
+- **`resolveCrossRerankerFromEnv()`** (`src/env-overrides.ts`) — one validated resolver for both MCP retrieval paths.
+- **Operator tuning env vars** — `MEMEX_RERANK_PROVIDER`, `MEMEX_RERANK_SCORE_MODE`, `MEMEX_RERANK_BLEND_WEIGHT`, `MEMEX_RERANK_CONFIDENCE_THRESHOLD`, and `MEMEX_RERANK_CONFIDENCE_GAP`. Defaults keep endpoint/key as the explicit activation gate.
+- **Production regression test** (`tests/mcp-server-unified-reranker.test.ts`) — creates the document-aware MCP server, asserts its unified config is non-null, and verifies an actual recall invokes reranking and enforces the final floor.
+
+### Changed
+- The MCP unified confidence gate defaults to threshold `0.995` and gap `0.20`, up from the class default of `0.88` / `0.15`, because fused raw scores routinely cluster near 1.0 and skipped useful reranking. Operators can restore latency-skipped behavior explicitly through the new env vars.
+
 ## [Unreleased] — feat/memory-scoping
 
 **Theme: context-aware memory isolation.** Multi-valued scope tags replace the single `scope` column with a `memory_scopes` join table. Server-authoritative derivation ensures consistency; recall uses additive tag intersection so cross-project leakage is impossible. Tests: 830 → 851 (+21 E2E).

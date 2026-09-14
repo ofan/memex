@@ -9,6 +9,7 @@ import { existsSync, accessSync, constants, mkdirSync, realpathSync, lstatSync }
 import { dirname, join } from "node:path";
 import { openDatabase, loadSqliteVec } from "./db.js";
 import { buildFTS5Query } from "./search.js";
+import { ensureVecTableOnOpen, inspectVecTable } from "./vec-table.js";
 import { chunkDocument } from "./chunker.js";
 import { extractEntities } from "./entities.js";
 import { ensureGraphSchema, createLinks, deleteLinks } from "./graph.js";
@@ -313,21 +314,26 @@ export class MemoryStore {
             this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
         }
     }
+    /**
+     * Open-time ANN schema guard. Non-destructive by contract:
+     *   - absent  -> create (nothing can be lost)
+     *   - matches -> no-op
+     *   - mismatch -> throw VectorSchemaMismatchError; NEVER drop
+     *
+     * Dropping `vectors_vec` destroys every stored embedding (memories AND
+     * documents share it) and nothing here re-populates it, so a mis-set
+     * `vectorDim` used to silently wipe the index on open. Rebuilding is an
+     * explicit operator action: `memex memex rebuild-vector-index`.
+     * See src/vec-table.ts and docs/plans/020-mcp-recall-quality-audit.md.
+     */
     ensureVecTable() {
         if (!this._sqliteVecAvailable)
             return;
-        const tableInfo = this.db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
-        if (tableInfo) {
-            const match = tableInfo.sql.match(/float\[(\d+)\]/);
-            const hasHashSeq = tableInfo.sql.includes('hash_seq');
-            const hasCosine = tableInfo.sql.includes('distance_metric=cosine');
-            const existingDims = match?.[1] ? parseInt(match[1], 10) : null;
-            if (existingDims === this.config.vectorDim && hasHashSeq && hasCosine)
-                return;
-            // Table exists but wrong schema - need to rebuild
-            this.db.exec("DROP TABLE IF EXISTS vectors_vec");
-        }
-        this.db.exec(`CREATE VIRTUAL TABLE vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[${this.config.vectorDim}] distance_metric=cosine)`);
+        ensureVecTableOnOpen(this.db, this.config.vectorDim);
+    }
+    /** Current `vectors_vec` schema state, for health reporting. Read-only. */
+    getVectorTableStatus() {
+        return inspectVecTable(this.db, this.config.vectorDim);
     }
     get dbPath() {
         return this.config.dbPath;

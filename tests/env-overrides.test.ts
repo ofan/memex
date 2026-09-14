@@ -5,7 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyEnvOverrides, syncDebugEnvFromConfig } from "../src/env-overrides.js";
+import { applyEnvOverrides, resolveCrossRerankerFromEnv, syncDebugEnvFromConfig } from "../src/env-overrides.js";
 
 const base = () => ({
   embedding: { apiKey: "k" },
@@ -108,5 +108,65 @@ describe("applyEnvOverrides — MEMEX_DOC_PATHS", () => {
     const cfg: any = { documents: { paths: [{ path: "/x", name: "x" }] } };
     applyEnvOverrides(cfg, {});
     assert.equal(cfg.documents.paths.length, 1, "existing config preserved");
+  });
+});
+
+describe("resolveCrossRerankerFromEnv", () => {
+  it("requires both endpoint and API key", () => {
+    assert.equal(resolveCrossRerankerFromEnv({
+      MEMEX_RERANK_ENDPOINT: "http://proxy/rerank",
+    }), null, "endpoint without key remains disabled");
+    assert.equal(resolveCrossRerankerFromEnv({
+      MEMEX_RERANK_API_KEY: "secret",
+    }), null, "key without endpoint remains disabled");
+  });
+
+  it("returns explicit cross-encoder settings for both retriever paths", () => {
+    const cfg = resolveCrossRerankerFromEnv({
+      MEMEX_RERANK_ENDPOINT: "http://proxy/rerank",
+      MEMEX_RERANK_API_KEY: "secret",
+      MEMEX_RERANK_MODEL: "qwen3-reranker",
+      MEMEX_RERANK_PROVIDER: "voyage",
+      MEMEX_RERANK_SCORE_MODE: "rank",
+      MEMEX_RERANK_BLEND_WEIGHT: "0.85",
+      MEMEX_RERANK_CONFIDENCE_THRESHOLD: "1",
+      MEMEX_RERANK_CONFIDENCE_GAP: "0.5",
+    });
+    assert.deepEqual(cfg, {
+      endpoint: "http://proxy/rerank",
+      apiKey: "secret",
+      model: "qwen3-reranker",
+      provider: "voyage",
+      scoreMode: "rank",
+      blendWeight: 0.85,
+      confidenceThreshold: 1,
+      confidenceGap: 0.5,
+    });
+  });
+
+  it("defaults to safe jina/raw behavior and a nearly always-on confidence gate", () => {
+    const cfg = resolveCrossRerankerFromEnv({
+      MEMEX_RERANK_ENDPOINT: "http://proxy/rerank",
+      MEMEX_RERANK_API_KEY: "secret",
+    });
+    assert.ok(cfg);
+    assert.equal(cfg.model, "jina-reranker-v3");
+    assert.equal(cfg.provider, "jina");
+    assert.equal(cfg.scoreMode, "raw");
+    assert.equal(cfg.blendWeight, undefined, "pipeline-specific default is preserved");
+    assert.equal(cfg.confidenceThreshold, 0.995);
+    assert.equal(cfg.confidenceGap, 0.20);
+  });
+
+  it("coerces invalid provider/blend values", () => {
+    const cfg = resolveCrossRerankerFromEnv({
+      MEMEX_RERANK_ENDPOINT: "http://proxy/rerank",
+      MEMEX_RERANK_API_KEY: "secret",
+      MEMEX_RERANK_PROVIDER: "not-a-provider",
+      MEMEX_RERANK_BLEND_WEIGHT: "42",
+    });
+    assert.ok(cfg);
+    assert.equal(cfg.provider, "jina");
+    assert.equal(cfg.blendWeight, 1, "numeric out-of-range is clamped");
   });
 });
