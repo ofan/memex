@@ -8,6 +8,8 @@
 - **Unified MCP reranker wiring** (`src/mcp-server.ts`) — when document collections are configured, `MEMEX_RERANK_*` is now passed into `UnifiedRetriever`. The previous v0.7.3 fix applied only to the legacy `MemoryRetriever` branch, leaving the actual daemon path unranked.
 - **Post-rerank cutoff** (`src/unified-retriever.ts`) — an actually-applied cross-encoder result is treated as authoritative. Below-floor candidates no longer survive through the calibrated-score floor or forced source-diversity slots.
 - **Safe fallback behavior** — a reranker timeout/error now returns `applied: false`, preserving the prior calibrated scoring path rather than applying the stricter post-rerank floor.
+- **Unified reranker request-size compatibility** — memory and document candidates are now capped at 1,500 characters before the cross-encoder call, matching the legacy path and preventing HTTP 400 request-too-large fallbacks. Non-2xx reranker failures now include a bounded upstream response snippet in the server warning.
+- **Post-v0.7.4 regression** — a server-level test and production trace verification caught that the newly wired reranker was invoked but upstream requests failed due unbounded document text; truncation now covers both retrieval paths.
 
 ### Added
 - **`resolveCrossRerankerFromEnv()`** (`src/env-overrides.ts`) — one validated resolver for both MCP retrieval paths.

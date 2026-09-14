@@ -10,6 +10,10 @@ import { buildRerankRequest, parseRerankResponse } from "./retriever.js";
 import { withTransientRetry } from "./transient-retry.js";
 import { TraceRecorder } from "./retrieval-trace.js";
 import { randomUUID } from "node:crypto";
+/** Cross-encoder input truncation: most reranker deployments have 512–2048
+ * token context limits. This intentionally preserves title/early operational
+ * content while preventing HTTP 400 request-too-large failures. */
+export const RERANK_DOCUMENT_CHAR_LIMIT = 1500;
 // =============================================================================
 // Default Configuration
 // =============================================================================
@@ -319,12 +323,13 @@ export class UnifiedRetriever {
         const candidates = pool.slice(0, n);
         const rest = pool.slice(n);
         const rerankerConfig = this.config.reranker;
-        // Build documents: memory entries use full text, documents use bestChunk
+        // MemoryRetriever already truncates reranker input. Do the same here:
+        // full document chunks can otherwise exceed the proxy reranker limit.
         const documents = candidates.map(r => {
-            if (r.source === "document" && r.metadata?.bestChunk) {
-                return r.metadata.bestChunk;
-            }
-            return r.text;
+            const sourceText = (r.source === "document" && typeof r.metadata?.bestChunk === "string")
+                ? r.metadata.bestChunk
+                : r.text;
+            return sourceText.slice(0, RERANK_DOCUMENT_CHAR_LIMIT);
         });
         try {
             const provider = (rerankerConfig.provider || "jina");
@@ -344,8 +349,12 @@ export class UnifiedRetriever {
                     });
                     if (!resp.ok) {
                         // Throw with a status so withTransientRetry can decide to retry.
+                        // Preserve a bounded response snippet: request-size/config errors are
+                        // otherwise impossible to diagnose from the HTTP status alone.
+                        const responseSnippet = (await resp.text().catch(() => "")).slice(0, 500);
                         const err = new Error(`rerank endpoint returned ${resp.status}`);
                         err.status = resp.status;
+                        err.responseSnippet = responseSnippet;
                         throw err;
                     }
                     return resp;
@@ -392,7 +401,10 @@ export class UnifiedRetriever {
                 console.warn("Unified rerank API timed out, falling back to calibrated scores");
             }
             else {
-                console.warn("Unified rerank API failed, falling back to calibrated scores:", error);
+                const detail = (error && typeof error === "object" && "responseSnippet" in error)
+                    ? ` ${error.responseSnippet}`
+                    : "";
+                console.warn("Unified rerank API failed, falling back to calibrated scores:", error, detail.trim());
             }
             return { results: pool, applied: false };
         }
