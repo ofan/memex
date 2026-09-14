@@ -13,7 +13,8 @@
 
 ### Added
 - **`resolveCrossRerankerFromEnv()`** (`src/env-overrides.ts`) — one validated resolver for both MCP retrieval paths.
-- **Operator tuning env vars** — `MEMEX_RERANK_PROVIDER`, `MEMEX_RERANK_SCORE_MODE`, `MEMEX_RERANK_BLEND_WEIGHT`, `MEMEX_RERANK_CONFIDENCE_THRESHOLD`, and `MEMEX_RERANK_CONFIDENCE_GAP`. Defaults keep endpoint/key as the explicit activation gate.
+- **Operator tuning env vars** — `MEMEX_RERANK_PROVIDER`, `MEMEX_RERANK_SCORE_MODE`, `MEMEX_RERANK_BLEND_WEIGHT`, `MEMEX_RERANK_MIN_SCORE`, `MEMEX_RERANK_CONFIDENCE_THRESHOLD`, and `MEMEX_RERANK_CONFIDENCE_GAP`. Defaults keep endpoint/key as the explicit activation gate.
+- **Configurable post-rerank cutoff** — `MEMEX_RERANK_MIN_SCORE` can retain useful low-signal candidates while the base `minScore` protects pre-rerank retrieval. The production MCP daemon sets `0.5` after replaying 10 real transcript queries and negative controls.
 - **Production regression test** (`tests/mcp-server-unified-reranker.test.ts`) — creates the document-aware MCP server, asserts its unified config is non-null, and verifies an actual recall invokes reranking and enforces the final floor.
 
 ### Changed
