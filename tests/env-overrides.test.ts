@@ -180,3 +180,20 @@ describe("resolveCrossRerankerFromEnv", () => {
     assert.equal(cfg.blendWeight, 1, "numeric out-of-range is clamped");
   });
 });
+describe("applyEnvOverrides — shared auto-recall reranking", () => {
+  it("MEMEX_CROSS_RERANK enables or disables the fused rerank path", () => {
+    const off: any = { retrieval: { crossRerank: true } };
+    applyEnvOverrides(off, { MEMEX_CROSS_RERANK: "0" });
+    assert.equal(off.retrieval.crossRerank, false);
+    const on: any = {};
+    applyEnvOverrides(on, { MEMEX_CROSS_RERANK: "true" });
+    assert.equal(on.retrieval.crossRerank, true);
+  });
+
+  it("maps post-rerank and base floors into retrieval config", () => {
+    const cfg: any = {};
+    applyEnvOverrides(cfg, { MEMEX_RERANK_MIN_SCORE: "0.5", MEMEX_MIN_SCORE: "0.25" });
+    assert.equal(cfg.retrieval.rerankMinScore, 0.5);
+    assert.equal(cfg.retrieval.minScore, 0.25);
+  });
+});

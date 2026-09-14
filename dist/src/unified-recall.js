@@ -6,6 +6,9 @@
  * with source attribution, and optionally applies a shared reranking pass.
  */
 import { buildRerankRequest, parseRerankResponse } from "./retriever.js";
+import { withTransientRetry } from "./transient-retry.js";
+/** Shared cap with UnifiedRetriever; long chunks otherwise receive HTTP 400. */
+const RERANK_DOCUMENT_CHAR_LIMIT = 1500;
 export const DEFAULT_UNIFIED_CONFIG = {
     limit: 10,
     minScore: 0.2,
@@ -29,6 +32,10 @@ export class UnifiedRecall {
         this.embedder = embedder;
         this.config = { ...DEFAULT_UNIFIED_CONFIG, ...config };
         this.warn = logger?.warn ?? console.warn.bind(console);
+        if (this.config.crossRerank && !this.config.rerankConfig?.endpoint) {
+            this.warn("memex: crossRerank is enabled but no rerank endpoint is configured; falling back to weighted merge");
+            this.config.crossRerank = false;
+        }
     }
     /**
      * Connect QMD store for document search.
@@ -78,8 +85,15 @@ export class UnifiedRecall {
                     : [],
             ]);
         }
-        // Merge and rank (async when cross-source reranking is enabled)
-        const merged = await this.mergeResults(conversationResults, documentResults);
+        // Merge and rank (async when cross-source reranking is enabled).
+        const { results: merged, rerankApplied } = await this.mergeResults(conversationResults, documentResults);
+        // A successful shared rerank is authoritative: do not preserve a weak hit
+        // merely because it is the top candidate from one source. Without rerank,
+        // retain the historical source-diversity protection.
+        if (rerankApplied) {
+            const threshold = this.config.rerankMinScore ?? this.config.minScore;
+            return merged.filter(r => r.score >= threshold).slice(0, limit);
+        }
         // Guarantee at least the top result from each source survives filtering.
         // This prevents one source from completely drowning out the other.
         const topConv = merged.find(r => r.source === "conversation");
@@ -178,12 +192,12 @@ export class UnifiedRecall {
         if (this.config.crossRerank && this.config.rerankConfig && weighted.length > 1) {
             const reranked = await this.crossEncoderRerank(weighted);
             if (reranked)
-                return reranked;
+                return { results: reranked, rerankApplied: true };
             // Fall through to score-based sort on failure
         }
         // Sort by weighted score descending
         weighted.sort((a, b) => b.score - a.score);
-        return weighted;
+        return { results: weighted, rerankApplied: false };
     }
     /**
      * Apply cross-encoder reranking across all merged results.
@@ -194,20 +208,30 @@ export class UnifiedRecall {
         if (!cfg)
             return null;
         try {
-            const documents = results.map((r) => r.text);
+            const documents = results.map((r) => r.text.slice(0, RERANK_DOCUMENT_CHAR_LIMIT));
             // Build provider-specific request
             const { headers, body } = buildRerankRequest(cfg.provider, cfg.apiKey, cfg.model, this._lastQuery, documents, results.length);
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 5000);
-            const response = await fetch(cfg.endpoint, {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body),
-                signal: controller.signal,
+            const response = await withTransientRetry(async () => {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 10_000);
+                try {
+                    const resp = await fetch(cfg.endpoint, {
+                        method: "POST",
+                        headers,
+                        body: JSON.stringify(body),
+                        signal: controller.signal,
+                    });
+                    if (!resp.ok) {
+                        const err = new Error(`rerank endpoint returned ${resp.status}`);
+                        err.status = resp.status;
+                        throw err;
+                    }
+                    return resp;
+                }
+                finally {
+                    clearTimeout(timeout);
+                }
             });
-            clearTimeout(timeout);
-            if (!response.ok)
-                return null;
             const data = (await response.json());
             const parsed = parseRerankResponse(cfg.provider, data);
             if (!parsed)
