@@ -4,6 +4,7 @@
  */
 import { Type } from "typebox";
 import { stringEnum } from "openclaw/plugin-sdk/core";
+import { randomUUID } from "node:crypto";
 import { isNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
 import { anchor, expandAnchor, AnchorAmbiguityError } from "./anchor.js";
@@ -148,15 +149,17 @@ export function registerMemoryRecallTool(api, context) {
                 }
                 // Use unified retriever (single-pass pipeline) when available
                 if (context.unifiedRetriever) {
+                    const debugId = randomUUID().slice(0, 8);
                     const results = await context.unifiedRetriever.retrieve(query, {
                         limit: safeLimit,
                         scopeFilter,
                         collection: undefined,
+                        debugId,
                     });
                     if (results.length === 0) {
                         return {
                             content: [{ type: "text", text: "No relevant results found." }],
-                            details: { count: 0, query, scopes: scopeFilter, source },
+                            details: { count: 0, query, scopes: scopeFilter, source, debugId },
                         };
                     }
                     const text = results
@@ -184,6 +187,7 @@ export function registerMemoryRecallTool(api, context) {
                             query,
                             scopes: scopeFilter,
                             mode: "unified-retriever",
+                            debugId,
                         },
                     };
                 }

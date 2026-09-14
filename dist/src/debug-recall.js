@@ -40,7 +40,12 @@ export async function writeDebugRecall(payload, env = process.env) {
     const dir = resolveDebugDir(env);
     if (!dir)
         return null;
-    const filename = `${payload.ts.replace(/[:.]/g, "-")}-${payload.agentId}.json`;
+    // Addressable by debugId when present (preferred); fall back to ts+agentId
+    // for legacy callers that don't supply one.
+    const stem = payload.debugId
+        ? payload.debugId
+        : `${payload.ts.replace(/[:.]/g, "-")}-${payload.agentId}`;
+    const filename = `${stem}.json`;
     const path = join(dir, filename);
     try {
         await mkdir(dirname(path), { recursive: true });
@@ -58,6 +63,7 @@ export async function writeDebugRecall(payload, env = process.env) {
 export function buildPayloadFromUnifiedRecall(args) {
     return {
         ts: new Date().toISOString(),
+        ...(args.debugId ? { debugId: args.debugId } : {}),
         agentId: args.agentId,
         sessionId: args.sessionId,
         query: args.query,
@@ -71,6 +77,7 @@ export function buildPayloadFromUnifiedRecall(args) {
             text: r.text.slice(0, 500),
             metadata: r.metadata,
         })),
+        ...(args.trace ? { trace: args.trace } : {}),
     };
 }
 /**
@@ -79,6 +86,7 @@ export function buildPayloadFromUnifiedRecall(args) {
 export function buildPayloadFromMemoryOnly(args) {
     return {
         ts: new Date().toISOString(),
+        ...(args.debugId ? { debugId: args.debugId } : {}),
         agentId: args.agentId,
         sessionId: args.sessionId,
         query: args.query,
@@ -91,6 +99,32 @@ export function buildPayloadFromMemoryOnly(args) {
             text: r.entry.text.slice(0, 500),
             metadata: { category: r.entry.category, scope: r.entry.scope },
         })),
+        ...(args.trace ? { trace: args.trace } : {}),
+    };
+}
+/**
+ * Helper: build a debug payload from the MCP memory_recall path (the daemon's
+ * explicit recall). The MCP path doesn't inject context into a prompt — it
+ * returns results to the client — so `injectedContext` is the empty string.
+ */
+export function buildPayloadFromMcpRecall(args) {
+    return {
+        ts: new Date().toISOString(),
+        debugId: args.debugId,
+        agentId: args.agentId,
+        sessionId: args.sessionId,
+        query: args.query,
+        source: "mcp-recall",
+        resultCount: args.results.length,
+        injectedContext: "",
+        results: args.results.map((r) => ({
+            id: r.id,
+            score: r.score,
+            ...(r.source ? { source: r.source } : {}),
+            text: r.text.slice(0, 500),
+            metadata: { category: r.category, scope: r.scope },
+        })),
+        ...(args.trace ? { trace: args.trace } : {}),
     };
 }
 //# sourceMappingURL=debug-recall.js.map

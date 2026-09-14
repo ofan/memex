@@ -13,6 +13,7 @@ import { createServer as createHttpServer, IncomingMessage, ServerResponse } fro
 import { z } from "zod";
 import { MemoryStore } from "./memory.js";
 import { createRetriever } from "./retriever.js";
+import { resolveCrossRerankerFromEnv } from "./env-overrides.js";
 import { createEmbedder, type Embedder } from "./embedder.js";
 import { isNoise } from "./noise-filter.js";
 import { runDreamCycle, type ReflectionLLMConfig } from "./dreaming.js";
@@ -26,7 +27,7 @@ import { UnifiedRetriever } from "./unified-retriever.js";
 import { upsertDocument, forgetDocument, indexAllPaths, embedDocuments } from "./doc-indexer.js";
 
 /** memex version — keep in sync with package.json (consumed by /health + MCP handshake). */
-const VERSION = "0.7.3";
+const VERSION = "0.7.4";
 
 // ============================================================================
 // Scope tag validation (Bug 5 fix)
@@ -84,11 +85,10 @@ export function createMemexMcpServer(options: McpServerOptions) {
     store = new MemoryStore({ dbPath, vectorDim: dim });
   }
 
-  // Reranker config (shared between both retriever paths).
-  const rerankEndpoint = process.env.MEMEX_RERANK_ENDPOINT;
-  const rerankApiKey = process.env.MEMEX_RERANK_API_KEY;
-  const rerankModel = process.env.MEMEX_RERANK_MODEL;
-  const enableRerank = !!(rerankEndpoint && rerankApiKey);
+  // Reranker config. The shared resolver is the single source of truth for
+  // both the MemoryRetriever and UnifiedRetriever production paths.
+  const crossReranker = resolveCrossRerankerFromEnv();
+  const enableRerank = !!crossReranker;
   const rerankLlmModel = process.env.MEMEX_RERANK_LLM_MODEL;
   const rerankLlmEndpoint = reflectionLLM?.endpoint;
   const rerankLlmApiKey = reflectionLLM?.apiKey ?? "";
@@ -120,14 +120,36 @@ export function createMemexMcpServer(options: McpServerOptions) {
           bestChunkPos: 0, score: r.score, docid: r.hash || r.filepath, context: null,
         }));
     };
-    retriever = new UnifiedRetriever(store, documentSearchFn, embedder, { captureTrace });
+    retriever = new UnifiedRetriever(store, documentSearchFn, embedder, {
+      ...(crossReranker ? {
+        reranker: {
+          endpoint: crossReranker.endpoint,
+          apiKey: crossReranker.apiKey,
+          model: crossReranker.model,
+          provider: crossReranker.provider,
+        },
+      } : {}),
+      ...(crossReranker?.blendWeight !== undefined ? { rerankBlendWeight: crossReranker.blendWeight } : {}),
+      ...(crossReranker ? {
+        rerankScoreMode: crossReranker.scoreMode,
+        confidenceThreshold: crossReranker.confidenceThreshold,
+        confidenceGap: crossReranker.confidenceGap,
+      } : {}),
+      captureTrace,
+    });
     retrieverKind = "unified";
   } else if (embedder) {
     retriever = createRetriever(store, embedder, {
       mode: "hybrid",
       rerank: enableLlmRerank ? "llm" : enableRerank ? "cross-encoder" : "none",
-      ...(enableRerank ? { rerankEndpoint, rerankApiKey } : {}),
-      ...(enableRerank && rerankModel ? { rerankModel } : {}),
+      ...(crossReranker ? {
+        rerankEndpoint: crossReranker.endpoint,
+        rerankApiKey: crossReranker.apiKey,
+        rerankModel: crossReranker.model,
+        rerankProvider: crossReranker.provider,
+      } : {}),
+      ...(crossReranker?.blendWeight !== undefined ? { rerankBlendWeight: crossReranker.blendWeight } : {}),
+      ...(crossReranker ? { rerankScoreMode: crossReranker.scoreMode } : {}),
       ...(enableLlmRerank ? { rerankLlmEndpoint, rerankLlmApiKey, rerankLlmModel } : {}),
       captureTrace,
     });

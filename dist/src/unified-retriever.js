@@ -8,6 +8,8 @@
 import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 import { buildRerankRequest, parseRerankResponse } from "./retriever.js";
 import { withTransientRetry } from "./transient-retry.js";
+import { TraceRecorder } from "./retrieval-trace.js";
+import { randomUUID } from "node:crypto";
 // =============================================================================
 // Default Configuration
 // =============================================================================
@@ -41,11 +43,31 @@ const MEM_PATTERNS = [
 // =============================================================================
 // Unified Retriever
 // =============================================================================
+/** Curated config snapshot embedded in a trace so it is self-describing. */
+function unifiedTraceConfigSnapshot(c) {
+    return {
+        limit: c.limit, minScore: c.minScore,
+        conversationWeight: c.conversationWeight, documentWeight: c.documentWeight,
+        candidatePoolSize: c.candidatePoolSize,
+        reranker: c.reranker ? { model: c.reranker.model, provider: c.reranker.provider } : null,
+        rerankBlendWeight: c.rerankBlendWeight, rerankScoreMode: c.rerankScoreMode,
+        confidenceThreshold: c.confidenceThreshold, confidenceGap: c.confidenceGap,
+    };
+}
+/** Snapshot a calibrated unified result into a trace item. */
+function toUnifiedTraceItem(r) {
+    return { id: r.id, score: r.score, source: r.source, scores: { calibrated: r.calibrated, raw: r.rawScore } };
+}
 export class UnifiedRetriever {
     memoryStore;
     documentSearchFn;
     embedder;
     config;
+    _lastTrace = null;
+    /** Recorder active during the current retrieve() call; null when captureTrace is off. */
+    _currentRec = null;
+    /** Per-stage ranking trace from the most recent call. Null unless captureTrace was on. */
+    get lastTrace() { return this._lastTrace; }
     constructor(memoryStore, documentSearchFn, embedder, config = {}) {
         this.memoryStore = memoryStore;
         this.documentSearchFn = documentSearchFn;
@@ -60,35 +82,67 @@ export class UnifiedRetriever {
      * in a single unified pass.
      */
     async retrieve(query, options) {
+        this._lastTrace = null;
         // Stage 0: Skip check -- greetings, commands, etc.
         if (shouldSkipRetrieval(query))
             return [];
+        // Set up the per-call trace recorder (null when capture is off → no overhead).
+        this._currentRec = this.config.captureTrace
+            ? new TraceRecorder({
+                debugId: options?.debugId ?? randomUUID().slice(0, 8),
+                query,
+                pipeline: "unified",
+                config: unifiedTraceConfigSnapshot(this.config),
+            })
+            : null;
         // Stage 1: Route query to appropriate source(s)
         const route = this.routeQuery(query);
         const limit = options?.limit ?? this.config.limit;
         // Stage 2: Embed query (single call, reused for both sources)
         const queryVec = await this.embedder.embedQuery(query);
         // Stage 3: Parallel retrieval based on route
+        const colls = options?.collections ?? (options?.collection ? [options.collection] : undefined);
         const [memoryRaw, docResults] = await Promise.all([
-            (route !== "document")
-                ? this.searchMemories(query, queryVec, options?.scopeFilter)
-                : Promise.resolve({ vecResults: [], bm25Results: [] }),
+            // B2: memory search ALWAYS runs (no route guard) — prevents regression on DOC_PATTERNS queries.
+            this.searchMemories(query, queryVec, options?.scopeFilter),
             (route !== "memory" && this.documentSearchFn)
-                ? this.documentSearchFn(query, queryVec, this.config.candidatePoolSize, options?.collection)
+                ? this.documentSearchFn(query, queryVec, this.config.candidatePoolSize, undefined, colls)
                 : Promise.resolve([]),
         ]);
         // Stage 4: Fuse memory results (vector + BM25 hybrid)
         const memoryFused = this.fuseMemoryResults(memoryRaw.vecResults, memoryRaw.bm25Results);
+        this._currentRec?.stage("memory-fusion", memoryFused.map(r => ({ id: r.entry.id, score: r.score, source: "conversation" })));
+        if (docResults.length) {
+            this._currentRec?.stage("document-search", docResults.map(d => {
+                const dd = d;
+                return { id: dd.id ?? dd.docid ?? "", score: dd.score ?? 0, source: "document" };
+            }));
+        }
         // Stage 6: Z-score calibrate and merge both sources
         let pool = this.mergeAndCalibrate(memoryFused, docResults);
-        // Stage 7: Confidence-gated reranking
+        this._currentRec?.stage("merge", pool.map(toUnifiedTraceItem), { meta: { route } });
+        // Stage 7: Confidence-gated reranking. Only an actually-applied rerank is
+        // treated as an authoritative relevance signal; fallback retains old
+        // calibrated behavior.
+        let rerankSucceeded = false;
         if (this.config.reranker && this.shouldRerank(pool)) {
-            pool = await this.rerank(query, pool);
+            const rerankResult = await this.rerank(query, pool);
+            rerankSucceeded = rerankResult.applied;
+            pool = rerankResult.results;
+            if (rerankSucceeded) {
+                this._currentRec?.stage("rerank", pool.map(toUnifiedTraceItem), { meta: { reranker: this.config.reranker?.model } });
+            }
         }
-        // Stage 8: Post-merge modifiers (time decay, importance, length norm, floor)
-        pool = this.applyPostMergeModifiers(pool);
+        // Stage 8: Post-merge modifiers (time decay, importance, length norm).
+        // Once a cross-encoder has scored a candidate, its calibrated fusion floor
+        // must not resurrect a result that the relevance judge explicitly rejected.
+        pool = this.applyPostMergeModifiers(pool, !rerankSucceeded);
         // Stage 9: Source diversity + final selection
-        return this.applySourceDiversity(pool, limit);
+        const final = this.applySourceDiversity(pool, limit, rerankSucceeded);
+        this._currentRec?.stage("diversity", final.map(r => ({ id: r.id, score: r.score, source: r.source })));
+        this._lastTrace = this._currentRec ? this._currentRec.finish(final.map(r => r.id)) : null;
+        this._currentRec = null;
+        return final;
     }
     /**
      * Determine which source(s) to query based on the query text.
@@ -304,7 +358,7 @@ export class UnifiedRetriever {
             const parsed = parseRerankResponse(provider, data);
             if (!parsed) {
                 console.warn("Unified rerank API: invalid response shape, falling back to calibrated scores");
-                return pool;
+                return { results: pool, applied: false };
             }
             // Blend: rerankBlendWeight * rerank_score + (1-weight) * calibrated_score
             // Default: 0.7 reranker + 0.3 calibrated (see DEFAULT_CONFIG).
@@ -331,7 +385,7 @@ export class UnifiedRetriever {
                 const blended = blendWeight * rerankScore + fusionWeight * original.score;
                 return { ...original, score: blended };
             });
-            return [...reranked, ...rest].sort((a, b) => b.score - a.score);
+            return { results: [...reranked, ...rest].sort((a, b) => b.score - a.score), applied: true };
         }
         catch (error) {
             if (error instanceof Error && error.name === "AbortError") {
@@ -340,7 +394,7 @@ export class UnifiedRetriever {
             else {
                 console.warn("Unified rerank API failed, falling back to calibrated scores:", error);
             }
-            return pool;
+            return { results: pool, applied: false };
         }
     }
     // ---------------------------------------------------------------------------
@@ -370,7 +424,7 @@ export class UnifiedRetriever {
      * - Length normalization
      * - Floor guarantee: never reduce below 25% of calibrated score
      */
-    applyPostMergeModifiers(pool) {
+    applyPostMergeModifiers(pool, useCalibratedFloor = true) {
         const now = Date.now();
         return pool.map(r => {
             if (r.source !== "conversation")
@@ -411,8 +465,9 @@ export class UnifiedRetriever {
             const lenFactor = 1 / (1 + 0.5 * Math.log2(lenRatio));
             // Apply modifiers
             const adjusted = r.score * timeFactor * impFactor * lenFactor;
-            // Floor guarantee: never reduce below 25% of calibrated score
-            const floor = 0.25 * r.calibrated;
+            // Pre-rerank only: never reduce below 25% of calibrated score. Rerank
+            // scores are authoritative and intentionally receive no such floor.
+            const floor = useCalibratedFloor ? 0.25 * r.calibrated : 0;
             return { ...r, score: Math.max(adjusted, floor) };
         }).sort((a, b) => b.score - a.score);
     }
@@ -423,19 +478,20 @@ export class UnifiedRetriever {
      * Protect top-1 from each source to ensure diversity, then apply
      * minScore filter and limit.
      */
-    applySourceDiversity(pool, limit) {
+    applySourceDiversity(pool, limit, enforceRelevanceFloor = false) {
         const topConv = pool.find(r => r.source === "conversation");
         const topDoc = pool.find(r => r.source === "document");
         const selected = [];
         const selectedIds = new Set();
         const pushUnique = (result) => {
-            if (!result || selectedIds.has(result.id) || selected.length >= limit)
+            if (!result || (enforceRelevanceFloor && result.score < this.config.minScore) || selectedIds.has(result.id) || selected.length >= limit)
                 return;
             selected.push(result);
             selectedIds.add(result.id);
         };
-        // Diversity guarantee: reserve space for the best conversation and document hit
-        // before filling the remaining slots by score.
+        // Diversity guarantee: reserve space for the best conversation and document
+        // hit. When reranking actually applied, the relevance floor outranks source
+        // diversity; otherwise the long-standing protected slots remain intact.
         pushUnique(topConv);
         pushUnique(topDoc);
         for (const result of pool) {
@@ -449,6 +505,7 @@ export class UnifiedRetriever {
             selectedIds.add(result.id);
         }
         return selected
+            .filter(r => !enforceRelevanceFloor || r.score >= this.config.minScore)
             .sort((a, b) => b.score - a.score)
             .map(r => ({
             id: r.id,

@@ -22,7 +22,7 @@ transfer workflow described in `docs/plans/019-containerize-memex.md`.
 ## Build
 
 ```bash
-docker build -t memex-daemon:0.7.3 .
+docker build -t memex-daemon:0.7.4 .
 ```
 
 ## Configure
@@ -34,7 +34,9 @@ or the repo). All values are env-driven:
 | Var | Purpose |
 |-----|---------|
 | `MEMEX_EMBED_ENDPOINT` / `_API_KEY` / `_MODEL` / `_DIM` | Embedding server (OpenAI-compatible). Omit → BM25-only. |
-| `MEMEX_RERANK_ENDPOINT` / `_API_KEY` / `_MODEL` | Cross-encoder reranker (Qwen3-Reranker-0.6B). Omit → no reranking. |
+| `MEMEX_RERANK_ENDPOINT` / `_API_KEY` / `_MODEL` | Cross-encoder reranker. Both endpoint and key are required; omit either → no reranking. |
+| `MEMEX_RERANK_PROVIDER` / `_SCORE_MODE` / `_BLEND_WEIGHT` | Optional rerank shape and score blending. |
+| `MEMEX_RERANK_CONFIDENCE_THRESHOLD` / `_GAP` | Optional unified-rerank gate tuning for the MCP path. |
 | `MEMEX_LLM_ENDPOINT` / `_MODEL` / `_API_KEY` | Reflection LLM + LLM reranker (shared endpoint). Omit → reflection skipped, no LLM reranker. |
 | `MEMEX_RERANK_LLM_MODEL` | LLM-based reranker model (opt-in). Requires `MEMEX_LLM_ENDPOINT`. |
 | `MEMEX_AUTH_TOKEN` | Bearer token clients must send. **Set in production.** |

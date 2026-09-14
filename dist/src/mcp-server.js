@@ -12,14 +12,20 @@ import { createServer as createHttpServer } from "node:http";
 import { z } from "zod";
 import { MemoryStore } from "./memory.js";
 import { createRetriever } from "./retriever.js";
+import { resolveCrossRerankerFromEnv } from "./env-overrides.js";
 import { createEmbedder } from "./embedder.js";
 import { isNoise } from "./noise-filter.js";
 import { runDreamCycle } from "./dreaming.js";
 import { anchor, expandAnchor, AnchorAmbiguityError } from "./anchor.js";
 import { detectCategory } from "../index.js";
 import { deriveScopes } from "./scope-derive.js";
+import { resolveDebugDir, writeDebugRecall, buildPayloadFromMcpRecall } from "./debug-recall.js";
+import { randomUUID } from "node:crypto";
+import { createStore, searchFTS, searchVec } from "./search.js";
+import { UnifiedRetriever } from "./unified-retriever.js";
+import { upsertDocument, forgetDocument, indexAllPaths, embedDocuments } from "./doc-indexer.js";
 /** memex version — keep in sync with package.json (consumed by /health + MCP handshake). */
-const VERSION = "0.7.2";
+const VERSION = "0.7.4";
 // ============================================================================
 // Scope tag validation (Bug 5 fix)
 // ============================================================================
@@ -35,25 +41,106 @@ function isValidScopeTag(tag) {
     return /^[a-zA-Z0-9._:-]+$/.test(trimmed);
 }
 export function createMemexMcpServer(options) {
-    const { dbPath, vectorDim, embedder, reflectionLLM, dreamIntervalMs, noDream } = options;
+    const { dbPath, vectorDim, embedder, reflectionLLM, dreamIntervalMs, noDream, documents } = options;
     const dim = vectorDim ?? embedder?.dimensions ?? 8;
-    const store = new MemoryStore({ dbPath, vectorDim: dim });
-    // Reranker on the MCP path: OFF by default (preserves prior behavior). Enabled only when
-    // MEMEX_RERANK_* env vars are set — flipping the flag alone is a no-op because rerankResults
-    // also guards on rerankApiKey (spec-review round-2 critical). Default model stays the safe
-    // Jina fallback unless MEMEX_RERANK_MODEL overrides it (e.g. Qwen3-Reranker-0.6B).
-    const rerankEndpoint = process.env.MEMEX_RERANK_ENDPOINT;
-    const rerankApiKey = process.env.MEMEX_RERANK_API_KEY;
-    const rerankModel = process.env.MEMEX_RERANK_MODEL;
-    const enableRerank = !!(rerankEndpoint && rerankApiKey);
-    const retriever = embedder
-        ? createRetriever(store, embedder, {
+    const docsConfigured = !!(documents?.paths?.length);
+    // B5: dimension agreement (shared vectors_vec drop+rebuilds on mismatch).
+    if (docsConfigured && embedder && embedder.dimensions !== dim) {
+        throw new Error(`dimension mismatch: embedder ${embedder.dimensions} != vectorDim ${dim} (B5)`);
+    }
+    // B6: bootstrap — createStore (doc tables + shared vectors_vec) when docs configured.
+    let docStore;
+    let store;
+    if (docsConfigured) {
+        docStore = createStore(dbPath);
+        docStore.ensureVecTable(dim);
+        store = new MemoryStore({ dbPath, vectorDim: dim, db: docStore.db });
+        // document_collections table (visibility model)
+        docStore.db.prepare(`CREATE TABLE IF NOT EXISTS document_collections (
+      name TEXT PRIMARY KEY, visibility TEXT NOT NULL DEFAULT 'private',
+      source TEXT NOT NULL, created_at TEXT NOT NULL)`).run();
+    }
+    else {
+        store = new MemoryStore({ dbPath, vectorDim: dim });
+    }
+    // Reranker config. The shared resolver is the single source of truth for
+    // both the MemoryRetriever and UnifiedRetriever production paths.
+    const crossReranker = resolveCrossRerankerFromEnv();
+    const enableRerank = !!crossReranker;
+    const rerankLlmModel = process.env.MEMEX_RERANK_LLM_MODEL;
+    const rerankLlmEndpoint = reflectionLLM?.endpoint;
+    const rerankLlmApiKey = reflectionLLM?.apiKey ?? "";
+    const enableLlmRerank = !!(rerankLlmEndpoint && rerankLlmModel);
+    const captureTrace = !!resolveDebugDir();
+    // B2: UnifiedRetriever when docs configured; MemoryRetriever otherwise.
+    let retriever;
+    let retrieverKind = "memory";
+    if (docsConfigured && embedder) {
+        const embeddingModel = process.env.MEMEX_EMBED_MODEL || "default";
+        // B1: documentSearchFn — the collection gate.
+        const documentSearchFn = async (query, queryVec, limit, _coll, collections) => {
+            const ss = docStore;
+            let effective = collections;
+            if (!effective || effective.length === 0) {
+                effective = ss.db.prepare(`SELECT name FROM document_collections WHERE visibility = 'public'`).all().map(r => r.name);
+            }
+            if (!effective || effective.length === 0)
+                return []; // B1 gate
+            const fts = searchFTS(ss.db, query, limit, undefined, effective);
+            const vecRes = await searchVec(ss.db, query, embeddingModel, limit, undefined, undefined, queryVec, effective);
+            const merged = new Map();
+            for (const r of fts)
+                merged.set(r.filepath, r);
+            for (const r of vecRes) {
+                const ex = merged.get(r.filepath);
+                if (!ex || r.score > ex.score)
+                    merged.set(r.filepath, r);
+            }
+            return Array.from(merged.values()).sort((a, b) => b.score - a.score).slice(0, limit)
+                .map((r) => ({
+                filepath: r.filepath, displayPath: r.display_path || r.filepath,
+                title: r.title, body: r.body || "", bestChunk: r.body || "",
+                bestChunkPos: 0, score: r.score, docid: r.hash || r.filepath, context: null,
+            }));
+        };
+        retriever = new UnifiedRetriever(store, documentSearchFn, embedder, {
+            ...(crossReranker ? {
+                reranker: {
+                    endpoint: crossReranker.endpoint,
+                    apiKey: crossReranker.apiKey,
+                    model: crossReranker.model,
+                    provider: crossReranker.provider,
+                },
+            } : {}),
+            ...(crossReranker?.blendWeight !== undefined ? { rerankBlendWeight: crossReranker.blendWeight } : {}),
+            ...(crossReranker ? {
+                rerankScoreMode: crossReranker.scoreMode,
+                confidenceThreshold: crossReranker.confidenceThreshold,
+                confidenceGap: crossReranker.confidenceGap,
+            } : {}),
+            captureTrace,
+        });
+        retrieverKind = "unified";
+    }
+    else if (embedder) {
+        retriever = createRetriever(store, embedder, {
             mode: "hybrid",
-            rerank: enableRerank ? "cross-encoder" : "none",
-            ...(enableRerank ? { rerankEndpoint, rerankApiKey } : {}),
-            ...(enableRerank && rerankModel ? { rerankModel } : {}),
-        })
-        : null;
+            rerank: enableLlmRerank ? "llm" : enableRerank ? "cross-encoder" : "none",
+            ...(crossReranker ? {
+                rerankEndpoint: crossReranker.endpoint,
+                rerankApiKey: crossReranker.apiKey,
+                rerankModel: crossReranker.model,
+                rerankProvider: crossReranker.provider,
+            } : {}),
+            ...(crossReranker?.blendWeight !== undefined ? { rerankBlendWeight: crossReranker.blendWeight } : {}),
+            ...(crossReranker ? { rerankScoreMode: crossReranker.scoreMode } : {}),
+            ...(enableLlmRerank ? { rerankLlmEndpoint, rerankLlmApiKey, rerankLlmModel } : {}),
+            captureTrace,
+        });
+    }
+    else {
+        retriever = null;
+    }
     const server = new McpServer({ name: "memex", version: VERSION }, {
         capabilities: { tools: {} },
         instructions: [
@@ -183,13 +270,14 @@ export function createMemexMcpServer(options) {
             query: z.string().describe("Search query"),
             limit: z.number().min(1).max(20).optional().describe("Max results (default: 5)"),
             scopes: z.array(z.string()).optional().describe("Explicit scope tags to filter by (replaces the default active-context set). A memory matches if it has ANY of these tags. Omit to recall all memories unfiltered."),
+            collections: z.array(z.string()).optional().describe("Document collections to search (when docs are configured). Omit to search public collections only; name specific collections to include private ones."),
             agent_id: z.string().optional()
                 .describe("Agent identifier (optional, scopes recall to agent-specific memories)"),
             session_id: z.string().optional()
                 .describe("Session identifier (optional, scopes recall to session-specific memories)"),
         },
     }, async (_params, _extra) => {
-        const { query, limit = 5, scopes, agent_id, session_id } = _params;
+        const { query, limit = 5, scopes, collections, agent_id, session_id } = _params;
         // Build effective scope filter (Bug 4 & 6 fix: consume agent_id/session_id)
         let effectiveScopes = scopes ? [...scopes] : undefined;
         if (agent_id || session_id) {
@@ -219,30 +307,62 @@ export function createMemexMcpServer(options) {
             }
         }
         if (retriever) {
-            const results = await retriever.retrieve({ query, limit, scopes: effectiveScopes });
-            // Record persistent recall signal so dreaming doesn't evict actively-used memories
-            // (the MCP recall path previously never bumped recall_count).
-            const recalledIds = results.map(r => r.entry.id);
+            const debugId = randomUUID().slice(0, 8);
+            // B3: call-shape branches on retriever kind (object for memory, positional for unified).
+            let results;
+            if (retrieverKind === "unified") {
+                const ur = await retriever.retrieve(query, { limit, scopeFilter: effectiveScopes, collections, debugId });
+                results = ur.map((r) => ({
+                    id: r.id, text: r.text, score: r.score,
+                    source: r.source === "conversation" ? "conversation" : "document",
+                    category: r.metadata?.category, scope: r.metadata?.scope,
+                }));
+            }
+            else {
+                const mr = await retriever.retrieve({ query, limit, scopes: effectiveScopes, debugId });
+                results = mr.map((r) => ({
+                    id: r.entry.id, text: r.entry.text, score: r.score,
+                    source: r.sources?.reranked ? "reranked" : (r.sources?.vector && r.sources?.bm25) ? "both" : r.sources?.vector ? "vector" : "lexical",
+                    category: r.entry.category, scope: r.entry.scope, sources: r.sources, entry: r.entry,
+                }));
+            }
+            // Record persistent recall signal (memories only — docs don't have recall_count).
+            const recalledIds = results.filter(r => r.source !== "document").map(r => r.id);
             if (recalledIds.length > 0) {
                 try {
                     store.recordRecalls(recalledIds);
                 }
                 catch { /* best effort */ }
             }
+            // Debug capture: write the per-stage trace keyed by debugId when enabled.
+            const captured = captureTrace;
+            if (captured) {
+                writeDebugRecall(buildPayloadFromMcpRecall({
+                    debugId,
+                    agentId: "mcp",
+                    sessionId: session_id ?? null,
+                    query,
+                    trace: retriever.lastTrace ?? undefined,
+                    results: results.map(r => ({
+                        id: r.id, score: r.score,
+                        source: r.source, text: r.text, category: r.category, scope: r.scope,
+                    })),
+                })).catch(() => { });
+            }
             return {
                 content: [{
                         type: "text",
                         text: JSON.stringify({
+                            debugId,
+                            captured,
                             results: results.map(r => ({
-                                id: r.entry.id,
-                                anchor: anchor(r.entry.id),
-                                text: r.entry.text,
-                                category: r.entry.category,
-                                scope: r.entry.scope,
+                                id: r.id,
+                                anchor: anchor(r.id),
+                                text: r.text,
+                                category: r.category,
+                                scope: r.scope,
                                 score: Math.round(r.score * 1000) / 1000,
-                                source: r.sources?.reranked ? "reranked"
-                                    : (r.sources?.vector && r.sources?.bm25) ? "both"
-                                        : r.sources?.vector ? "vector" : "lexical",
+                                source: r.source,
                             })),
                             note: "Cite recalled memories by anchor (e.g. [mem:abc12345]) when relying on them. Pass the anchor (or any longer prefix) to memory_forget to delete a stale entry.",
                         }),
@@ -250,6 +370,7 @@ export function createMemexMcpServer(options) {
             };
         }
         // BM25-only fallback when no embedder configured
+        const debugId = randomUUID().slice(0, 8);
         const bm25Results = await store.bm25Search(query, limit, effectiveScopes);
         const recalledIds = bm25Results.map(r => r.entry.id);
         if (recalledIds.length > 0) {
@@ -262,6 +383,8 @@ export function createMemexMcpServer(options) {
             content: [{
                     type: "text",
                     text: JSON.stringify({
+                        debugId,
+                        captured: false,
                         results: bm25Results.map(r => ({
                             id: r.entry.id,
                             anchor: anchor(r.entry.id),
@@ -392,6 +515,74 @@ export function createMemexMcpServer(options) {
                 }],
         };
     });
+    // ── Document tools (only when docs configured) ─────────────────────────────
+    if (docsConfigured && docStore) {
+        const embeddingModel = process.env.MEMEX_EMBED_MODEL || "default";
+        server.registerTool("document_upsert", {
+            title: "Upsert Document",
+            description: "Push a document into a collection. Idempotent by (collection, docId). Defaults to private visibility.",
+            inputSchema: {
+                collection: z.string().describe("Collection name (the document's namespace)"),
+                docId: z.string().describe("Unique document id within the collection"),
+                text: z.string().describe("Document text content"),
+                title: z.string().optional().describe("Document title (defaults to docId)"),
+                public: z.boolean().optional().describe("Mark collection as public (default-searched). Defaults to false (private)."),
+            },
+        }, async (_params) => {
+            const { collection, docId, text, title, public: isPublic } = _params;
+            await upsertDocument(docStore.db, { collection, docId, text, title });
+            // Embed the new/updated content
+            await embedDocuments(docStore.db, dim, embedder);
+            // Upsert collection metadata (visibility)
+            docStore.db.prepare(`INSERT INTO document_collections (name, visibility, source, created_at) VALUES (?,?,?,?)
+         ON CONFLICT(name) DO UPDATE SET visibility = excluded.visibility`).run(collection, isPublic ? "public" : "private", "push", new Date().toISOString());
+            return { content: [{ type: "text", text: JSON.stringify({ ok: true, collection, docId }) }] };
+        });
+        server.registerTool("document_forget", {
+            title: "Forget Document",
+            description: "Delete a document by (collection, docId).",
+            inputSchema: {
+                collection: z.string(),
+                docId: z.string(),
+            },
+        }, async (_params) => {
+            const { collection, docId } = _params;
+            forgetDocument(docStore.db, collection, docId);
+            return { content: [{ type: "text", text: JSON.stringify({ ok: true, collection, docId }) }] };
+        });
+        server.registerTool("document_collections", {
+            title: "List Document Collections",
+            description: "List all document collections with visibility + document counts.",
+            inputSchema: {},
+        }, async () => {
+            const rows = docStore.db.prepare(`SELECT dc.name, dc.visibility, dc.source, COUNT(d.id) as docs
+         FROM document_collections dc LEFT JOIN documents d ON d.collection = dc.name AND d.active = 1
+         GROUP BY dc.name ORDER BY dc.name`).all();
+            return { content: [{ type: "text", text: JSON.stringify({ collections: rows }) }] };
+        });
+        // Configured-dir indexing (fire-and-forget on startup, interval for refresh)
+        if (documents.paths.length > 0) {
+            const indexPaths = documents.paths.map(p => ({ path: p.path, name: p.name, pattern: "**/*.md" }));
+            const doIndex = async () => {
+                try {
+                    await indexAllPaths(docStore.db, indexPaths);
+                    await embedDocuments(docStore.db, dim, embedder);
+                    // Upsert collection metadata for ALL active collections (they're the shared corpus)
+                    const now = new Date().toISOString();
+                    const activeColls = docStore.db.prepare(`SELECT DISTINCT collection FROM documents WHERE active = 1`).all();
+                    const stmt = docStore.db.prepare(`INSERT INTO document_collections (name, visibility, source, created_at) VALUES (?,?,?,?)
+             ON CONFLICT(name) DO NOTHING`);
+                    for (const { collection } of activeColls) {
+                        stmt.run(collection, "public", "configured", now);
+                    }
+                }
+                catch { /* best effort — indexing must not crash the daemon */ }
+            };
+            doIndex(); // fire-and-forget at startup
+            const interval = setInterval(doIndex, 30 * 60 * 1000); // every 30 min
+            interval.unref();
+        }
+    }
     return { server, store, retriever };
 }
 // ============================================================================
@@ -444,6 +635,16 @@ async function main() {
         apiKey: llmApiKey,
         ...(llmTimeout ? { timeout: llmTimeout } : {}),
     } : undefined;
+    // Documents: MEMEX_DOC_PATHS (comma-separated <abs-path>:<name>) → documents.paths
+    const docPathsRaw = process.env.MEMEX_DOC_PATHS;
+    const documents = docPathsRaw ? {
+        paths: docPathsRaw.split(",").map((entry) => {
+            const idx = entry.lastIndexOf(":");
+            return idx > 0
+                ? { path: entry.slice(0, idx), name: entry.slice(idx + 1) }
+                : { path: entry, name: entry.split("/").pop() || entry };
+        }),
+    } : undefined;
     if (reflectionLLM) {
         console.error(`memex-mcp: reflection enabled (model: ${llmModel}${llmTimeout ? `, timeout: ${llmTimeout}ms` : ""})`);
     }
@@ -454,6 +655,7 @@ async function main() {
         reflectionLLM,
         dreamIntervalMs: dreamInterval,
         noDream,
+        documents,
     };
     const { server, store } = createMemexMcpServer(sharedOptions);
     // ── Graceful shutdown ──────────────────────────────────────────────────────
@@ -475,6 +677,7 @@ async function main() {
             clearTimeout(dreamStartupTimer);
         if (dreamTimer)
             clearInterval(dreamTimer);
+        httpServer?.closeMcpSessions();
         httpServer?.close();
         // Safety net: force exit if the DB close stalls (e.g. an in-flight transaction).
         setTimeout(() => process.exit(0), 2000).unref();
@@ -516,8 +719,17 @@ async function main() {
     if (httpPort > 0) {
         // For HTTP, each session gets its own McpServer instance (stateful sessions).
         // The first one constructed above is used for the dreaming timer; HTTP creates fresh.
-        const factory = () => createMemexMcpServer(sharedOptions).server;
-        httpServer = await startHttpServer(factory, { port: httpPort, host: httpHost, authToken });
+        const factory = () => createMemexMcpServer(sharedOptions);
+        httpServer = await startHttpServer(factory, {
+            port: httpPort,
+            host: httpHost,
+            authToken,
+            // Bounded session hygiene. Env-overridable so operators can tune
+            // freshness-vs-churn without a code change.
+            idleTtlMs: positiveIntEnv("MEMEX_HTTP_SESSION_TTL_MS"),
+            sweepIntervalMs: positiveIntEnv("MEMEX_HTTP_SWEEP_INTERVAL_MS"),
+            maxSessions: positiveIntEnv("MEMEX_HTTP_MAX_SESSIONS"),
+        });
         console.error(`memex-mcp: ready (http ${httpHost}:${httpPort})`);
     }
     else {
@@ -534,11 +746,89 @@ async function main() {
         console.error("memex-mcp: ready (stdio)");
     }
 }
-async function startHttpServer(serverFactory, opts) {
+const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
+const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
+const DEFAULT_MAX_SESSIONS = 128;
+/** Maximum JSON request body accepted by the HTTP transport. */
+const MAX_HTTP_BODY_BYTES = 8 * 1024 * 1024;
+class HttpRequestError extends Error {
+    statusCode;
+    constructor(statusCode, message) {
+        super(message);
+        this.statusCode = statusCode;
+        this.name = "HttpRequestError";
+    }
+}
+/** Read a strictly positive integer env var, or undefined. */
+function positiveIntEnv(name) {
+    const raw = process.env[name];
+    if (!raw)
+        return undefined;
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+/**
+ * Streamable-HTTP MCP host with bounded sessions.
+ *
+ * 0.7.3 leaked: every initialize created a transport + McpServer + SQLite
+ * handle that was only released if the client sent DELETE. Abandoned clients
+ * (crashed restarts, dropped TCP, proxies that never terminate) accumulated
+ * indefinitely — 186 sessions / 398 FDs / 3.9GB RSS over 9d20h in production.
+ *
+ * Now every session carries lastActivity; a sweeper closes anything idle past
+ * idleTtlMs, initialize enforces maxSessions (LRU eviction), and closeSession
+ * tears down transport + server + store together so FDs and RSS are actually
+ * reclaimed.
+ */
+export async function startHttpServer(serverFactory, opts) {
     const { port, host, authToken } = opts;
+    const idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+    // Never sweep less often than the TTL itself.
+    const sweepIntervalMs = Math.min(opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS, idleTtlMs);
+    const maxSessions = opts.maxSessions ?? DEFAULT_MAX_SESSIONS;
     const { randomUUID } = await import("node:crypto");
-    // Per-session transports. Each MCP client gets its own session and transport.
     const sessions = new Map();
+    /** Tear down one session's transport, server, and SQLite handle. Idempotent. */
+    const closeSession = (id, reason) => {
+        const session = sessions.get(id);
+        if (!session)
+            return;
+        sessions.delete(id);
+        console.error(`memex-mcp: HTTP session ${id} closed (${reason}; ${sessions.size} remaining)`);
+        // The per-session store is the FD/RSS leak: createMemexMcpServer opens a
+        // dedicated SQLite connection per session. Close it with the transport.
+        session.transport.onclose = undefined;
+        void session.transport.close().catch(() => { });
+        void session.server.close().catch(() => { });
+        void session.store.close().catch((err) => {
+            console.error(`memex-mcp: session store close failed (${id}):`, err instanceof Error ? err.message : err);
+        });
+    };
+    /** Enforce the hard session cap before admitting a new session. */
+    const evictUntilUnderCap = () => {
+        while (sessions.size >= maxSessions) {
+            let oldestId;
+            let oldestAt = Infinity;
+            for (const [id, session] of sessions) {
+                if (session.lastActivity < oldestAt) {
+                    oldestAt = session.lastActivity;
+                    oldestId = id;
+                }
+            }
+            if (!oldestId)
+                break;
+            closeSession(oldestId, `session cap ${maxSessions}, evicted least-recently-active`);
+        }
+    };
+    const sweepIdleSessions = () => {
+        const now = Date.now();
+        for (const [id, session] of sessions) {
+            const idleMs = now - session.lastActivity;
+            if (idleMs > idleTtlMs) {
+                closeSession(id, `idle ${Math.round(idleMs / 1000)}s > ttl ${Math.round(idleTtlMs / 1000)}s`);
+            }
+        }
+    };
     const httpServer = createHttpServer(async (req, res) => {
         // Auth: bearer token via Authorization header. /health is exempt so Docker/k8s
         // liveness probes (which can't send a bearer) can check it.
@@ -554,7 +844,12 @@ async function startHttpServer(serverFactory, opts) {
         // Health endpoint
         if (req.url === "/health") {
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true, version: VERSION, sessions: sessions.size }));
+            res.end(JSON.stringify({
+                ok: true,
+                version: VERSION,
+                sessions: sessions.size,
+                sessionLimits: { idleTtlMs, maxSessions },
+            }));
             return;
         }
         // MCP endpoint: /mcp
@@ -567,23 +862,33 @@ async function startHttpServer(serverFactory, opts) {
                 const sessionId = req.headers["mcp-session-id"];
                 let transport;
                 if (sessionId && sessions.has(sessionId)) {
-                    // Existing session — route to its transport
-                    transport = sessions.get(sessionId);
+                    // Existing session — route to its transport and refresh its idle clock.
+                    const session = sessions.get(sessionId);
+                    session.lastActivity = Date.now();
+                    transport = session.transport;
                 }
                 else if (!sessionId && isInitializeRequest(parsedBody)) {
-                    // New session — create transport + dedicated server instance
+                    // New session — create transport + dedicated server instance, under the cap.
+                    evictUntilUnderCap();
                     const newId = randomUUID();
-                    transport = new StreamableHTTPServerTransport({
+                    const created = serverFactory();
+                    const newTransport = new StreamableHTTPServerTransport({
                         sessionIdGenerator: () => newId,
                         enableJsonResponse: true,
-                        onsessioninitialized: (id) => { sessions.set(id, transport); },
+                        onsessioninitialized: (id) => {
+                            sessions.set(id, {
+                                transport: newTransport,
+                                server: created.server,
+                                store: created.store,
+                                lastActivity: Date.now(),
+                            });
+                        },
                     });
-                    transport.onclose = () => {
-                        if (transport.sessionId)
-                            sessions.delete(transport.sessionId);
+                    newTransport.onclose = () => {
+                        closeSession(newTransport.sessionId ?? newId, "transport close");
                     };
-                    const sessionServer = serverFactory();
-                    await sessionServer.connect(transport);
+                    transport = newTransport;
+                    await created.server.connect(transport);
                 }
                 else {
                     res.writeHead(400, { "Content-Type": "application/json" });
@@ -595,12 +900,19 @@ async function startHttpServer(serverFactory, opts) {
                     return;
                 }
                 await transport.handleRequest(req, res, parsedBody);
+                // DELETE is MCP's session-termination verb. The SDK closes the transport
+                // (which fires our onclose hook), but make removal explicit and
+                // idempotent so a missed hook can never retain the session.
+                if (req.method === "DELETE" && sessionId) {
+                    closeSession(sessionId, "DELETE");
+                }
             }
             catch (err) {
                 console.error("memex-mcp: HTTP request error:", err);
                 if (!res.writableEnded) {
-                    res.writeHead(500, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify({ error: err instanceof Error ? err.message : "internal error" }));
+                    const statusCode = err instanceof HttpRequestError ? err.statusCode : 500;
+                    res.writeHead(statusCode, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ error: err instanceof HttpRequestError ? err.message : "internal error" }));
                 }
             }
             return;
@@ -608,14 +920,31 @@ async function startHttpServer(serverFactory, opts) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "not found" }));
     });
+    const sweeper = setInterval(sweepIdleSessions, sweepIntervalMs);
+    sweeper.unref?.();
+    const memexServer = Object.assign(httpServer, {
+        closeMcpSessions() {
+            clearInterval(sweeper);
+            for (const id of [...sessions.keys()])
+                closeSession(id, "server shutdown");
+        },
+        mcpSessionCount() {
+            return sessions.size;
+        },
+    });
+    // Direct .close() callers (tests, shutdown paths) still get full reaping.
+    memexServer.on("close", () => memexServer.closeMcpSessions());
     await new Promise((resolve) => {
         httpServer.listen(port, host, () => resolve());
     });
-    console.error(`memex-mcp: HTTP transport listening on http://${host}:${port}/mcp`);
+    const addr = httpServer.address();
+    const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
+    console.error(`memex-mcp: HTTP transport listening on http://${host}:${actualPort}/mcp`);
+    console.error(`memex-mcp: HTTP sessions bounded (max=${maxSessions}, idleTtl=${Math.round(idleTtlMs / 1000)}s, sweep=${Math.round(sweepIntervalMs / 1000)}s)`);
     if (!authToken) {
         console.error(`memex-mcp: WARNING — no --auth-token set, daemon is open to anyone on ${host}`);
     }
-    return httpServer;
+    return memexServer;
 }
 function isInitializeRequest(body) {
     if (Array.isArray(body))
@@ -624,19 +953,56 @@ function isInitializeRequest(body) {
         && body.method === "initialize";
 }
 async function readJsonBody(req) {
+    const contentLength = req.headers["content-length"];
+    if (contentLength !== undefined) {
+        const declaredLength = Number(contentLength);
+        if (!Number.isFinite(declaredLength) || declaredLength < 0) {
+            throw new HttpRequestError(400, "invalid content-length");
+        }
+        if (declaredLength > MAX_HTTP_BODY_BYTES) {
+            // Drain the request so the keep-alive connection can be reused safely.
+            req.resume();
+            throw new HttpRequestError(413, "request body too large");
+        }
+    }
     return new Promise((resolve, reject) => {
         const chunks = [];
-        req.on("data", (chunk) => chunks.push(chunk));
+        let totalBytes = 0;
+        let settled = false;
+        const fail = (error) => {
+            if (settled)
+                return;
+            settled = true;
+            // Continue reading and discard the remainder rather than leaving a
+            // partially-read request on a keep-alive socket.
+            req.resume();
+            reject(error);
+        };
+        req.on("data", (chunk) => {
+            if (settled)
+                return;
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            totalBytes += buffer.byteLength;
+            if (totalBytes > MAX_HTTP_BODY_BYTES) {
+                fail(new HttpRequestError(413, "request body too large"));
+                return;
+            }
+            chunks.push(buffer);
+        });
         req.on("end", () => {
+            if (settled)
+                return;
+            settled = true;
             try {
                 const body = Buffer.concat(chunks).toString("utf-8");
                 resolve(body.length > 0 ? JSON.parse(body) : undefined);
             }
-            catch (err) {
-                reject(err);
+            catch {
+                reject(new HttpRequestError(400, "invalid JSON body"));
             }
         });
-        req.on("error", reject);
+        req.on("error", (error) => fail(error));
+        req.on("aborted", () => fail(new HttpRequestError(400, "request aborted")));
     });
 }
 // Run if executed directly
