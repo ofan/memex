@@ -109,12 +109,14 @@ export function resolveCrossRerankerFromEnv(env = process.env) {
             ? requestedProvider
             : "jina";
     const blendWeight = clampNumber(env.MEMEX_RERANK_BLEND_WEIGHT, 0, 1, NaN);
+    const minScore = clampNumber(env.MEMEX_RERANK_MIN_SCORE, 0, 1, NaN);
     return {
         endpoint,
         apiKey,
         model: env.MEMEX_RERANK_MODEL?.trim() || "jina-reranker-v3",
         provider,
         ...(blendWeight !== undefined ? { blendWeight } : {}),
+        ...(minScore !== undefined ? { minScore } : {}),
         scoreMode: env.MEMEX_RERANK_SCORE_MODE?.trim().toLowerCase() === "rank" ? "rank" : "raw",
         // Fusion raw scores cluster near 1.0, so the old 0.88 gate frequently
         // skipped the reranker even when several plausible-but-wrong candidates were

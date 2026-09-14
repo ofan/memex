@@ -79,3 +79,40 @@ describe("UnifiedRetriever reranker request size", () => {
     }
   });
 });
+
+describe("UnifiedRetriever post-rerank relevance floor", () => {
+  it("applies rerankMinScore instead of the base minScore after a successful rerank", () => {
+    const retriever = new UnifiedRetriever({} as any, null, {} as any, {
+      minScore: 0.15,
+      rerankMinScore: 0.5,
+    });
+    const pool = [
+      {
+        id: "relevant", text: "relevant", rawScore: 1, calibrated: 1, score: 0.7,
+        source: "document" as const, metadata: { bestChunk: "relevant" },
+      },
+      {
+        id: "weak", text: "weak", rawScore: .8, calibrated: .8, score: 0.4,
+        source: "document" as const, metadata: { bestChunk: "weak" },
+      },
+      {
+        id: "below-base", text: "below base", rawScore: .7, calibrated: .7, score: 0.16,
+        source: "conversation" as const, metadata: {},
+      },
+    ];
+    const selected = (retriever as any).applySourceDiversity(pool, 5, true);
+    assert.deepEqual(selected.map((r: any) => r.id), ["relevant"]);
+  });
+
+  it("without an explicit rerank floor falls back to minScore", () => {
+    const retriever = new UnifiedRetriever({} as any, null, {} as any, {
+      minScore: 0.15,
+    });
+    const pool = [
+      { id: "relevant", text: "r", rawScore: 1, calibrated: 1, score: 0.2, source: "document" as const, metadata: { bestChunk: "r" } },
+      { id: "weak", text: "w", rawScore: .8, calibrated: .8, score: 0.1, source: "document" as const, metadata: { bestChunk: "w" } },
+    ];
+    const selected = (retriever as any).applySourceDiversity(pool, 5, true);
+    assert.deepEqual(selected.map((r: any) => r.id), ["relevant"]);
+  });
+});

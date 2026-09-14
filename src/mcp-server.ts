@@ -130,6 +130,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
         },
       } : {}),
       ...(crossReranker?.blendWeight !== undefined ? { rerankBlendWeight: crossReranker.blendWeight } : {}),
+      ...(crossReranker?.minScore !== undefined ? { rerankMinScore: crossReranker.minScore } : {}),
       ...(crossReranker ? {
         rerankScoreMode: crossReranker.scoreMode,
         confidenceThreshold: crossReranker.confidenceThreshold,
@@ -149,6 +150,7 @@ export function createMemexMcpServer(options: McpServerOptions) {
         rerankProvider: crossReranker.provider,
       } : {}),
       ...(crossReranker?.blendWeight !== undefined ? { rerankBlendWeight: crossReranker.blendWeight } : {}),
+      ...(crossReranker?.minScore !== undefined ? { rerankMinScore: crossReranker.minScore } : {}),
       ...(crossReranker ? { rerankScoreMode: crossReranker.scoreMode } : {}),
       ...(enableLlmRerank ? { rerankLlmEndpoint, rerankLlmApiKey, rerankLlmModel } : {}),
       captureTrace,

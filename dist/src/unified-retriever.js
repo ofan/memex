@@ -495,8 +495,11 @@ export class UnifiedRetriever {
         const topDoc = pool.find(r => r.source === "document");
         const selected = [];
         const selectedIds = new Set();
+        const relevanceFloor = enforceRelevanceFloor
+            ? (this.config.rerankMinScore ?? this.config.minScore)
+            : -Infinity;
         const pushUnique = (result) => {
-            if (!result || (enforceRelevanceFloor && result.score < this.config.minScore) || selectedIds.has(result.id) || selected.length >= limit)
+            if (!result || result.score < relevanceFloor || selectedIds.has(result.id) || selected.length >= limit)
                 return;
             selected.push(result);
             selectedIds.add(result.id);
@@ -511,13 +514,13 @@ export class UnifiedRetriever {
                 break;
             if (selectedIds.has(result.id))
                 continue;
-            if (result.score < this.config.minScore)
+            if (result.score < relevanceFloor)
                 continue;
             selected.push(result);
             selectedIds.add(result.id);
         }
         return selected
-            .filter(r => !enforceRelevanceFloor || r.score >= this.config.minScore)
+            .filter(r => r.score >= relevanceFloor)
             .sort((a, b) => b.score - a.score)
             .map(r => ({
             id: r.id,

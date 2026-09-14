@@ -93,6 +93,11 @@ export interface RetrievalConfig {
    */
   rerankBlendWeight?: number;
   /**
+   * Optional post-rerank relevance floor. When omitted, the existing
+   * adaptive `hardMinScore` behavior remains unchanged.
+   */
+  rerankMinScore?: number;
+  /**
    * Length normalization: penalize long entries that dominate via sheer keyword
    * density. Formula: score *= 1 / (1 + log2(charLen / anchor)).
    * anchor = reference length (default: 500 chars). Entries shorter than anchor

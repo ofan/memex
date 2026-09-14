@@ -43,6 +43,11 @@ export interface UnifiedRetrieverConfig {
   /** Gap between top and second result for confidence check (default: 0.15) */
   confidenceGap: number;
   /**
+   * Optional relevance floor applied only after a successful cross-encoder
+   * pass. When omitted, post-rerank filtering falls back to `minScore`.
+   */
+  rerankMinScore?: number;
+  /**
    * Weight given to the cross-encoder rerank score when blending with the
    * source-calibrated fused score. Final reranked score is:
    *     blended = rerankBlendWeight * rerank_score + (1 - rerankBlendWeight) * calibrated_score
@@ -666,9 +671,13 @@ export class UnifiedRetriever {
     const topDoc = pool.find(r => r.source === "document");
     const selected: CalibratedResult[] = [];
     const selectedIds = new Set<string>();
+    const normalFloor = this.config.minScore;
+    const relevanceFloor = enforceRelevanceFloor
+      ? (this.config.rerankMinScore ?? normalFloor)
+      : -Infinity;
 
     const pushUnique = (result: CalibratedResult | undefined) => {
-      if (!result || (enforceRelevanceFloor && result.score < this.config.minScore) || selectedIds.has(result.id) || selected.length >= limit) return;
+      if (!result || result.score < relevanceFloor || selectedIds.has(result.id) || selected.length >= limit) return;
       selected.push(result);
       selectedIds.add(result.id);
     };
@@ -682,13 +691,13 @@ export class UnifiedRetriever {
     for (const result of pool) {
       if (selected.length >= limit) break;
       if (selectedIds.has(result.id)) continue;
-      if (result.score < this.config.minScore) continue;
+      if (result.score < normalFloor || (enforceRelevanceFloor && result.score < relevanceFloor)) continue;
       selected.push(result);
       selectedIds.add(result.id);
     }
 
+    // Both protected and ordinary selections have already been gated above.
     return selected
-      .filter(r => !enforceRelevanceFloor || r.score >= this.config.minScore)
       .sort((a, b) => b.score - a.score)
       .map(r => ({
       id: r.id,

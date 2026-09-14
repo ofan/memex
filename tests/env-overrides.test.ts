@@ -158,6 +158,16 @@ describe("resolveCrossRerankerFromEnv", () => {
     assert.equal(cfg.confidenceGap, 0.20);
   });
 
+  it("passes an explicit post-rerank relevance floor", () => {
+    const cfg = resolveCrossRerankerFromEnv({
+      MEMEX_RERANK_ENDPOINT: "http://proxy/rerank",
+      MEMEX_RERANK_API_KEY: "secret",
+      MEMEX_RERANK_MIN_SCORE: "0.5",
+    });
+    assert.ok(cfg);
+    assert.equal(cfg.minScore, 0.5);
+  });
+
   it("coerces invalid provider/blend values", () => {
     const cfg = resolveCrossRerankerFromEnv({
       MEMEX_RERANK_ENDPOINT: "http://proxy/rerank",
