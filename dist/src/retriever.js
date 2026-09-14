@@ -4,6 +4,9 @@
  */
 import { filterNoise } from "./noise-filter.js";
 import { Stopwatch } from "./telemetry.js";
+import { llmRerank } from "./rerankers/llm-reranker.js";
+import { TraceRecorder } from "./retrieval-trace.js";
+import { randomUUID } from "node:crypto";
 import { extractEntities, entityOverlap } from "./entities.js";
 import { expandOneHop, LINK_SCORE_DISCOUNT_FACTOR } from "./graph.js";
 import { withTransientRetry } from "./transient-retry.js";
@@ -39,6 +42,48 @@ function clamp01(value, fallback = 0) {
     if (!Number.isFinite(value))
         return Number.isFinite(fallback) ? fallback : 0;
     return Math.min(1, Math.max(0, value));
+}
+/** Curated config snapshot embedded in a trace so it is self-describing. */
+function traceConfigSnapshot(c) {
+    return {
+        mode: c.mode, fusionMethod: c.fusionMethod,
+        vectorWeight: c.vectorWeight, bm25Weight: c.bm25Weight,
+        minScore: c.minScore, hardMinScore: c.hardMinScore,
+        rerank: c.rerank, rerankBlendWeight: c.rerankBlendWeight,
+        candidatePoolSize: c.candidatePoolSize,
+        recencyWeight: c.recencyWeight, recencyHalfLifeDays: c.recencyHalfLifeDays,
+        timeDecayHalfLifeDays: c.timeDecayHalfLifeDays, lengthNormAnchor: c.lengthNormAnchor,
+    };
+}
+/** Derive a human-readable provenance label from a result's sources. */
+function sourceLabel(s) {
+    if (!s)
+        return undefined;
+    if (s.reranked)
+        return "reranked";
+    if (s.vector && s.bm25)
+        return "both";
+    if (s.vector)
+        return "vector";
+    if (s.bm25)
+        return "lexical";
+    if (s.graph)
+        return "graph";
+    return undefined;
+}
+/** Snapshot a MemoryRetriever result into a trace item with frozen per-stage scores. */
+function toMemoryTraceItem(r) {
+    return {
+        id: r.entry.id,
+        score: r.score,
+        ...(r.sources ? { source: sourceLabel(r.sources) } : {}),
+        scores: {
+            ...(r.sources?.vector ? { vector: r.sources.vector.score } : {}),
+            ...(r.sources?.bm25 ? { bm25: r.sources.bm25.score } : {}),
+            ...(r.sources?.fused ? { fused: r.sources.fused.score } : {}),
+            ...(r.sources?.reranked ? { reranked: r.sources.reranked.score } : {}),
+        },
+    };
 }
 /** Build provider-specific request headers and body */
 export function buildRerankRequest(provider, apiKey, model, query, documents, topN) {
@@ -166,6 +211,9 @@ export class MemoryRetriever {
     embedder;
     config;
     _lastTimings = {};
+    _lastTrace = null;
+    /** Recorder active during the current retrieve() call; null when captureTrace is off. */
+    _currentRec = null;
     constructor(store, embedder, config = DEFAULT_RETRIEVAL_CONFIG) {
         this.store = store;
         this.embedder = embedder;
@@ -173,11 +221,22 @@ export class MemoryRetriever {
     }
     /** Timing breakdown from the most recent retrieve() call. */
     get lastTimings() { return this._lastTimings; }
+    /** Per-stage ranking trace from the most recent call. Null unless captureTrace was on. */
+    get lastTrace() { return this._lastTrace; }
     async retrieve(context) {
         const { query, limit, scopeFilter, scopes, category, recentlyRecalled } = context;
         const safeLimit = clampInt(limit, 1, 20);
         // Explicit `scopes` override takes precedence over the derived scopeFilter
         const effectiveScopeFilter = scopes ?? scopeFilter;
+        // Set up the per-call trace recorder (null when capture is off → no overhead).
+        this._currentRec = this.config.captureTrace
+            ? new TraceRecorder({
+                debugId: context.debugId ?? randomUUID().slice(0, 8),
+                query,
+                pipeline: this.config.mode === "vector" ? "memory-vector" : "memory-hybrid",
+                config: traceConfigSnapshot(this.config),
+            })
+            : null;
         if (this.config.mode === "vector" || !this.store.hasFtsSupport) {
             return this.vectorOnlyRetrieval(query, safeLimit, effectiveScopeFilter, category, recentlyRecalled);
         }
@@ -198,11 +257,21 @@ export class MemoryRetriever {
                 vector: { score: result.score, rank: index + 1 },
             },
         }));
+        this._currentRec?.stage("vector-search", mapped.map(toMemoryTraceItem));
         const boosted = this.applyRecencyBoost(mapped);
         const weighted = this.applyImportanceWeight(boosted);
         const lengthNormalized = this.applyLengthNormalization(weighted);
         const timeDecayed = this.applyTimeDecay(lengthNormalized);
         const hardFiltered = this.applyAdaptiveMinScore(timeDecayed);
+        if (this._currentRec) {
+            const keptIds = new Set(hardFiltered.map(r => r.entry.id));
+            const bestScore = timeDecayed[0]?.score ?? 0;
+            const effectiveFloor = Math.max(bestScore * 0.3, this.config.hardMinScore);
+            this._currentRec.stage("adaptive-floor", hardFiltered.map(toMemoryTraceItem), {
+                dropped: timeDecayed.filter(r => !keptIds.has(r.entry.id)).map(toMemoryTraceItem),
+                meta: { effectiveFloor, bestScore, hardMinScore: this.config.hardMinScore },
+            });
+        }
         const denoised = this.config.filterNoise
             ? filterNoise(hardFiltered, r => r.entry.text)
             : hardFiltered;
@@ -210,7 +279,10 @@ export class MemoryRetriever {
         const deduplicated = this.applyMMRDiversity(diversified);
         sw.lap("score");
         this._lastTimings = sw.timings;
-        return deduplicated.slice(0, limit);
+        const final = deduplicated.slice(0, limit);
+        this._lastTrace = this._currentRec ? this._currentRec.finish(final.map(r => r.entry.id)) : null;
+        this._currentRec = null;
+        return final;
     }
     async hybridRetrieval(query, limit, scopeFilter, category, recentlyRecalled) {
         const sw = new Stopwatch();
@@ -223,6 +295,7 @@ export class MemoryRetriever {
         ]);
         sw.lap("search");
         const fusedResults = await this.fuseResults(vectorResults, bm25Results);
+        this._currentRec?.stage("fusion", fusedResults.map(toMemoryTraceItem));
         // Graph expansion: one-hop through entity links (disabled by default)
         if (this.config.entityGraph) {
             const fusedIds = fusedResults.map(r => r.entry.id);
@@ -254,15 +327,34 @@ export class MemoryRetriever {
             postEntityResults = this.applyEntityBoost(fusedResults, queryEntities);
         }
         const filtered = postEntityResults.filter(r => r.score >= this.config.minScore);
+        if (this._currentRec) {
+            const keptIds = new Set(filtered.map(r => r.entry.id));
+            this._currentRec.stage("minScore-filter", filtered.map(toMemoryTraceItem), {
+                dropped: postEntityResults.filter(r => !keptIds.has(r.entry.id)).map(toMemoryTraceItem),
+                meta: { threshold: this.config.minScore },
+            });
+        }
         const reranked = this.config.rerank !== "none"
             ? await this.rerankResults(query, queryVector, filtered.slice(0, limit * 2))
             : filtered;
+        if (this._currentRec && this.config.rerank !== "none") {
+            this._currentRec.stage("rerank", reranked.map(toMemoryTraceItem), { meta: { reranker: this.config.rerank, model: this.config.rerankModel } });
+        }
         sw.lap("rerank");
         const temporalReranked = this.applyRecencyBoost(reranked);
         const importanceWeighted = this.applyImportanceWeight(temporalReranked);
         const lengthNormalized = this.applyLengthNormalization(importanceWeighted);
         const timeDecayed = this.applyTimeDecay(lengthNormalized);
         const hardFiltered = this.applyAdaptiveMinScore(timeDecayed);
+        if (this._currentRec) {
+            const keptIds = new Set(hardFiltered.map(r => r.entry.id));
+            const bestScore = timeDecayed[0]?.score ?? 0;
+            const effectiveFloor = Math.max(bestScore * 0.3, this.config.hardMinScore);
+            this._currentRec.stage("adaptive-floor", hardFiltered.map(toMemoryTraceItem), {
+                dropped: timeDecayed.filter(r => !keptIds.has(r.entry.id)).map(toMemoryTraceItem),
+                meta: { effectiveFloor, bestScore, hardMinScore: this.config.hardMinScore },
+            });
+        }
         const denoised = this.config.filterNoise
             ? filterNoise(hardFiltered, r => r.entry.text)
             : hardFiltered;
@@ -270,7 +362,10 @@ export class MemoryRetriever {
         const deduplicated = this.applyMMRDiversity(diversified);
         sw.lap("score");
         this._lastTimings = sw.timings;
-        return deduplicated.slice(0, limit);
+        const final = deduplicated.slice(0, limit);
+        this._lastTrace = this._currentRec ? this._currentRec.finish(final.map(r => r.entry.id)) : null;
+        this._currentRec = null;
+        return final;
     }
     async runVectorSearch(queryVector, limit, scopeFilter, category) {
         const results = await this.store.vectorSearch(queryVector, limit, 0.1, scopeFilter);
@@ -496,6 +591,48 @@ export class MemoryRetriever {
             // aggressively re-ranked and displaced correct fusion winners.
             // That behavior is intended for the case where rerank is not
             // configured at all, not for transient rerank API failures.)
+            return results;
+        }
+        // LLM-based reranker: use a chat model as relevance judge.
+        // Slower and costlier than cross-encoder but often higher quality.
+        if (this.config.rerank === "llm" && this.config.rerankLlmEndpoint && this.config.rerankLlmModel) {
+            try {
+                const documents = results.map(r => r.entry.text);
+                const originalScores = results.map(r => r.score);
+                const parsed = await llmRerank(query, documents, originalScores, {
+                    endpoint: this.config.rerankLlmEndpoint,
+                    apiKey: this.config.rerankLlmApiKey ?? "",
+                    model: this.config.rerankLlmModel,
+                    timeoutMs: this.config.rerankLlmTimeoutMs,
+                    maxDocuments: this.config.rerankLlmMaxDocs,
+                });
+                if (parsed) {
+                    const blendWeight = this.config.rerankBlendWeight ?? 0.8;
+                    const fusionWeight = 1 - blendWeight;
+                    const reranked = parsed
+                        .filter(item => item.index >= 0 && item.index < results.length)
+                        .map(item => {
+                        const original = results[item.index];
+                        const blended = clamp01(item.score * blendWeight + (original.score ?? 0) * fusionWeight);
+                        return {
+                            ...original,
+                            score: blended,
+                            sources: { ...original.sources, reranked: { score: item.score } },
+                        };
+                    });
+                    // Keep documents that the LLM didn't return (un-reranked) at their
+                    // original fusion scores, marked as not reranked.
+                    const rerankedIndices = new Set(parsed.map(r => r.index));
+                    const untouched = results
+                        .filter((_, i) => !rerankedIndices.has(i))
+                        .map(r => ({ ...r, score: r.score }));
+                    const merged = [...reranked, ...untouched].sort((a, b) => b.score - a.score);
+                    return merged;
+                }
+            }
+            catch {
+                // LLM reranker failed — return fusion results unchanged
+            }
             return results;
         }
         // Cosine-similarity second pass — runs ONLY when no cross-encoder rerank

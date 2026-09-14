@@ -241,18 +241,26 @@ export class UnifiedRetriever {
     let pool = this.mergeAndCalibrate(memoryFused, docResults);
     this._currentRec?.stage("merge", pool.map(toUnifiedTraceItem), { meta: { route } });
 
-    // Stage 7: Confidence-gated reranking
-    const didRerank = !!(this.config.reranker && this.shouldRerank(pool));
-    if (didRerank) {
-      pool = await this.rerank(query, pool);
-      this._currentRec?.stage("rerank", pool.map(toUnifiedTraceItem), { meta: { reranker: this.config.reranker?.model } });
+    // Stage 7: Confidence-gated reranking. Only an actually-applied rerank is
+    // treated as an authoritative relevance signal; fallback retains old
+    // calibrated behavior.
+    let rerankSucceeded = false;
+    if (this.config.reranker && this.shouldRerank(pool)) {
+      const rerankResult = await this.rerank(query, pool);
+      rerankSucceeded = rerankResult.applied;
+      pool = rerankResult.results;
+      if (rerankSucceeded) {
+        this._currentRec?.stage("rerank", pool.map(toUnifiedTraceItem), { meta: { reranker: this.config.reranker?.model } });
+      }
     }
 
-    // Stage 8: Post-merge modifiers (time decay, importance, length norm, floor)
-    pool = this.applyPostMergeModifiers(pool);
+    // Stage 8: Post-merge modifiers (time decay, importance, length norm).
+    // Once a cross-encoder has scored a candidate, its calibrated fusion floor
+    // must not resurrect a result that the relevance judge explicitly rejected.
+    pool = this.applyPostMergeModifiers(pool, !rerankSucceeded);
 
     // Stage 9: Source diversity + final selection
-    const final = this.applySourceDiversity(pool, limit);
+    const final = this.applySourceDiversity(pool, limit, rerankSucceeded);
     this._currentRec?.stage("diversity", final.map(r => ({ id: r.id, score: r.score, source: r.source })));
     this._lastTrace = this._currentRec ? this._currentRec.finish(final.map(r => r.id)) : null;
     this._currentRec = null;
@@ -455,7 +463,7 @@ export class UnifiedRetriever {
    * Blends 70% rerank score + 30% calibrated score.
    * On failure, falls back to calibrated scores silently.
    */
-  private async rerank(query: string, pool: CalibratedResult[]): Promise<CalibratedResult[]> {
+  private async rerank(query: string, pool: CalibratedResult[]): Promise<{ results: CalibratedResult[]; applied: boolean }> {
     const n = Math.min(pool.length, this.config.candidatePoolSize);
     const candidates = pool.slice(0, n);
     const rest = pool.slice(n);
@@ -511,7 +519,7 @@ export class UnifiedRetriever {
 
       if (!parsed) {
         console.warn("Unified rerank API: invalid response shape, falling back to calibrated scores");
-        return pool;
+        return { results: pool, applied: false };
       }
 
       // Blend: rerankBlendWeight * rerank_score + (1-weight) * calibrated_score
@@ -542,14 +550,14 @@ export class UnifiedRetriever {
           return { ...original, score: blended };
         });
 
-      return [...reranked, ...rest].sort((a, b) => b.score - a.score);
+      return { results: [...reranked, ...rest].sort((a, b) => b.score - a.score), applied: true };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         console.warn("Unified rerank API timed out, falling back to calibrated scores");
       } else {
         console.warn("Unified rerank API failed, falling back to calibrated scores:", error);
       }
-      return pool;
+      return { results: pool, applied: false };
     }
   }
 
@@ -581,7 +589,7 @@ export class UnifiedRetriever {
    * - Length normalization
    * - Floor guarantee: never reduce below 25% of calibrated score
    */
-  private applyPostMergeModifiers(pool: CalibratedResult[]): CalibratedResult[] {
+  private applyPostMergeModifiers(pool: CalibratedResult[], useCalibratedFloor = true): CalibratedResult[] {
     const now = Date.now();
 
     return pool.map(r => {
@@ -619,8 +627,9 @@ export class UnifiedRetriever {
       // Apply modifiers
       const adjusted = r.score * timeFactor * impFactor * lenFactor;
 
-      // Floor guarantee: never reduce below 25% of calibrated score
-      const floor = 0.25 * r.calibrated;
+      // Pre-rerank only: never reduce below 25% of calibrated score. Rerank
+      // scores are authoritative and intentionally receive no such floor.
+      const floor = useCalibratedFloor ? 0.25 * r.calibrated : 0;
 
       return { ...r, score: Math.max(adjusted, floor) };
     }).sort((a, b) => b.score - a.score);
@@ -634,20 +643,21 @@ export class UnifiedRetriever {
    * Protect top-1 from each source to ensure diversity, then apply
    * minScore filter and limit.
    */
-  private applySourceDiversity(pool: CalibratedResult[], limit: number): UnifiedResult[] {
+  private applySourceDiversity(pool: CalibratedResult[], limit: number, enforceRelevanceFloor = false): UnifiedResult[] {
     const topConv = pool.find(r => r.source === "conversation");
     const topDoc = pool.find(r => r.source === "document");
     const selected: CalibratedResult[] = [];
     const selectedIds = new Set<string>();
 
     const pushUnique = (result: CalibratedResult | undefined) => {
-      if (!result || selectedIds.has(result.id) || selected.length >= limit) return;
+      if (!result || (enforceRelevanceFloor && result.score < this.config.minScore) || selectedIds.has(result.id) || selected.length >= limit) return;
       selected.push(result);
       selectedIds.add(result.id);
     };
 
-    // Diversity guarantee: reserve space for the best conversation and document hit
-    // before filling the remaining slots by score.
+    // Diversity guarantee: reserve space for the best conversation and document
+    // hit. When reranking actually applied, the relevance floor outranks source
+    // diversity; otherwise the long-standing protected slots remain intact.
     pushUnique(topConv);
     pushUnique(topDoc);
 
@@ -660,6 +670,7 @@ export class UnifiedRetriever {
     }
 
     return selected
+      .filter(r => !enforceRelevanceFloor || r.score >= this.config.minScore)
       .sort((a, b) => b.score - a.score)
       .map(r => ({
       id: r.id,

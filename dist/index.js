@@ -3,6 +3,8 @@
  * Unified memory: SQLite conversation memory + document search
  * with shared embedding/reranker and unified recall pipeline
  */
+import { randomUUID } from "node:crypto";
+import { applyEnvOverrides, syncDebugEnvFromConfig } from "./src/env-overrides.js";
 import { homedir } from "node:os";
 import { join, dirname, basename, resolve } from "node:path";
 import { readdir, writeFile, mkdir } from "node:fs/promises";
@@ -142,6 +144,9 @@ const memoryUnifiedPlugin = {
         const isCli = !process.argv.includes("gateway");
         // Parse and validate configuration
         const config = parsePluginConfig(api.pluginConfig);
+        // Env vars override config (env > config > default). See src/env-overrides.ts.
+        applyEnvOverrides(config);
+        syncDebugEnvFromConfig(config);
         const resolvedDbPath = api.resolvePath(config.dbPath || getDefaultDbPath());
         // Pre-flight: validate storage path (symlink resolution, mkdir, write check).
         // Runs synchronously and logs warnings; does NOT block gateway startup.
@@ -284,6 +289,8 @@ const memoryUnifiedPlugin = {
                 retrievalConfig.rerankScoreMode = config.reranker.scoreMode;
             }
         }
+        if (resolveDebugDir())
+            retrievalConfig.captureTrace = true;
         const retriever = createRetriever(store, embedder, retrievalConfig);
         const scopeManager = createScopeManager(config.scopes);
         const pluginVersion = getPluginVersion();
@@ -707,6 +714,8 @@ const memoryUnifiedPlugin = {
         if (config.reranker?.scoreMode === "raw" || config.reranker?.scoreMode === "rank") {
             unifiedRetrieverConfig.rerankScoreMode = config.reranker.scoreMode;
         }
+        if (resolveDebugDir())
+            unifiedRetrieverConfig.captureTrace = true;
         const unifiedRetriever = new UnifiedRetriever(store, documentSearchFn, embedder, unifiedRetrieverConfig);
         api.registerMemoryRuntime({
             async getMemorySearchManager() {
@@ -991,21 +1000,20 @@ const memoryUnifiedPlugin = {
                             for (const id of turnIds)
                                 recentlyRecalled.add(id);
                         }
-                        // Use unified recall (memory + docs) when available, fallback to memory-only
+                        // Use unified retrieval (memory + docs) when available, fallback to memory-only
                         let memoryContext;
                         let resultCount = 0;
                         const recalledIds = [];
-                        if (unifiedRecall.hasDocumentSearch) {
+                        const hasDocSearch = !!(documentSearchFn);
+                        if (hasDocSearch) {
                             // Filter document to current agent's workspace collection to prevent cross-agent context pollution
                             const docCollection = (config.autoRecallDocFilter !== false && ctx?.workspaceDir)
                                 ? workspaceToCollection.get(ctx.workspaceDir)
                                 : undefined;
-                            const results = await unifiedRecall.recall(recallQuery, {
-                                // Use only the latest user turn for retrieval. The full built prompt can
-                                // exceed local embedding backend context limits and pollute recall intent.
+                            const results = await unifiedRetriever.retrieve(recallQuery, {
                                 limit: config.autoRecallLimit ?? 3,
                                 scopeFilter: accessibleScopes,
-                                collection: docCollection,
+                                collections: docCollection ? [docCollection] : undefined,
                                 recentlyRecalled,
                             });
                             if (results.length === 0) {
@@ -1029,21 +1037,26 @@ const memoryUnifiedPlugin = {
                                 .join("\n");
                             // Debug capture (issue #23) — fire-and-forget when MEMEX_DEBUG_RECALL is set
                             if (resolveDebugDir()) {
+                                const trace = retriever.lastTrace ?? undefined;
                                 writeDebugRecall(buildPayloadFromUnifiedRecall({
+                                    debugId: trace?.debugId,
                                     agentId,
                                     sessionId: sessionKeyForCache ?? null,
                                     query: recallQuery,
                                     injectedContext: memoryContext,
+                                    trace,
                                     results: results,
                                 })).catch(() => { });
                             }
                         }
                         else {
+                            const debugId = randomUUID().slice(0, 8);
                             const results = await retriever.retrieve({
                                 query: recallQuery,
                                 limit: config.autoRecallLimit ?? 3,
                                 scopeFilter: accessibleScopes,
                                 recentlyRecalled,
+                                debugId,
                             });
                             if (results.length === 0) {
                                 return;
@@ -1056,11 +1069,14 @@ const memoryUnifiedPlugin = {
                                 .join("\n");
                             // Debug capture (issue #23) — memory-only fallback path
                             if (resolveDebugDir()) {
+                                const trace = retriever.lastTrace ?? undefined;
                                 writeDebugRecall(buildPayloadFromMemoryOnly({
+                                    debugId,
                                     agentId,
                                     sessionId: sessionKeyForCache ?? null,
                                     query: recallQuery,
                                     injectedContext: memoryContext,
+                                    trace,
                                     results,
                                 })).catch(() => { });
                             }
@@ -1553,6 +1569,7 @@ function parsePluginConfig(value) {
         autoCapture: cfg.autoCapture !== false,
         autoCaptureAgents: mergeAgentLists(cfg.memoryAgents, cfg.autoCaptureAgents),
         autoFixNoise: cfg.autoFixNoise === true,
+        debugRecall: cfg.debugRecall === true ? true : typeof cfg.debugRecall === "string" ? cfg.debugRecall : undefined,
         retrieval: typeof cfg.retrieval === "object" && cfg.retrieval !== null ? cfg.retrieval : undefined,
         scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes : undefined,
         enableManagementTools: cfg.enableManagementTools === true,

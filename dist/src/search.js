@@ -11,6 +11,7 @@
  *   const store = createStore();
  */
 import { openDatabase, loadSqliteVec } from "./db.js";
+import { ensureVecTableOnOpen } from "./vec-table.js";
 // @ts-expect-error - picomatch ships no types
 import picomatch from "picomatch";
 import { createHash } from "crypto";
@@ -699,18 +700,10 @@ function ensureVecTableInternal(db, dimensions) {
     if (!_sqliteVecAvailable) {
         throw new Error("sqlite-vec is not available. Vector operations require a SQLite build with extension loading support.");
     }
-    const tableInfo = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
-    if (tableInfo) {
-        const match = tableInfo.sql.match(/float\[(\d+)\]/);
-        const hasHashSeq = tableInfo.sql.includes('hash_seq');
-        const hasCosine = tableInfo.sql.includes('distance_metric=cosine');
-        const existingDims = match?.[1] ? parseInt(match[1], 10) : null;
-        if (existingDims === dimensions && hasHashSeq && hasCosine)
-            return;
-        // Table exists but wrong schema - need to rebuild
-        db.exec("DROP TABLE IF EXISTS vectors_vec");
-    }
-    db.exec(`CREATE VIRTUAL TABLE vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`);
+    // Non-destructive: create-if-absent, no-op when compatible, throw on mismatch.
+    // This table holds every stored embedding; dropping it on open destroyed the
+    // index in the 2026-09-07 incident. Repair is the rebuild-vector-index command.
+    ensureVecTableOnOpen(db, dimensions);
 }
 /**
  * Create a new store instance with the given database path.
@@ -1887,7 +1880,7 @@ export function buildFTS5Query(query) {
         return `"${terms[0]}"*`;
     return terms.map(t => `"${t}"*`).join(' OR ');
 }
-export function searchFTS(db, query, limit = 20, collectionName) {
+export function searchFTS(db, query, limit = 20, collectionName, collections) {
     const ftsQuery = buildFTS5Query(query);
     if (!ftsQuery)
         return [];
@@ -1909,6 +1902,10 @@ export function searchFTS(db, query, limit = 20, collectionName) {
     if (collectionName) {
         sql += ` AND d.collection = ?`;
         params.push(String(collectionName));
+    }
+    else if (collections && collections.length) {
+        sql += ` AND d.collection IN (${collections.map(() => "?").join(",")})`;
+        params.push(...collections);
     }
     // bm25 lower is better; sort ascending.
     sql += ` ORDER BY bm25_score ASC LIMIT ?`;
@@ -1961,6 +1958,10 @@ export function searchFTS(db, query, limit = 20, collectionName) {
         sectionSql += ` AND d.collection = ?`;
         sectionParams.push(String(collectionName));
     }
+    else if (collections && collections.length) {
+        sectionSql += ` AND d.collection IN (${collections.map(() => "?").join(",")})`;
+        sectionParams.push(...collections);
+    }
     sectionSql += ` ORDER BY bm25_score ASC LIMIT ?`;
     sectionParams.push(limit);
     const sectionRows = db.prepare(sectionSql).all(...sectionParams);
@@ -1995,7 +1996,7 @@ export function searchFTS(db, query, limit = 20, collectionName) {
 // =============================================================================
 // Vector Search
 // =============================================================================
-export async function searchVec(db, query, model, limit = 20, collectionName, session, precomputedEmbedding) {
+export async function searchVec(db, query, model, limit = 20, collectionName, session, precomputedEmbedding, collections) {
     const tableExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
     if (!tableExists)
         return [];
@@ -2037,6 +2038,10 @@ export async function searchVec(db, query, model, limit = 20, collectionName, se
     if (collectionName) {
         docSql += ` AND d.collection = ?`;
         params.push(collectionName);
+    }
+    else if (collections && collections.length) {
+        docSql += ` AND d.collection IN (${collections.map(() => "?").join(",")})`;
+        params.push(...collections);
     }
     const docRows = db.prepare(docSql).all(...params);
     // Combine with distances and dedupe by filepath
